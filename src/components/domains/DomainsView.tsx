@@ -7,6 +7,7 @@ import { useSearchParams } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState, useTransition } from "react";
 import { toast } from "sonner";
 import { assignClient } from "@/app/actions";
+import { ColumnsMenu, useColumns, type ColumnDef } from "@/components/Columns";
 import { isTyping } from "@/components/shell/AppShell";
 import { ClientCell, Empty, Kbd, Metric, Spark, StatusDot } from "@/components/ui";
 import { daysSince, int, shortDate } from "@/lib/format";
@@ -28,7 +29,14 @@ const VIEWS: { key: ViewKey; label: string; match: (d: DomainRow) => boolean }[]
   { key: "all", label: "All", match: () => true },
 ];
 
-type SortKey = "name" | "status" | "client" | "inboxCount" | "sent" | "humanReplyRate" | "bounceRate" | "warmupReputation" | "activeSince" | "purchasedAt" | "expiresAt" | "registrar";
+const COLUMNS: ColumnDef[] = [
+  { key: "status", label: "Status" }, { key: "client", label: "Client" }, { key: "registrar", label: "Registrar", hidden: true },
+  { key: "inboxes", label: "Inboxes" }, { key: "capacity", label: "Per day", hidden: true }, { key: "sent", label: "Sent 7d" },
+  { key: "replies", label: "Replies 7d", hidden: true }, { key: "human", label: "Human reply rate" }, { key: "bounces", label: "Bounces 7d", hidden: true },
+  { key: "bounce", label: "Bounce rate" }, { key: "rep", label: "Reputation" }, { key: "spark", label: "14-day trend" }, { key: "active", label: "Active for" },
+];
+
+type SortKey = "name" | "status" | "client" | "inboxCount" | "capacity" | "replies" | "bounces" | "sent" | "humanReplyRate" | "bounceRate" | "warmupReputation" | "activeSince" | "purchasedAt" | "expiresAt" | "registrar";
 type Sort = { key: SortKey; dir: 1 | -1 };
 
 const statusRank = (s: DomainStatus) => DOMAIN_STATUSES.indexOf(s);
@@ -61,6 +69,8 @@ export function DomainsView({ domains, clients }: { domains: DomainRow[]; client
   const [reloadKey, setReloadKey] = useState(0);
   const [, startTransition] = useTransition();
   const searchRef = useRef<HTMLInputElement>(null);
+  const cols = useColumns("domains", COLUMNS);
+  const on = cols.on;
   const scrollRef = useRef<HTMLDivElement>(null);
 
   // Keep the URL in step so any view can be bookmarked or shared.
@@ -183,45 +193,43 @@ export function DomainsView({ domains, clients }: { domains: DomainRow[]; client
   const items = virtual.getVirtualItems();
   const padTop = items[0]?.start ?? 0;
   const padBottom = items.length ? virtual.getTotalSize() - items[items.length - 1].end : 0;
-  const colCount = storageView ? 6 : 11;
+  const colCount = storageView ? 6 : 2 + cols.count;
 
   return (
     <>
       <div className="flex flex-col gap-3">
-        <div className="view-tabs" role="tablist" aria-label="Views">
-          {VIEWS.map((v) => (
-            <button key={v.key} type="button" role="tab" aria-selected={view === v.key} className={view === v.key ? "is-on" : undefined} onClick={() => changeView(v.key)}>
-              {v.key === "flagged" && counts.flagged > 0 ? <TriangleAlert size={13} className="text-warning-ink" /> : null}
-              {v.label} <span>{int(counts[v.key])}</span>
-            </button>
-          ))}
-        </div>
-
-        <div className="toolbar">
+        <div className="table-bar">
+          <div className="view-tabs" role="tablist" aria-label="Views">
+            {VIEWS.map((v) => (
+              <button key={v.key} type="button" role="tab" aria-selected={view === v.key} className={view === v.key ? "is-on" : undefined} onClick={() => changeView(v.key)}>
+                {v.key === "flagged" && counts.flagged > 0 ? <TriangleAlert size={13} className="text-warning-ink" /> : null}
+                {v.label} <span>{int(counts[v.key])}</span>
+              </button>
+            ))}
+          </div>
           <label className="search-input">
             <Search size={14} strokeWidth={1.5} />
             <input ref={searchRef} className="input" value={q} onChange={(e) => { setQ(e.target.value); setCursor(-1); }} placeholder="Search domains or clients" aria-label="Search domains" />
             {!q ? <span className="pointer-events-none absolute right-2"><Kbd>/</Kbd></span> : null}
           </label>
-          <select className="select" style={{ width: 180 }} value={clientId} onChange={(e) => setClientId(e.target.value)} aria-label="Filter by client">
+          <select className="select" style={{ width: 150 }} value={clientId} onChange={(e) => setClientId(e.target.value)} aria-label="Filter by client">
             <option value="">All clients</option>
             {clients.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
           </select>
           {allTags.length ? (
-            <select className="select" style={{ width: 150 }} value={tag} onChange={(e) => setTag(e.target.value)} aria-label="Filter by tag">
+            <select className="select" style={{ width: 130 }} value={tag} onChange={(e) => setTag(e.target.value)} aria-label="Filter by tag">
               <option value="">All tags</option>
               {allTags.map((t) => <option key={t} value={t}>{t}</option>)}
             </select>
           ) : null}
           {(q || clientId || tag) ? <button type="button" className="btn btn-ghost btn-sm" onClick={() => { setQ(""); setClientId(""); setTag(""); }}>Clear</button> : null}
-          <div className="view-tabs-summary">
-            <b>{int(rows.length)}</b> domains
-            {!storageView ? <> · <b>{int(totals.sent)}</b> sent this week</> : null}
-          </div>
+          <span className="spacer-auto" />
+          <button type="button" className="btn btn-sm" onClick={exportCsv}><Download size={14} /> Export</button>
+          {!storageView ? <ColumnsMenu cols={cols} /> : null}
         </div>
 
         <div className="table-wrap">
-          <div ref={scrollRef} className="table-scroll" style={{ maxHeight: "calc(100dvh - 248px)", minHeight: 280 }}>
+          <div ref={scrollRef} className="table-scroll" style={{ maxHeight: "calc(100dvh - 190px)", minHeight: 280 }}>
             <table className="data-table is-main" aria-rowcount={rows.length}>
               <thead>
                 <tr>
@@ -244,15 +252,19 @@ export function DomainsView({ domains, clients }: { domains: DomainRow[]; client
                     <><Th k="registrar">Registrar</Th><Th k="purchasedAt">Purchased</Th><Th k="expiresAt">Renews</Th><th>TLD</th></>
                   ) : (
                     <>
-                      <Th k="status">Status</Th>
-                      <Th k="client">Client</Th>
-                      <Th k="inboxCount" num>Inboxes</Th>
-                      <Th k="sent" num>Sent 7d</Th>
-                      <Th k="humanReplyRate" num>Human reply</Th>
-                      <Th k="bounceRate" num>Bounce</Th>
-                      <Th k="warmupReputation" num>Reputation</Th>
-                      <th>14 days</th>
-                      <Th k="activeSince" num>Active</Th>
+                      {on("status") ? <Th k="status">Status</Th> : null}
+                      {on("client") ? <Th k="client">Client</Th> : null}
+                      {on("registrar") ? <Th k="registrar">Registrar</Th> : null}
+                      {on("inboxes") ? <Th k="inboxCount" num>Inboxes</Th> : null}
+                      {on("capacity") ? <Th k="capacity" num>Per day</Th> : null}
+                      {on("sent") ? <Th k="sent" num>Sent 7d</Th> : null}
+                      {on("replies") ? <Th k="replies" num>Replies</Th> : null}
+                      {on("human") ? <Th k="humanReplyRate" num>Human reply</Th> : null}
+                      {on("bounces") ? <Th k="bounces" num>Bounces</Th> : null}
+                      {on("bounce") ? <Th k="bounceRate" num>Bounce</Th> : null}
+                      {on("rep") ? <Th k="warmupReputation" num>Reputation</Th> : null}
+                      {on("spark") ? <th>14 days</th> : null}
+                      {on("active") ? <Th k="activeSince" num>Active</Th> : null}
                     </>
                   )}
                 </tr>
@@ -295,19 +307,23 @@ export function DomainsView({ domains, clients }: { domains: DomainRow[]; client
                         </>
                       ) : (
                         <>
-                          <td><StatusDot status={d.status} /></td>
-                          <td><ClientCell name={d.clientName} hue={d.clientHue} /></td>
-                          <td className="is-num">{d.inboxCount ? d.inboxCount : <span className="zero">0</span>}</td>
-                          <td className="is-num">
+                          {on("status") ? <td><StatusDot status={d.status} /></td> : null}
+                          {on("client") ? <td><ClientCell name={d.clientName} hue={d.clientHue} /></td> : null}
+                          {on("registrar") ? <td>{d.registrar ?? <span className="zero">—</span>}</td> : null}
+                          {on("inboxes") ? <td className="is-num">{d.inboxCount ? d.inboxCount : <span className="zero">0</span>}</td> : null}
+                          {on("capacity") ? <td className="is-num">{d.capacity ? int(d.capacity) : <span className="zero">0</span>}</td> : null}
+                          {on("sent") ? <td className="is-num">
                             {d.sent ? int(d.sent) : d.sl7Sent ? (
                               <span className="text-faint" title="From Smartlead's 7-day analytics. The app's own count starts with the Email Sent webhook.">{int(d.sl7Sent)}*</span>
                             ) : <span className="zero">0</span>}
-                          </td>
-                          <td className="is-num"><Metric value={d.sent ? d.humanReplyRate : null} digits={2} /></td>
-                          <td className="is-num"><Metric value={d.sent ? d.bounceRate : null} warn={2} bad={3} /></td>
-                          <td className="is-num"><Metric value={d.warmupReputation} warn={95} bad={90} invert digits={0} suffix="" /></td>
-                          <td><Spark values={d.spark} bad={d.openAlerts > 0} /></td>
-                          <td className="is-num text-muted">{d.activeSince && d.status !== "in_storage" ? `${daysSince(d.activeSince)}d` : <span className="zero">—</span>}</td>
+                          </td> : null}
+                          {on("replies") ? <td className="is-num">{d.replies ? int(d.replies) : <span className="zero">0</span>}</td> : null}
+                          {on("human") ? <td className="is-num"><Metric value={d.sent ? d.humanReplyRate : null} digits={2} /></td> : null}
+                          {on("bounces") ? <td className="is-num">{d.bounces ? int(d.bounces) : <span className="zero">0</span>}</td> : null}
+                          {on("bounce") ? <td className="is-num"><Metric value={d.sent ? d.bounceRate : null} warn={2} bad={3} /></td> : null}
+                          {on("rep") ? <td className="is-num"><Metric value={d.warmupReputation} warn={95} bad={90} invert digits={0} suffix="" /></td> : null}
+                          {on("spark") ? <td><Spark values={d.spark} bad={d.openAlerts > 0} /></td> : null}
+                          {on("active") ? <td className="is-num text-muted">{d.activeSince && d.status !== "in_storage" ? `${daysSince(d.activeSince)}d` : <span className="zero">—</span>}</td> : null}
                         </>
                       )}
                     </tr>

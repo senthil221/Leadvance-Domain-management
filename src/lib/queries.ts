@@ -638,3 +638,68 @@ export type JobStateRow = { job: string; lastStartedAt: Date | null; lastFinishe
 export async function listJobState() {
   return sql<JobStateRow[]>`select job, last_started_at, last_finished_at, last_ok, last_error, last_detail from job_state`;
 }
+
+// ---------------------------------------------------------------------------
+// Overview insights
+// ---------------------------------------------------------------------------
+
+export type Issues = {
+  flagged: number; noZone: number; disconnected: number; lowRep: number; htUnpaid: number; htWaiting: number;
+  billedRetired: number; renew14: number; nsFailed: number; settingsFailed: number; stuckSetup: number; freeLow: boolean; free: number;
+};
+export type ClientInsight = {
+  id: string; name: string; hue: number; active: number; warming: number; inboxes: number; capacity: number;
+  sent: number; replies: number; human: number; bounces: number; sentPrev: number;
+};
+export type TrendDay = { day: string; sent: number; replies: number; human: number; bounces: number };
+
+export async function getInsights() {
+  const [[issues], [cap], clients, trend] = await Promise.all([
+    sql<Issues[]>`
+      select
+        (select count(distinct a.domain_id)::int from alerts a join domains d on d.id = a.domain_id
+          where a.status = 'open' and d.status in ('active', 'warming')) as flagged,
+        (select count(*)::int from domains where nameservers_answering = false and status not in ('burned', 'resting')) as no_zone,
+        (select count(*)::int from inboxes i join domains d on d.id = i.domain_id where i.status = 'disconnected' and d.status in ('active', 'warming')) as disconnected,
+        (select count(*)::int from inboxes i join domains d on d.id = i.domain_id where i.status = 'connected' and i.warmup_reputation < 90 and d.status in ('active', 'warming')) as low_rep,
+        (select count(*)::int from hypertide_orders where gone_at is null and payment_status not ilike 'paid%' and payment_status not ilike '%recovery%') as ht_unpaid,
+        (select count(*)::int from hypertide_orders where gone_at is null and status = 'NPC') as ht_waiting,
+        (select count(distinct o.domain_id)::int from hypertide_orders o join domains d on d.id = o.domain_id
+          where o.gone_at is null and o.payment_status ilike 'paid%' and d.status in ('burned', 'resting')) as billed_retired,
+        (select count(*)::int from domains where expires_at between current_date and current_date + 14 and status not in ('burned', 'resting')) as renew14,
+        (select count(*)::int from nameserver_requests where status = 'failed' and created_at > now() - interval '7 days') as ns_failed,
+        (select count(distinct inbox_id)::int from inbox_setting_changes where status = 'failed' and created_at > now() - interval '2 days') as settings_failed,
+        (select count(*)::int from domains d where d.status = 'provisioning'
+          and coalesce((select max(h.at) from domain_status_history h where h.domain_id = d.id), d.created_at) < now() - interval '10 days') as stuck_setup,
+        (select count(*)::int from domains where status = 'in_storage') as free,
+        (select count(*) from domains where status = 'in_storage') <= coalesce((select (value #>> '{}')::int from settings where key = 'storage_low_threshold'), 20) as free_low`,
+    sql<{ capacity: number; sentToday: number; inboxes: number }[]>`
+      select coalesce(sum(i.daily_limit), 0)::int as capacity, coalesce(sum(i.daily_sent), 0)::int as sent_today, count(*)::int as inboxes
+      from inboxes i join domains d on d.id = i.domain_id
+      where i.status = 'connected' and d.status = 'active'`,
+    sql<ClientInsight[]>`
+      select c.id, c.name, c.hue,
+        count(distinct d.id) filter (where d.status = 'active')::int as active,
+        count(distinct d.id) filter (where d.status in ('provisioning', 'warming'))::int as warming,
+        (select count(*)::int from inboxes i join domains x on x.id = i.domain_id where x.client_id = c.id and i.status = 'connected' and x.status = 'active') as inboxes,
+        (select coalesce(sum(i.daily_limit), 0)::int from inboxes i join domains x on x.id = i.domain_id where x.client_id = c.id and i.status = 'connected' and x.status = 'active') as capacity,
+        coalesce(sum(s.sent) filter (where s.day > current_date - 7), 0)::int as sent,
+        coalesce(sum(s.replies) filter (where s.day > current_date - 7), 0)::int as replies,
+        coalesce(sum(s.human_replies) filter (where s.day > current_date - 7), 0)::int as human,
+        coalesce(sum(s.bounces) filter (where s.day > current_date - 7), 0)::int as bounces,
+        coalesce(sum(s.sent) filter (where s.day <= current_date - 7), 0)::int as sent_prev
+      from clients c
+      left join domains d on d.client_id = c.id
+      left join domain_daily_stats s on s.domain_id = d.id and s.day > current_date - 14
+      where c.archived_at is null
+      group by c.id
+      order by 8 desc, c.name`,
+    sql<TrendDay[]>`
+      select to_char(g.day, 'YYYY-MM-DD') as day, coalesce(sum(s.sent), 0)::int as sent, coalesce(sum(s.replies), 0)::int as replies,
+        coalesce(sum(s.human_replies), 0)::int as human, coalesce(sum(s.bounces), 0)::int as bounces
+      from generate_series(current_date - 13, current_date, interval '1 day') g(day)
+      left join domain_daily_stats s on s.day = g.day::date
+      group by g.day order by g.day`,
+  ]);
+  return { issues, capacity: cap, clients, trend };
+}

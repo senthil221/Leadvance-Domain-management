@@ -6,6 +6,7 @@ import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
+import { ColumnsMenu, useColumns, type ColumnDef } from "@/components/Columns";
 import { SetupDialog } from "@/components/domains/SetupDialog";
 import { Badge, ClientCell, Empty } from "@/components/ui";
 import { daysSince, int, shortDate } from "@/lib/format";
@@ -16,13 +17,20 @@ import { LIFE, LIFE_ORDER, htOf, lifeOf, nsOf, type Life } from "@/lib/lifecycle
 // active, replaced, retired), where it is registered, where its nameservers
 // point and what Hypertide knows about it.
 
+const COLUMNS: ColumnDef[] = [
+  { key: "life", label: "Lifecycle" }, { key: "client", label: "Client" }, { key: "registrar", label: "Registrar" },
+  { key: "ns", label: "Nameservers" }, { key: "ht", label: "Hypertide" }, { key: "inboxes", label: "Inboxes" },
+  { key: "capacity", label: "Per day" }, { key: "age", label: "Active for" }, { key: "bought", label: "Bought", hidden: true },
+  { key: "renews", label: "Renews" },
+];
+
 type SortKey = "name" | "life" | "client" | "registrar" | "ns" | "ht" | "inboxCount" | "capacity" | "purchasedAt" | "expiresAt" | "age";
 const sortValue = (d: DomainRow, k: SortKey): string | number | null => {
   switch (k) {
     case "life": return LIFE_ORDER.indexOf(lifeOf(d));
     case "client": return d.clientName?.toLowerCase() ?? null;
     case "registrar": return d.registrar?.toLowerCase() ?? null;
-    case "ns": return nsOf(d).label;
+    case "ns": { const n = nsOf(d); return `${n.tone === "danger" ? 0 : n.tone === "warning" ? 1 : 2}${n.host ?? "~"}`; }
     case "ht": return htOf(d)?.label ?? null;
     case "purchasedAt": case "expiresAt": return d[k] ? new Date(d[k]!).getTime() : null;
     case "age": return d.activeSince ? new Date(d.activeSince).getTime() * -1 : null;
@@ -44,6 +52,8 @@ export function InventoryView({ domains, clients }: { domains: DomainRow[]; clie
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [setupOpen, setSetupOpen] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
+  const cols = useColumns("inventory", COLUMNS);
+  const on = cols.on;
 
   useEffect(() => {
     const p = new URLSearchParams(window.location.search);
@@ -113,46 +123,47 @@ export function InventoryView({ domains, clients }: { domains: DomainRow[]; clie
 
   const filtered = q || clientId || tag || registrar;
   const capacity = rows.reduce((a, r) => a + r.capacity, 0);
-  const COLS = 12;
+  const COLS = 2 + cols.count;
 
   return (
     <>
       <div className="flex flex-col gap-3">
-        <div className="view-tabs" role="tablist" aria-label="Lifecycle">
-          {(["all", ...LIFE_ORDER] as const).map((k) => (
-            <button key={k} type="button" role="tab" aria-selected={view === k} className={view === k ? "is-on" : undefined} onClick={() => { setView(k); scrollRef.current?.scrollTo({ top: 0 }); }}>
-              {k === "all" ? "All" : LIFE[k].label} <span>{int(counts[k] ?? 0)}</span>
-            </button>
-          ))}
-        </div>
-
-        <div className="toolbar">
+        <div className="table-bar">
+          <div className="view-tabs" role="tablist" aria-label="Lifecycle">
+            {(["all", ...LIFE_ORDER] as const).map((k) => (
+              <button key={k} type="button" role="tab" aria-selected={view === k} className={view === k ? "is-on" : undefined} onClick={() => { setView(k); scrollRef.current?.scrollTo({ top: 0 }); }}>
+                {k === "all" ? "All" : LIFE[k].label} <span>{int(counts[k] ?? 0)}</span>
+              </button>
+            ))}
+          </div>
           <label className="search-input">
             <Search size={14} strokeWidth={1.5} />
-            <input className="input" value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search domains, clients or tags" aria-label="Search inventory" />
+            <input className="input" value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search domains, clients, tags" aria-label="Search inventory" />
           </label>
-          <select className="select" style={{ width: 160 }} value={clientId} onChange={(e) => setClientId(e.target.value)} aria-label="Filter by client">
+          <select className="select" style={{ width: 150 }} value={clientId} onChange={(e) => setClientId(e.target.value)} aria-label="Filter by client">
             <option value="">All clients</option>
             {clients.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
           </select>
           {allTags.length ? (
-            <select className="select" style={{ width: 140 }} value={tag} onChange={(e) => setTag(e.target.value)} aria-label="Filter by tag">
+            <select className="select" style={{ width: 130 }} value={tag} onChange={(e) => setTag(e.target.value)} aria-label="Filter by tag">
               <option value="">All tags</option>
               {allTags.map((t) => <option key={t} value={t}>{t}</option>)}
             </select>
           ) : null}
           {registrars.length > 1 ? (
-            <select className="select" style={{ width: 160 }} value={registrar} onChange={(e) => setRegistrar(e.target.value)} aria-label="Filter by registrar">
+            <select className="select" style={{ width: 150 }} value={registrar} onChange={(e) => setRegistrar(e.target.value)} aria-label="Filter by registrar">
               <option value="">All registrars</option>
               {registrars.map((r) => <option key={r} value={r}>{r}</option>)}
             </select>
           ) : null}
           {filtered ? <button type="button" className="btn btn-ghost btn-sm" onClick={() => { setQ(""); setClientId(""); setTag(""); setRegistrar(""); }}>Clear</button> : null}
-          <div className="view-tabs-summary"><b>{int(rows.length)}</b> domains · <b>{int(capacity)}</b> emails / day</div>
+          <span className="spacer-auto" />
+          <button type="button" className="btn btn-sm" onClick={exportCsv}><Download size={14} /> Export</button>
+          <ColumnsMenu cols={cols} />
         </div>
 
         <div className="table-wrap">
-          <div ref={scrollRef} className="table-scroll" style={{ maxHeight: "calc(100dvh - 300px)", minHeight: 280 }}>
+          <div ref={scrollRef} className="table-scroll" style={{ maxHeight: "calc(100dvh - 240px)", minHeight: 280 }}>
             <table className="data-table is-main" aria-rowcount={rows.length}>
               <thead>
                 <tr>
@@ -162,16 +173,16 @@ export function InventoryView({ domains, clients }: { domains: DomainRow[]; clie
                       onChange={() => setSelected((s) => { const n = new Set(s); rows.forEach((r) => (allShown ? n.delete(r.id) : n.add(r.id))); return n; })} />
                   </th>
                   <Th k="name">Domain</Th>
-                  <Th k="life">Lifecycle</Th>
-                  <Th k="client">Client</Th>
-                  <Th k="registrar">Registrar</Th>
-                  <Th k="ns">Nameservers</Th>
-                  <Th k="ht">Hypertide</Th>
-                  <Th k="inboxCount" num>Inboxes</Th>
-                  <Th k="capacity" num>Per day</Th>
-                  <Th k="age" num>Active</Th>
-                  <Th k="purchasedAt" num>Bought</Th>
-                  <Th k="expiresAt" num>Renews</Th>
+                  {on("life") ? <Th k="life">Lifecycle</Th> : null}
+                  {on("client") ? <Th k="client">Client</Th> : null}
+                  {on("registrar") ? <Th k="registrar">Registrar</Th> : null}
+                  {on("ns") ? <Th k="ns">Nameservers</Th> : null}
+                  {on("ht") ? <Th k="ht">Hypertide</Th> : null}
+                  {on("inboxes") ? <Th k="inboxCount" num>Inboxes</Th> : null}
+                  {on("capacity") ? <Th k="capacity" num>Per day</Th> : null}
+                  {on("age") ? <Th k="age" num>Active</Th> : null}
+                  {on("bought") ? <Th k="purchasedAt" num>Bought</Th> : null}
+                  {on("renews") ? <Th k="expiresAt" num>Renews</Th> : null}
                 </tr>
               </thead>
               <tbody>
@@ -192,6 +203,7 @@ export function InventoryView({ domains, clients }: { domains: DomainRow[]; clie
                           {d.tags.length > 2 ? <span className="badge" title={d.tags.join(", ")}>+{d.tags.length - 2}</span> : null}
                         </span>
                       </td>
+                      {on("life") ? (
                       <td>
                         <span className="flex items-center gap-1.5">
                           <span className={`status-dot tone-${life.tone}`}>{life.label}</span>
@@ -202,28 +214,48 @@ export function InventoryView({ domains, clients }: { domains: DomainRow[]; clie
                           ) : null}
                         </span>
                       </td>
+                      ) : null}
+                      {on("client") ? (
                       <td><ClientCell name={d.clientName} hue={d.clientHue} /></td>
+                      ) : null}
+                      {on("registrar") ? (
                       <td>
                         {d.registrar ?? <span className="zero">—</span>}
                         {d.registrar === "Porkbun" && d.apiAccess === false ? (
                           <span className="badge tone-warning ml-1.5" title="API access is off for this domain at Porkbun, so the app can read but not change its nameservers. Turn it on in Porkbun → Domain → Details → API Access.">API off</span>
                         ) : null}
                       </td>
+                      ) : null}
+                      {on("ns") ? (
                       <td>
-                        <span className="flex items-center gap-1" title={ns.title}>
-                          <span className={`status-dot tone-${ns.tone}`}>{ns.label}</span>
-                          {d.nameservers.length ? <span className="mono truncate text-[11.5px] text-faint" style={{ maxWidth: 210 }}>{d.nameservers.join(", ")}</span> : null}
+                        <span className="ns-cell" title={ns.title}>
+                          <span className={`dot tone-${ns.tone}`} />
+                          <span className="ns-host">{ns.host ?? "—"}</span>
+                          <span className={`ns-status tone-${ns.tone}`}>{ns.status}</span>
                           {ns.copy?.length ? (
-                            <button type="button" className="icon-btn" aria-label="Copy nameservers" onClick={(e) => { e.stopPropagation(); copy(ns.copy!); }}><Copy size={12} /></button>
+                            <button type="button" className="icon-btn row-actions" aria-label="Copy nameservers" title={`Copy ${ns.copy.join(", ")}`} onClick={(e) => { e.stopPropagation(); copy(ns.copy!); }}><Copy size={12} /></button>
                           ) : null}
                         </span>
                       </td>
+                      ) : null}
+                      {on("ht") ? (
                       <td>{ht ? <Badge tone={ht.tone}>{ht.label}</Badge> : <span className="zero">—</span>}</td>
+                      ) : null}
+                      {on("inboxes") ? (
                       <td className="is-num">{d.inboxCount ? int(d.inboxCount) : <span className="zero">0</span>}</td>
+                      ) : null}
+                      {on("capacity") ? (
                       <td className="is-num">{d.capacity ? int(d.capacity) : <span className="zero">0</span>}</td>
+                      ) : null}
+                      {on("age") ? (
                       <td className="is-num text-muted">{d.activeSince && d.status !== "in_storage" ? `${daysSince(d.activeSince)}d` : <span className="zero">—</span>}</td>
+                      ) : null}
+                      {on("bought") ? (
                       <td className="is-num text-muted">{d.purchasedAt ? shortDate(d.purchasedAt) : <span className="zero">—</span>}</td>
+                      ) : null}
+                      {on("renews") ? (
                       <td className="is-num text-muted">{d.expiresAt ? shortDate(d.expiresAt) : <span className="zero">—</span>}</td>
+                      ) : null}
                     </tr>
                   );
                 })}

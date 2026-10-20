@@ -20,9 +20,20 @@ const TABS: { key: Cls | "all"; label: string }[] = [
   { key: "all", label: "All" },
 ];
 
+const SORTS = {
+  newest: { label: "Newest first", fn: (a: ReplyRow, b: ReplyRow) => +new Date(b.occurredAt) - +new Date(a.occurredAt) },
+  oldest: { label: "Oldest first", fn: (a: ReplyRow, b: ReplyRow) => +new Date(a.occurredAt) - +new Date(b.occurredAt) },
+  client: { label: "Client", fn: (a: ReplyRow, b: ReplyRow) => (a.clientName ?? "~").localeCompare(b.clientName ?? "~") },
+  domain: { label: "Domain", fn: (a: ReplyRow, b: ReplyRow) => (a.domain ?? "~").localeCompare(b.domain ?? "~") },
+  campaign: { label: "Campaign", fn: (a: ReplyRow, b: ReplyRow) => (a.campaignName ?? "~").localeCompare(b.campaignName ?? "~") },
+} as const;
+
 export function RepliesView({ replies }: { replies: ReplyRow[] }) {
   const [tab, setTab] = useState<Cls | "all">("human");
   const [q, setQ] = useState("");
+  const [client, setClient] = useState("");
+  const [sort, setSort] = useState<keyof typeof SORTS>("newest");
+  const clients = useMemo(() => [...new Set(replies.map((r) => r.clientName).filter((x): x is string => Boolean(x)))].sort(), [replies]);
   const [overrides, setOverride] = useOptimistic(new Map<number, Cls>(), (m, [id, c]: [number, Cls]) => new Map(m).set(id, c));
   const [, startTransition] = useTransition();
 
@@ -33,7 +44,9 @@ export function RepliesView({ replies }: { replies: ReplyRow[] }) {
     return c;
   }, [rows]);
   const needle = q.trim().toLowerCase();
-  const shown = rows.filter((r) => (tab === "all" || r.replyClass === tab) && (!needle || [r.preview, r.leadEmail, r.domain, r.campaignName].some((v) => v?.toLowerCase().includes(needle))));
+  const shown = rows
+    .filter((r) => (tab === "all" || r.replyClass === tab) && (!client || r.clientName === client) && (!needle || [r.preview, r.leadEmail, r.domain, r.campaignName].some((v) => v?.toLowerCase().includes(needle))))
+    .sort(SORTS[sort].fn);
 
   const reclassify = (r: ReplyRow, c: Cls) =>
     startTransition(async () => {
@@ -45,19 +58,28 @@ export function RepliesView({ replies }: { replies: ReplyRow[] }) {
 
   return (
     <div className="flex flex-col gap-3">
-      <div className="view-tabs" role="tablist">
-        {TABS.map((t) => (
-          <button key={t.key} type="button" role="tab" aria-selected={tab === t.key} className={tab === t.key ? "is-on" : undefined} onClick={() => setTab(t.key)}>
-            {t.label} <span>{int(counts[t.key] ?? 0)}</span>
-          </button>
-        ))}
-      </div>
-      <div className="toolbar">
+      <div className="table-bar">
+        <div className="view-tabs" role="tablist">
+          {TABS.map((t) => (
+            <button key={t.key} type="button" role="tab" aria-selected={tab === t.key} className={tab === t.key ? "is-on" : undefined} onClick={() => setTab(t.key)}>
+              {t.label} <span>{int(counts[t.key] ?? 0)}</span>
+            </button>
+          ))}
+        </div>
         <label className="search-input">
           <Search size={14} strokeWidth={1.5} />
           <input className="input" value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search replies, leads, domains" aria-label="Search replies" />
         </label>
-        <div className="view-tabs-summary"><b>{int(shown.length)}</b> replies</div>
+        {clients.length ? (
+          <select className="select" style={{ width: 150 }} value={client} onChange={(e) => setClient(e.target.value)} aria-label="Filter by client">
+            <option value="">All clients</option>
+            {clients.map((c) => <option key={c} value={c}>{c}</option>)}
+          </select>
+        ) : null}
+        <select className="select" style={{ width: 140 }} value={sort} onChange={(e) => setSort(e.target.value as keyof typeof SORTS)} aria-label="Sort replies">
+          {Object.entries(SORTS).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}
+        </select>
+        <span className="view-tabs-summary"><b>{int(shown.length)}</b> replies</span>
       </div>
       <div className="card">
         {shown.length === 0 ? (

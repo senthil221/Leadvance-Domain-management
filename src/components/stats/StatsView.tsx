@@ -2,9 +2,11 @@
 
 import { BarChart3, CalendarDays, Download, Loader, Search } from "lucide-react";
 import Link from "next/link";
+import { useSearchParams } from "next/navigation";
 import { Fragment, useMemo, useState, useTransition } from "react";
 import { toast } from "sonner";
 import { loadStats } from "@/app/actions";
+import { ColumnsMenu, useColumns, type ColumnDef } from "@/components/Columns";
 import { SortTh } from "@/components/SortTh";
 import { ClientCell, Empty, Metric, StatusDot } from "@/components/ui";
 import { int } from "@/lib/format";
@@ -85,23 +87,55 @@ function Delta({ now, before, points = false, invert = false }: { now: number | 
 
 const Z = ({ v }: { v: number }) => (v ? <>{int(v)}</> : <span className="zero">0</span>);
 
-function Cells({ r, len }: { r: Totals; len: number }) {
+const COLUMNS: ColumnDef[] = [
+  { key: "status", label: "Status" }, { key: "client", label: "Client" }, { key: "inboxes", label: "Inboxes" },
+  { key: "usage", label: "Used" }, { key: "sent", label: "Sent" }, { key: "replies", label: "Replies" },
+  { key: "human", label: "Human" }, { key: "ooo", label: "Out of office", hidden: true }, { key: "negative", label: "Not interested", hidden: true },
+  { key: "bounces", label: "Bounces" }, { key: "replyRate", label: "Reply %" }, { key: "humanRate", label: "Human %" },
+  { key: "bounceRate", label: "Bounce %" }, { key: "reputation", label: "Reputation" },
+];
+
+function Cells({ r, len, on }: { r: Totals; len: number; on: (k: string) => boolean }) {
   return (
     <>
+      {on("inboxes") ? (
       <td className="is-num"><Z v={r.inboxes} /></td>
+      ) : null}
+      {on("usage") ? (
       <td className="is-num" title={r.capacity ? `${int(r.sent)} of ${int(r.capacity * len)} possible` : undefined}>
         {r.capacity ? <Metric value={(100 * r.sent) / (r.capacity * len)} digits={0} /> : <span className="zero">—</span>}
       </td>
+      ) : null}
+      {on("sent") ? (
       <td className="is-num"><Z v={r.sent} /><Delta now={r.sent} before={r.prevSent} /></td>
+      ) : null}
+      {on("replies") ? (
       <td className="is-num"><Z v={r.replies} /></td>
+      ) : null}
+      {on("human") ? (
       <td className="is-num"><Z v={r.human} /></td>
+      ) : null}
+      {on("ooo") ? (
       <td className="is-num"><Z v={r.ooo} /></td>
+      ) : null}
+      {on("negative") ? (
       <td className="is-num"><Z v={r.negative} /></td>
+      ) : null}
+      {on("bounces") ? (
       <td className="is-num"><Z v={r.bounces} /></td>
+      ) : null}
+      {on("replyRate") ? (
       <td className="is-num"><Metric value={rate(r.replies, r.sent)} digits={2} /><Delta now={rate(r.replies, r.sent)} before={rate(r.prevReplies, r.prevSent)} points /></td>
+      ) : null}
+      {on("humanRate") ? (
       <td className="is-num"><Metric value={rate(r.human, r.sent)} digits={2} /></td>
+      ) : null}
+      {on("bounceRate") ? (
       <td className="is-num"><Metric value={rate(r.bounces, r.sent)} warn={2} bad={3} /><Delta now={rate(r.bounces, r.sent)} before={rate(r.prevBounces, r.prevSent)} points invert /></td>
+      ) : null}
+      {on("reputation") ? (
       <td className="is-num">{r.reputation !== undefined ? <Metric value={r.reputation} warn={95} bad={90} invert digits={0} suffix="" /> : null}</td>
+      ) : null}
     </>
   );
 }
@@ -122,12 +156,15 @@ export function StatsView({ initial, clients }: { initial: StatsData; clients: C
   const [to, setTo] = useState(initial.to);
   const [view, setView] = useState<"domain" | "day">("domain");
   const [q, setQ] = useState("");
-  const [clientId, setClientId] = useState("");
+  const params = useSearchParams();
+  const [clientId, setClientId] = useState(() => params.get("client") ?? "");
   const [onlySending, setOnlySending] = useState(true);
   const [byClient, setByClient] = useState(false);
   const [sort, setSort] = useState<{ key: SortKey; dir: 1 | -1 }>({ key: "sent", dir: -1 });
   const [daySort, setDaySort] = useState<{ key: DayKey; dir: 1 | -1 }>({ key: "day", dir: -1 });
   const [loading, start] = useTransition();
+  const cols = useColumns("stats", COLUMNS);
+  const on = cols.on;
 
   const load = (f: string, t: string) => start(async () => {
     const r = await loadStats({ from: f, to: t });
@@ -215,67 +252,66 @@ export function StatsView({ initial, clients }: { initial: StatsData; clients: C
         <div className="stat"><span className="stat-label">Bounce rate</span><span className="stat-value">{rate(t.bounces, t.sent)?.toFixed(1) ?? "—"}%</span><span className="stat-foot">{int(t.bounces)} bounces<Delta now={rate(t.bounces, t.sent)} before={rate(t.prevBounces, t.prevSent)} points invert /></span></div>
       </section>
 
-      <div className="toolbar">
-        <div className="seg flex-wrap" role="group" aria-label="Date range">
-          {PRESETS.map((p) => <button key={p.key} type="button" aria-pressed={preset === p.key} onClick={() => pick(p.key)}>{p.label}</button>)}
-        </div>
-        {preset === "custom" ? (
-          <span className="flex items-center gap-1.5">
-            <CalendarDays size={14} className="text-faint" />
-            <input type="date" className="input" style={{ width: 150 }} value={from} max={data.today} onChange={(e) => setFrom(e.target.value)} aria-label="From" />
-            <span className="text-faint">to</span>
-            <input type="date" className="input" style={{ width: 150 }} value={to} max={data.today} onChange={(e) => setTo(e.target.value)} aria-label="To" />
-            <button type="button" className="btn btn-sm btn-primary" disabled={!from || !to || loading} onClick={() => load(from, to)}>Apply</button>
-          </span>
-        ) : null}
-        {loading ? <Loader size={14} className="animate-spin text-faint" aria-label="Loading" /> : null}
-      </div>
-
-      <div className="flex flex-wrap items-center gap-3">
+      <div className="table-bar">
         <div className="view-tabs" role="tablist" aria-label="View">
           <button type="button" role="tab" aria-selected={view === "domain"} className={view === "domain" ? "is-on" : undefined} onClick={() => setView("domain")}>By domain <span>{int(rows.length)}</span></button>
           <button type="button" role="tab" aria-selected={view === "day"} className={view === "day" ? "is-on" : undefined} onClick={() => setView("day")}>By day <span>{len}</span></button>
         </div>
-      </div>
-      <div className="toolbar">
+        <label className="flex items-center gap-1.5">
+          <CalendarDays size={14} className="text-faint" />
+          <select className="select" style={{ width: 130 }} value={preset} onChange={(e) => pick(e.target.value as PresetKey)} aria-label="Date range">
+            {PRESETS.map((p) => <option key={p.key} value={p.key}>{p.label}</option>)}
+          </select>
+        </label>
+        {preset === "custom" ? (
+          <span className="flex items-center gap-1.5">
+            <input type="date" className="input" style={{ width: 138 }} value={from} max={data.today} onChange={(e) => setFrom(e.target.value)} aria-label="From" />
+            <span className="text-faint">–</span>
+            <input type="date" className="input" style={{ width: 138 }} value={to} max={data.today} onChange={(e) => setTo(e.target.value)} aria-label="To" />
+            <button type="button" className="btn btn-sm btn-primary" disabled={!from || !to || loading} onClick={() => load(from, to)}>Apply</button>
+          </span>
+        ) : <span className="text-[12.5px] text-muted">{rangeLabel}</span>}
+        {loading ? <Loader size={14} className="animate-spin text-faint" aria-label="Loading" /> : null}
         <label className="search-input">
           <Search size={14} strokeWidth={1.5} />
-          <input className="input" value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search domains, clients or tags" aria-label="Search stats" />
+          <input className="input" value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search domains, clients, tags" aria-label="Search stats" />
         </label>
-        <select className="select" style={{ width: 170 }} value={clientId} onChange={(e) => setClientId(e.target.value)} aria-label="Filter by client">
+        <select className="select" style={{ width: 150 }} value={clientId} onChange={(e) => setClientId(e.target.value)} aria-label="Filter by client">
           <option value="">All clients</option>
           {clients.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
         </select>
         {view === "domain" ? (
           <>
             <label className="flex items-center gap-1.5 text-[12.5px] text-muted"><input type="checkbox" className="checkbox" checked={onlySending} onChange={(e) => setOnlySending(e.target.checked)} /> Sending only</label>
-            <label className="flex items-center gap-1.5 text-[12.5px] text-muted"><input type="checkbox" className="checkbox" checked={byClient} onChange={(e) => setByClient(e.target.checked)} /> Group by client</label>
+            <label className="flex items-center gap-1.5 text-[12.5px] text-muted"><input type="checkbox" className="checkbox" checked={byClient} onChange={(e) => setByClient(e.target.checked)} /> By client</label>
           </>
-        ) : <span className="text-[12.5px] text-muted">{visible.length === data.domains.length ? "All domains" : `${visible.length} domains`} · {rangeLabel}</span>}
-        <button type="button" className="btn btn-sm ml-auto" onClick={exportCsv}><Download size={14} /> Export</button>
+        ) : null}
+        <span className="spacer-auto" />
+        <button type="button" className="btn btn-sm" onClick={exportCsv}><Download size={14} /> Export</button>
+        {view === "domain" ? <ColumnsMenu cols={cols} /> : null}
       </div>
 
       <div className="table-wrap" style={{ opacity: loading ? 0.6 : 1, transition: "opacity 120ms" }}>
-        <div className="table-scroll" style={{ maxHeight: "calc(100dvh - 380px)", minHeight: 280 }}>
+        <div className="table-scroll" style={{ maxHeight: "calc(100dvh - 250px)", minHeight: 280 }}>
           {view === "domain" ? (
             <table className="data-table is-main">
               <thead>
                 <tr>
                   <SortTh k="name" sort={sort} onSort={sortBy}>Domain</SortTh>
-                  <SortTh k="status" sort={sort} onSort={sortBy}>Status</SortTh>
-                  <SortTh k="client" sort={sort} onSort={sortBy}>Client</SortTh>
-                  <SortTh k="inboxes" sort={sort} onSort={sortBy} num>Inboxes</SortTh>
-                  <SortTh k="usage" sort={sort} onSort={sortBy} num title="Sent as a share of the inboxes' daily limits over the range">Used</SortTh>
-                  <SortTh k="sent" sort={sort} onSort={sortBy} num>Sent</SortTh>
-                  <SortTh k="replies" sort={sort} onSort={sortBy} num>Replies</SortTh>
-                  <SortTh k="human" sort={sort} onSort={sortBy} num>Human</SortTh>
-                  <SortTh k="ooo" sort={sort} onSort={sortBy} num>OOO</SortTh>
-                  <SortTh k="negative" sort={sort} onSort={sortBy} num>Negative</SortTh>
-                  <SortTh k="bounces" sort={sort} onSort={sortBy} num>Bounces</SortTh>
-                  <SortTh k="replyRate" sort={sort} onSort={sortBy} num>Reply %</SortTh>
-                  <SortTh k="humanRate" sort={sort} onSort={sortBy} num>Human %</SortTh>
-                  <SortTh k="bounceRate" sort={sort} onSort={sortBy} num>Bounce %</SortTh>
-                  <SortTh k="reputation" sort={sort} onSort={sortBy} num>Reputation</SortTh>
+                  {on("status") ? <SortTh k="status" sort={sort} onSort={sortBy}>Status</SortTh> : null}
+                  {on("client") ? <SortTh k="client" sort={sort} onSort={sortBy}>Client</SortTh> : null}
+                  {on("inboxes") ? <SortTh k="inboxes" sort={sort} onSort={sortBy} num>Inboxes</SortTh> : null}
+                  {on("usage") ? <SortTh k="usage" sort={sort} onSort={sortBy} num title="Sent as a share of the inboxes' daily limits over the range">Used</SortTh> : null}
+                  {on("sent") ? <SortTh k="sent" sort={sort} onSort={sortBy} num>Sent</SortTh> : null}
+                  {on("replies") ? <SortTh k="replies" sort={sort} onSort={sortBy} num>Replies</SortTh> : null}
+                  {on("human") ? <SortTh k="human" sort={sort} onSort={sortBy} num>Human</SortTh> : null}
+                  {on("ooo") ? <SortTh k="ooo" sort={sort} onSort={sortBy} num>OOO</SortTh> : null}
+                  {on("negative") ? <SortTh k="negative" sort={sort} onSort={sortBy} num>Negative</SortTh> : null}
+                  {on("bounces") ? <SortTh k="bounces" sort={sort} onSort={sortBy} num>Bounces</SortTh> : null}
+                  {on("replyRate") ? <SortTh k="replyRate" sort={sort} onSort={sortBy} num>Reply %</SortTh> : null}
+                  {on("humanRate") ? <SortTh k="humanRate" sort={sort} onSort={sortBy} num>Human %</SortTh> : null}
+                  {on("bounceRate") ? <SortTh k="bounceRate" sort={sort} onSort={sortBy} num>Bounce %</SortTh> : null}
+                  {on("reputation") ? <SortTh k="reputation" sort={sort} onSort={sortBy} num>Reputation</SortTh> : null}
                 </tr>
               </thead>
               <tbody>
@@ -283,16 +319,16 @@ export function StatsView({ initial, clients }: { initial: StatsData; clients: C
                   <Fragment key={g.key}>
                     {byClient ? (
                       <tr style={{ background: "var(--surface-2)" }}>
-                        <td className="col-first" colSpan={3}><span className="flex items-center gap-2"><ClientCell name={g.name ?? "No client"} hue={g.hue} /><span className="text-faint">{g.rows.length} domains</span></span></td>
-                        <Cells r={total(g.rows)} len={len} />
+                        <td className="col-first" colSpan={1 + (on("status") ? 1 : 0) + (on("client") ? 1 : 0)}><span className="flex items-center gap-2"><ClientCell name={g.name ?? "No client"} hue={g.hue} /><span className="text-faint">{g.rows.length} domains</span></span></td>
+                        <Cells r={total(g.rows)} len={len} on={on} />
                       </tr>
                     ) : null}
                     {g.rows.map((r) => (
                       <tr key={r.id}>
                         <td className="col-first" style={byClient ? { paddingLeft: 28 } : undefined}><Link href={`/domains?d=${r.id}&view=all`} className="strong hover:underline">{r.name}</Link></td>
-                        <td><StatusDot status={r.status} /></td>
-                        <td><ClientCell name={r.clientName} hue={r.clientHue} /></td>
-                        <Cells r={r} len={len} />
+                        {on("status") ? <td><StatusDot status={r.status} /></td> : null}
+                        {on("client") ? <td><ClientCell name={r.clientName} hue={r.clientHue} /></td> : null}
+                        <Cells r={r} len={len} on={on} />
                       </tr>
                     ))}
                   </Fragment>

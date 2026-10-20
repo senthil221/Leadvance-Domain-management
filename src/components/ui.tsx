@@ -6,9 +6,9 @@ import { STATUS_META, type DomainStatus, type Tone } from "@/lib/status";
 export function PageHead({ title, sub, children }: { title: string; sub?: ReactNode; children?: ReactNode }) {
   return (
     <header className="page-head">
-      <div className="flex min-w-0 flex-col">
+      <div className="flex min-w-0 items-baseline gap-3">
         <h1 className="page-title">{title}</h1>
-        {sub ? <p className="page-sub">{sub}</p> : null}
+        {sub ? <p className="page-sub hidden md:block">{sub}</p> : null}
       </div>
       {children ? <div className="page-actions">{children}</div> : null}
     </header>
