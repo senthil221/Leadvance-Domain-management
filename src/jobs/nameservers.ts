@@ -1,3 +1,4 @@
+import { Resolver } from "node:dns/promises";
 import type postgres from "postgres";
 import type { Hypertide } from "../integrations/hypertide";
 import { sameNameservers, type Porkbun } from "../integrations/porkbun";
@@ -89,4 +90,50 @@ export async function processNameserverRequests(sql: Sql, ctx: NsContext, limit 
     }
   }
   return { requests: claimed.length, ...tally };
+}
+
+/**
+ * Current nameservers from public DNS, for every domain still in use, oldest
+ * check first. Works at any registrar and needs no API access. Porkbun's API
+ * is only asked when DNS can't answer and the domain allows it.
+ */
+export async function checkNameservers(sql: Sql, porkbun: Porkbun | null, batch = 150, lookup = dnsLookup) {
+  const due = await sql`
+    select d.id, d.name, v.name as registrar, d.registrar_api_access as apiaccess
+    from domains d left join vendors v on v.id = d.registrar_id
+    where d.status not in ('burned', 'resting')
+    order by d.nameservers_checked_at nulls first, d.name
+    limit ${batch}`;
+  let checked = 0, empty = 0, failed = 0;
+  const queue = [...due];
+  const worker = async () => {
+    for (let d = queue.shift(); d; d = queue.shift()) {
+      let ns: string[] | null = null;
+      try {
+        ns = await lookup(d.name as string);
+      } catch {
+        if (porkbun && d.registrar === "Porkbun" && d.apiaccess !== false) ns = await porkbun.getNs(d.name as string).catch(() => null);
+      }
+      if (ns === null) failed++;
+      else if (!ns.length) empty++;
+      else checked++;
+      await sql`update domains set nameservers = coalesce(${ns}::text[], nameservers), nameservers_checked_at = now() where id = ${d.id}`;
+    }
+  };
+  await Promise.all(Array.from({ length: 8 }, worker));
+  return { checked, empty, failed };
+}
+
+const resolver = new Resolver({ timeout: 4000, tries: 2 });
+resolver.setServers(["1.1.1.1", "8.8.8.8"]);
+
+/** NS records, lowercased and sorted; [] when the domain has none (or doesn't resolve). */
+async function dnsLookup(name: string): Promise<string[]> {
+  try {
+    return (await resolver.resolveNs(name)).map((n) => n.toLowerCase().replace(/\.$/, "")).sort();
+  } catch (e) {
+    const code = (e as { code?: string }).code;
+    if (code === "ENODATA" || code === "ENOTFOUND") return [];
+    throw e;
+  }
 }

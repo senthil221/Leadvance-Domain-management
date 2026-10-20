@@ -1,12 +1,14 @@
 "use client";
 
-import { ChevronRight, ChevronsDownUp, ChevronsUpDown, Inbox, Info, Search } from "lucide-react";
+import { ChevronRight, ChevronsDownUp, ChevronsUpDown, Inbox, Info, Search, Settings2, Shuffle, X } from "lucide-react";
 import Link from "next/link";
 import { Fragment, useMemo, useState } from "react";
 import { SortTh } from "@/components/SortTh";
 import { ClientCell, Empty, Metric, StatusDot } from "@/components/ui";
+import { InboxSettingsDialog } from "./InboxSettingsDialog";
+import { PlansCard } from "./PlansCard";
 import { ago, int } from "@/lib/format";
-import type { ClientRow, InboxListRow } from "@/lib/queries";
+import type { ClientRow, InboxListRow, PlanRow } from "@/lib/queries";
 import type { DomainStatus } from "@/lib/status";
 
 const TABS = [
@@ -24,6 +26,7 @@ type Group = {
   count: number; warmupOff: number; avgWarmup: number | null; avgLimit: number | null; capacity: number;
   avgRep: number | null; minRep: number | null; lowRep: number; campaigns: number;
   sent7: number; replies7: number; human7: number; bounces7: number;
+  sentToday: number; avgWait: number | null; pending: number; tags: string[];
 };
 
 const avg = (xs: number[]) => (xs.length ? xs.reduce((a, b) => a + b, 0) / xs.length : null);
@@ -51,14 +54,18 @@ function group(rows: InboxListRow[]): Group[] {
       replies7: list.reduce((a, i) => a + i.replies7, 0),
       human7: list.reduce((a, i) => a + i.human7, 0),
       bounces7: list.reduce((a, i) => a + i.bounces7, 0),
+      sentToday: list.reduce((a, i) => a + (i.dailySent ?? 0), 0),
+      avgWait: avg(list.filter((i) => i.minWaitMins != null).map((i) => i.minWaitMins!)),
+      pending: list.filter((i) => i.change?.status === "pending" || i.change?.status === "running").length,
+      tags: [...new Set(list.flatMap((i) => i.smartleadTags))],
     };
   });
 }
 
-type SortKey = "domain" | "client" | "count" | "avgWarmup" | "avgLimit" | "capacity" | "avgRep" | "campaigns" | "sent7" | "replyRate" | "bounceRate";
+type SortKey = "domain" | "client" | "count" | "avgWarmup" | "avgLimit" | "capacity" | "sentToday" | "avgWait" | "avgRep" | "campaigns" | "sent7" | "replyRate" | "bounceRate";
 const sortValue = (g: Group, k: SortKey): string | number | null => {
   switch (k) {
-    case "client": return g.clientName?.toLowerCase() ?? null;
+    case "client": return (g.clientName ?? g.tags[0])?.toLowerCase() ?? null;
     case "replyRate": return rate(g.replies7, g.sent7);
     case "bounceRate": return rate(g.bounces7, g.sent7);
     default: return g[k];
@@ -67,7 +74,20 @@ const sortValue = (g: Group, k: SortKey): string | number | null => {
 
 const n0 = (v: number | null, digits = 0) => (v == null ? <span className="zero">—</span> : v.toFixed(digits));
 
-export function InboxesView({ inboxes, clients, smartleadConnected }: { inboxes: InboxListRow[]; clients: ClientRow[]; smartleadConnected: boolean }) {
+function ChangeBadge({ change }: { change: InboxListRow["change"] }) {
+  if (!change) return null;
+  const what = Object.entries(change.changes).map(([k, v]) => `${k.replace(/_/g, " ")} ${v}`).join(", ");
+  if (change.status === "pending" || change.status === "running") return <span className="badge tone-info" title={what}>Pending</span>;
+  if (change.status === "failed") return <span className="badge tone-danger" title={change.error ?? what}>Update failed</span>;
+  if (change.status === "dry_run") return <span className="badge" title={`Dry run: would set ${what}`}>Dry run</span>;
+  return null;
+}
+
+export function InboxesView({ inboxes, clients, plans, smartleadConnected, dryRun, timezone }: {
+  inboxes: InboxListRow[]; clients: ClientRow[]; plans: PlanRow[]; smartleadConnected: boolean; dryRun: boolean; timezone: string;
+}) {
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [editOpen, setEditOpen] = useState(false);
   const [tab, setTab] = useState<TabKey>("connected");
   const [q, setQ] = useState("");
   const [clientId, setClientId] = useState("");
@@ -106,6 +126,22 @@ export function InboxesView({ inboxes, clients, smartleadConnected }: { inboxes:
       bounces: all.reduce((a, i) => a + i.bounces7, 0),
     };
   }, [all]);
+
+  const selectedRows = useMemo(() => inboxes.filter((i) => selected.has(i.id)), [inboxes, selected]);
+  const selectedDomains = useMemo(() => [...new Set(selectedRows.map((i) => i.domainId))], [selectedRows]);
+  const current = useMemo(() => {
+    const m = (f: (i: InboxListRow) => number | null) => avg(selectedRows.map(f).filter((x): x is number => x != null));
+    return { dailyLimit: m((i) => i.dailyLimit), minWait: m((i) => i.minWaitMins), warmupPerDay: m((i) => i.warmupPerDay), warmupRampup: m((i) => i.warmupRampup), warmupReplyRate: m((i) => i.warmupReplyRate) };
+  }, [selectedRows]);
+  const toggleIds = (ids: string[]) => setSelected((s) => {
+    const n = new Set(s);
+    const on = ids.every((id) => n.has(id));
+    for (const id of ids) if (on) n.delete(id); else n.add(id);
+    return n;
+  });
+  const allIds = all.map((i) => i.id);
+  const allSel = allIds.length > 0 && allIds.every((id) => selected.has(id));
+  const someSel = allIds.some((id) => selected.has(id));
 
   const allOpen = groups.length > 0 && groups.every((g) => open.has(g.domainId));
   const toggle = (id: string) => setOpen((s) => { const n = new Set(s); if (n.has(id)) n.delete(id); else n.add(id); return n; });
@@ -157,40 +193,55 @@ export function InboxesView({ inboxes, clients, smartleadConnected }: { inboxes:
           <table className="data-table is-main">
             <thead>
               <tr>
+                <th className="col-check">
+                  <input type="checkbox" className="checkbox" aria-label="Select all shown inboxes" checked={allSel}
+                    ref={(el) => { if (el) el.indeterminate = !allSel && someSel; }}
+                    onChange={() => setSelected((s0) => { const n = new Set(s0); for (const id of allIds) if (allSel) n.delete(id); else n.add(id); return n; })} />
+                </th>
                 <SortTh k="domain" sort={sort} onSort={sortBy}>Domain</SortTh>
                 <SortTh k="client" sort={sort} onSort={sortBy}>Client</SortTh>
                 <SortTh k="count" sort={sort} onSort={sortBy} num>Inboxes</SortTh>
                 <SortTh k="avgWarmup" sort={sort} onSort={sortBy} num>Warmup / day</SortTh>
                 <SortTh k="avgLimit" sort={sort} onSort={sortBy} num>Limit / inbox</SortTh>
                 <SortTh k="capacity" sort={sort} onSort={sortBy} num>Per day</SortTh>
+                <SortTh k="sentToday" sort={sort} onSort={sortBy} num title="Campaign emails sent today, as Smartlead counts them">Today</SortTh>
+                <SortTh k="avgWait" sort={sort} onSort={sortBy} num title="Minimum minutes between campaign emails">Gap</SortTh>
                 <SortTh k="avgRep" sort={sort} onSort={sortBy} num>Reputation</SortTh>
                 <SortTh k="campaigns" sort={sort} onSort={sortBy} num>Campaigns</SortTh>
                 <SortTh k="sent7" sort={sort} onSort={sortBy} num>Sent 7d</SortTh>
                 <SortTh k="replyRate" sort={sort} onSort={sortBy} num>Reply</SortTh>
                 <SortTh k="bounceRate" sort={sort} onSort={sortBy} num>Bounce</SortTh>
-                <th className="is-num">Synced</th>
               </tr>
             </thead>
             <tbody>
               {groups.map((g) => {
                 const isOpen = open.has(g.domainId);
+                const ids = g.inboxes.map((i) => i.id);
+                const gSel = ids.every((id) => selected.has(id));
+                const gSome = ids.some((id) => selected.has(id));
                 return (
                   <Fragment key={g.domainId}>
-                    <tr className="is-clickable" aria-expanded={isOpen} onClick={() => toggle(g.domainId)}>
+                    <tr className="is-clickable" aria-expanded={isOpen} data-selected={gSel} onClick={() => toggle(g.domainId)}>
+                      <td className="col-check" onClick={(e) => { e.stopPropagation(); toggleIds(ids); }}>
+                        <input type="checkbox" className="checkbox" checked={gSel} ref={(el) => { if (el) el.indeterminate = !gSel && gSome; }} onChange={() => {}} aria-label={`Select inboxes on ${g.domain}`} tabIndex={-1} />
+                      </td>
                       <td className="col-first">
                         <span className="flex items-center gap-1.5">
                           <ChevronRight size={14} className="flex-none text-faint transition-transform" style={{ transform: isOpen ? "rotate(90deg)" : undefined }} />
                           <Link href={`/domains?d=${g.domainId}&view=all`} className="strong hover:underline" onClick={(e) => e.stopPropagation()}>{g.domain}</Link>
                           <span className="hidden lg:inline-flex"><StatusDot status={g.status} /></span>
+                          {g.pending ? <span className="badge tone-info">{g.pending} pending</span> : null}
                         </span>
                       </td>
-                      <td><ClientCell name={g.clientName} hue={g.clientHue} /></td>
+                      <td>{g.clientName ? <ClientCell name={g.clientName} hue={g.clientHue} /> : g.tags.length ? <span className="badge" title="Smartlead tag">{g.tags.join(", ")}</span> : <span className="zero">—</span>}</td>
                       <td className="is-num">{int(g.count)}</td>
                       <td className="is-num" title={g.warmupOff ? `${g.warmupOff} with warmup off` : undefined}>
                         {n0(g.avgWarmup)}{g.warmupOff ? <span className="text-faint"> · {g.warmupOff} off</span> : null}
                       </td>
                       <td className="is-num">{n0(g.avgLimit)}</td>
                       <td className="is-num">{g.capacity ? int(g.capacity) : <span className="zero">0</span>}</td>
+                      <td className="is-num">{g.sentToday ? int(g.sentToday) : <span className="zero">0</span>}</td>
+                      <td className="is-num">{g.avgWait != null ? `${Math.round(g.avgWait)}m` : <span className="zero">—</span>}</td>
                       <td className="is-num" title={g.minRep != null ? `Lowest ${g.minRep.toFixed(0)}${g.lowRep ? `, ${g.lowRep} under 90` : ""}` : undefined}>
                         <Metric value={g.avgRep} warn={95} bad={90} invert digits={1} suffix="" />
                         {g.lowRep ? <span className="text-danger-ink"> · {g.lowRep} low</span> : null}
@@ -199,27 +250,35 @@ export function InboxesView({ inboxes, clients, smartleadConnected }: { inboxes:
                       <td className="is-num">{g.sent7 ? int(g.sent7) : <span className="zero">0</span>}</td>
                       <td className="is-num"><Metric value={rate(g.replies7, g.sent7)} digits={2} /></td>
                       <td className="is-num"><Metric value={rate(g.bounces7, g.sent7)} warn={2} bad={3} /></td>
-                      <td className="is-num text-muted"><span className="zero">—</span></td>
                     </tr>
                     {isOpen ? g.inboxes.map((i) => (
-                      <tr key={i.id} style={{ background: "var(--surface-2)" }}>
+                      <tr key={i.id} className="is-clickable" data-selected={selected.has(i.id)} style={{ background: "var(--surface-2)" }} onClick={() => toggleIds([i.id])}>
+                        <td className="col-check"><input type="checkbox" className="checkbox" checked={selected.has(i.id)} onChange={() => {}} aria-label={`Select ${i.email}`} tabIndex={-1} /></td>
                         <td className="col-first" style={{ paddingLeft: 34 }}>
-                          <span className="flex items-center gap-2">
+                          <span className="flex items-center gap-2" title={i.lastSyncedAt ? `Synced ${ago(i.lastSyncedAt)}` : undefined}>
                             <span className="text-ink-soft">{i.email}</span>
                             {i.status !== "connected" ? <span className="badge">{i.status}</span> : null}
+                            <ChangeBadge change={i.change} />
                           </span>
                         </td>
-                        <td className="text-muted">{i.senderName ?? <span className="zero">—</span>}</td>
+                        <td className="text-muted">
+                          {i.senderName ?? <span className="zero">—</span>}
+                          {i.providerType ? <span className="text-faint"> · {i.providerType === "OUTLOOK" ? "Outlook" : i.providerType === "GMAIL" ? "Google" : i.providerType.toLowerCase()}</span> : null}
+                        </td>
                         <td className="is-num"><span className="zero">—</span></td>
-                        <td className="is-num">{i.warmupEnabled ? int(i.warmupPerDay) : <span className="zero">off</span>}{i.warmupRampup ? <span className="text-faint"> · +{i.warmupRampup}</span> : null}</td>
+                        <td className="is-num" title={i.warmupMin != null ? `Smartlead sends ${i.warmupMin}–${i.warmupPerDay} a day${i.warmupReplyRate != null ? `, ${i.warmupReplyRate}% reply rate` : ""}` : undefined}>
+                          {i.warmupEnabled ? (i.warmupMin != null && i.warmupMin !== i.warmupPerDay ? `${i.warmupMin}–${i.warmupPerDay}` : int(i.warmupPerDay)) : <span className="zero">off</span>}
+                          {i.warmupRampup ? <span className="text-faint"> · +{i.warmupRampup}</span> : null}
+                        </td>
                         <td className="is-num">{i.dailyLimit ? int(i.dailyLimit) : <span className="zero">0</span>}</td>
                         <td className="is-num">{i.dailyLimit ? int(i.dailyLimit) : <span className="zero">0</span>}</td>
+                        <td className="is-num">{i.dailySent ? int(i.dailySent) : <span className="zero">0</span>}</td>
+                        <td className="is-num">{i.minWaitMins != null ? `${i.minWaitMins}m` : <span className="zero">—</span>}</td>
                         <td className="is-num"><Metric value={i.warmupReputation} warn={95} bad={90} invert digits={0} suffix="" /></td>
                         <td className="is-num">{i.campaigns ? int(i.campaigns) : <span className="zero">0</span>}</td>
                         <td className="is-num">{i.sent7 ? int(i.sent7) : <span className="zero">0</span>}</td>
                         <td className="is-num"><Metric value={rate(i.replies7, i.sent7)} digits={2} /></td>
                         <td className="is-num"><Metric value={rate(i.bounces7, i.sent7)} warn={2} bad={3} /></td>
-                        <td className="is-num text-muted">{i.lastSyncedAt ? ago(i.lastSyncedAt) : <span className="zero">never</span>}</td>
                       </tr>
                     )) : null}
                   </Fragment>
@@ -235,8 +294,22 @@ export function InboxesView({ inboxes, clients, smartleadConnected }: { inboxes:
           <span><b>{int(totals.capacity)}</b> campaign emails a day</span>
           <span><b>{int(totals.warmup)}</b> warmup a day</span>
           <span><b>{totals.avgRep == null ? "—" : totals.avgRep.toFixed(1)}</b> avg reputation</span>
+          <span className="table-footer-hint hidden md:inline-flex">Tick domains or inboxes to edit them</span>
         </div>
       </div>
+
+      <PlansCard plans={plans} clients={clients} selectedDomainIds={selectedDomains} timezone={timezone} />
+
+      {selected.size > 0 ? (
+        <div className="bulk-bar" role="toolbar" aria-label="Selected inboxes">
+          <span className="bulk-count">{selected.size} inbox{selected.size === 1 ? "" : "es"} · {selectedDomains.length} domain{selectedDomains.length === 1 ? "" : "s"}</span>
+          <button type="button" className="btn btn-primary btn-sm" disabled={!smartleadConnected} onClick={() => setEditOpen(true)}><Settings2 size={14} /> Edit settings</button>
+          <button type="button" className="btn btn-sm" onClick={() => document.getElementById("plans-title")?.scrollIntoView({ behavior: "smooth" })}><Shuffle size={14} /> Daily plan</button>
+          <span className="sep" />
+          <button type="button" className="btn btn-sm" aria-label="Clear selection" onClick={() => setSelected(new Set())}><X size={14} /></button>
+        </div>
+      ) : null}
+      <InboxSettingsDialog open={editOpen} onOpenChange={setEditOpen} inboxIds={[...selected]} domains={selectedDomains.length} current={current} dryRun={dryRun} onDone={() => setSelected(new Set())} />
     </div>
   );
 }

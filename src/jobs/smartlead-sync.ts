@@ -38,13 +38,16 @@ export async function syncAccounts(sql: Sql, sl: Smartlead) {
     id: a.id, email: a.email, domain: a.domain, sender_name: a.senderName, client_id: a.clientId,
     daily_limit: a.dailyLimit, warmup_enabled: a.warmupEnabled, warmup_per_day: a.warmupPerDay,
     warmup_rampup: a.warmupRampup, warmup_reputation: a.warmupReputation, connected: a.connected,
+    tags: a.tags, provider_type: a.providerType, min_wait_mins: a.minWaitMins, daily_sent: a.dailySent,
+    campaign_count: a.campaignCount, warmup_status: a.warmupStatus, warmup_min: a.warmupMin, warmup_reply_rate: a.warmupReplyRate,
   }));
   const ids = accounts.map((a) => a.id);
   const emails = accounts.map((a) => a.email);
   // Built per query, from the connection running it.
   const recordset = (q: postgres.Sql | postgres.TransactionSql) => q`jsonb_to_recordset(${q.json(rows)}) as r(
     id bigint, email text, domain text, sender_name text, client_id bigint, daily_limit int, warmup_enabled boolean,
-    warmup_per_day int, warmup_rampup int, warmup_reputation numeric, connected boolean)`;
+    warmup_per_day int, warmup_rampup int, warmup_reputation numeric, connected boolean, tags text[], provider_type text,
+    min_wait_mins int, daily_sent int, campaign_count int, warmup_status text, warmup_min int, warmup_reply_rate int)`;
 
   return sql.begin(async (tx) => {
     await tx`select set_config('app.actor', 'smartlead sync', true)`;
@@ -67,9 +70,11 @@ export async function syncAccounts(sql: Sql, sl: Smartlead) {
 
     const upserted = await tx`
       insert into inboxes (domain_id, email, sender_name, smartlead_account_id, warmup_enabled, warmup_per_day, warmup_rampup,
-        daily_limit, warmup_reputation, status, last_synced_at, pending_changes)
+        daily_limit, warmup_reputation, status, last_synced_at, pending_changes, smartlead_tags, provider_type, min_wait_mins,
+        daily_sent, campaign_count, warmup_status, warmup_min, warmup_reply_rate)
       select d.id, r.email, r.sender_name, r.id, r.warmup_enabled, r.warmup_per_day, r.warmup_rampup,
-        r.daily_limit, r.warmup_reputation, case when r.connected then 'connected' else 'disconnected' end, now(), null
+        r.daily_limit, r.warmup_reputation, case when r.connected then 'connected' else 'disconnected' end, now(), null,
+        coalesce(r.tags, '{}'), r.provider_type, r.min_wait_mins, r.daily_sent, r.campaign_count, r.warmup_status, r.warmup_min, r.warmup_reply_rate
       from ${recordset(tx)} join domains d on d.name = r.domain
       on conflict (email) do update set
         domain_id            = excluded.domain_id,
@@ -82,7 +87,15 @@ export async function syncAccounts(sql: Sql, sl: Smartlead) {
         warmup_reputation    = coalesce(excluded.warmup_reputation, inboxes.warmup_reputation),
         status               = excluded.status,
         last_synced_at       = now(),
-        pending_changes      = null
+        pending_changes      = null,
+        smartlead_tags       = excluded.smartlead_tags,
+        provider_type        = coalesce(excluded.provider_type, inboxes.provider_type),
+        min_wait_mins        = coalesce(excluded.min_wait_mins, inboxes.min_wait_mins),
+        daily_sent           = excluded.daily_sent,
+        campaign_count       = excluded.campaign_count,
+        warmup_status        = coalesce(excluded.warmup_status, inboxes.warmup_status),
+        warmup_min           = coalesce(excluded.warmup_min, inboxes.warmup_min),
+        warmup_reply_rate    = coalesce(excluded.warmup_reply_rate, inboxes.warmup_reply_rate)
       returning id`;
 
     const removed = await tx`
@@ -112,8 +125,35 @@ export async function syncAccounts(sql: Sql, sl: Smartlead) {
       join clients c on c.smartlead_client_id = x.sl_client
       where d.name = x.domain and d.client_id is null and d.status <> 'in_storage'`;
 
-    return { accounts: accounts.length, newDomains: newDomains.length, promoted: promoted.length, upserted: upserted.length, removed: removed.length };
+    const tagged = await clientsFromTags(tx);
+    return { accounts: accounts.length, newDomains: newDomains.length, promoted: promoted.length, upserted: upserted.length, removed: removed.length, ...tagged };
   });
+}
+
+/**
+ * Smartlead inbox tags are client names (one per inbox). Every tag becomes a
+ * client, and a domain without a client takes the tag most of its inboxes carry.
+ */
+export async function clientsFromTags(sql: postgres.Sql | postgres.TransactionSql) {
+  const created = await sql`
+    insert into clients (name, hue)
+    select t.name, (abs(hashtext(t.name)) % 360)
+    from (select distinct trim(unnest(smartlead_tags)) as name from inboxes where status <> 'removed') t
+    where t.name <> '' and not exists (select 1 from clients c where lower(c.name) = lower(t.name))
+    returning id`;
+  const assigned = await sql`
+    update domains d set client_id = x.client_id
+    from (
+      select distinct on (i.domain_id) i.domain_id, c.id as client_id
+      from inboxes i cross join lateral unnest(i.smartlead_tags) tag
+      join clients c on lower(c.name) = lower(trim(tag)) and c.archived_at is null
+      where i.status <> 'removed'
+      group by i.domain_id, c.id
+      order by i.domain_id, count(*) desc
+    ) x
+    where d.id = x.domain_id and d.client_id is null
+    returning d.id`;
+  return { clientsFromTags: created.length, domainsTagged: assigned.length };
 }
 
 const LIVE_CAMPAIGN = new Set(["ACTIVE", "PAUSED", "START", "STARTED", "SCHEDULED"]);

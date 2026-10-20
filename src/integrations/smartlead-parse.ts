@@ -33,6 +33,14 @@ export type SmartleadAccount = {
   warmupRampup: number | null;
   warmupReputation: number | null;
   connected: boolean;
+  tags: string[];
+  providerType: string | null;
+  minWaitMins: number | null;
+  dailySent: number | null;
+  campaignCount: number | null;
+  warmupStatus: string | null;
+  warmupMin: number | null;
+  warmupReplyRate: number | null;
 };
 
 export function parseAccount(raw: unknown): SmartleadAccount | null {
@@ -62,6 +70,17 @@ export function parseAccount(raw: unknown): SmartleadAccount | null {
     warmupRampup: num(w.daily_rampup, a.daily_rampup, w.rampup),
     warmupReputation: num(w.warmup_reputation, a.warmup_reputation, w.reputation),
     connected: smtpOk && imapOk,
+    // [{ tag_id, tag_name, tag_color }]; older payloads nest { tag: { name } }.
+    tags: [...new Set((Array.isArray(a.tags) ? a.tags : Array.isArray(a.email_account_tag_mappings) ? a.email_account_tag_mappings : [])
+      .map((t) => str(obj(t).tag_name, obj(t).name, obj(obj(t).tag).name, typeof t === "string" ? t : null))
+      .filter((t): t is string => t !== null))],
+    providerType: str(a.type)?.toUpperCase() ?? null,
+    minWaitMins: num(a.minTimeToWaitInMins, a.time_to_wait_in_mins, a.min_time_to_wait_in_mins),
+    dailySent: num(a.daily_sent_count),
+    campaignCount: num(a.campaign_count),
+    warmupStatus: warmupStatus ?? null,
+    warmupMin: num(w.warmup_min_count),
+    warmupReplyRate: num(w.reply_rate, w.reply_rate_percentage),
   };
 }
 

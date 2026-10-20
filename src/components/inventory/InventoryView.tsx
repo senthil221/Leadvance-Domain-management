@@ -203,10 +203,16 @@ export function InventoryView({ domains, clients }: { domains: DomainRow[]; clie
                         </span>
                       </td>
                       <td><ClientCell name={d.clientName} hue={d.clientHue} /></td>
-                      <td>{d.registrar ?? <span className="zero">—</span>}</td>
+                      <td>
+                        {d.registrar ?? <span className="zero">—</span>}
+                        {d.registrar === "Porkbun" && d.apiAccess === false ? (
+                          <span className="badge tone-warning ml-1.5" title="API access is off for this domain at Porkbun, so the app can read but not change its nameservers. Turn it on in Porkbun → Domain → Details → API Access.">API off</span>
+                        ) : null}
+                      </td>
                       <td>
                         <span className="flex items-center gap-1" title={ns.title}>
                           <span className={`status-dot tone-${ns.tone}`}>{ns.label}</span>
+                          {d.nameservers.length ? <span className="mono truncate text-[11.5px] text-faint" style={{ maxWidth: 210 }}>{d.nameservers.join(", ")}</span> : null}
                           {ns.copy?.length ? (
                             <button type="button" className="icon-btn" aria-label="Copy nameservers" onClick={(e) => { e.stopPropagation(); copy(ns.copy!); }}><Copy size={12} /></button>
                           ) : null}

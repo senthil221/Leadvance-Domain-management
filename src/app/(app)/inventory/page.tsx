@@ -87,6 +87,8 @@ async function InventoryContent() {
               <span><b className="num text-ink">{int(ht.paid)}</b> paid orders</span>
               <span><b className="num text-ink">{int(ht.done)}</b> done</span>
               <span><b className="num text-ink">{int(ht.inSetup)}</b> in setup</span>
+              <span className={ht.waitingNs ? "text-warning-ink" : undefined} title="Hypertide status NPC: waiting for the domain's nameservers to point to Hypertide"><b className="num">{int(ht.waitingNs)}</b> waiting for nameservers</span>
+              {ht.recovery ? <span><b className="num text-ink">{int(ht.recovery)}</b> in recovery pool</span> : null}
               <span className={ht.unpaid ? "text-warning-ink" : undefined}><b className="num">{int(ht.unpaid)}</b> unpaid</span>
               {ht.sendingWithout ? <span title="Active or warming domains with no Hypertide order: other inbox providers, or orders under another account"><b className="num text-ink">{int(ht.sendingWithout)}</b> sending without an order</span> : null}
             </span>

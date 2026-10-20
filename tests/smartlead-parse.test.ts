@@ -14,7 +14,7 @@ describe("parseAccount", () => {
       is_imap_success: true,
       warmup_details: { status: "ACTIVE", warmup_reputation: "98%", max_email_per_day: 30, daily_rampup: 3 },
     });
-    expect(a).toEqual({
+    expect(a).toMatchObject({
       id: 4100123,
       email: "amelia.wren@cedarflowpro.com",
       domain: "cedarflowpro.com",

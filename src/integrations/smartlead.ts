@@ -116,8 +116,11 @@ export function createSmartlead({ apiKey, sql, dryRun = true, baseUrl = "https:/
     // Writes: logged but not sent while dry-run is on.
     updateDailyLimit: (accountId: number, maxEmailPerDay: number) =>
       request("POST", `/email-accounts/${accountId}`, { body: { max_email_per_day: maxEmailPerDay } }),
-    updateWarmup: (accountId: number, w: { warmup_enabled: boolean; total_warmup_per_day?: number; daily_rampup?: number }) =>
+    updateWarmup: (accountId: number, w: { warmup_enabled: boolean; total_warmup_per_day?: number; daily_rampup?: number; reply_rate_percentage?: number }) =>
       request("POST", `/email-accounts/${accountId}/warmup`, { body: w }),
+    /** Campaign sending settings. Both fields are always sent together so neither falls back to a default. */
+    updateSending: (accountId: number, s: { max_email_per_day: number; time_to_wait_in_mins: number }) =>
+      request("POST", `/email-accounts/${accountId}`, { body: s }),
     addAccountsToCampaign: (campaignId: number, accountIds: number[]) =>
       request("POST", `/campaigns/${campaignId}/email-accounts`, { body: { email_account_ids: accountIds } }),
   };

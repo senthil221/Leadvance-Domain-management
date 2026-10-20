@@ -40,8 +40,12 @@ export function nsOf(d: Pick<DomainRow, "nameservers" | "nsRequestStatus" | "nsR
 
 export function htOf(d: Pick<DomainRow, "htOrderStatus" | "htPayment">): { label: string; tone: Tone } | null {
   if (!d.htOrderStatus && !d.htPayment) return null;
-  if (d.htPayment && d.htPayment !== "Paid") return { label: "Unpaid", tone: "warning" };
+  const pay = (d.htPayment ?? "").toLowerCase();
+  if (pay.includes("recovery")) return { label: "Recovery pool", tone: "violet" };
+  if (pay && !pay.startsWith("paid")) return { label: "Unpaid", tone: "warning" };
   if (d.htOrderStatus === "Done") return { label: "Done", tone: "success" };
+  // NPC: Hypertide is waiting for the domain's nameservers to change.
+  if (d.htOrderStatus === "NPC") return { label: "Waiting for NS", tone: "warning" };
   return { label: d.htOrderStatus ?? "Ordered", tone: "info" };
 }
 

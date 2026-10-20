@@ -417,3 +417,164 @@ export async function loadNameserverStatus(domainIds: string[]) {
     from nameserver_requests where domain_id in ${sql(list)}
     order by domain_id, created_at desc`;
 }
+
+// ---------------------------------------------------------------------------
+// Inbox settings and daily sending plans
+// ---------------------------------------------------------------------------
+
+const count = (max: number) => z.number().int().min(0).max(max);
+const limitInput = z.discriminatedUnion("mode", [
+  z.object({ mode: z.literal("keep") }),
+  z.object({ mode: z.literal("set"), value: count(1000) }),
+  z.object({ mode: z.literal("random"), min: count(1000), max: count(1000) }),
+  z.object({ mode: z.literal("split"), total: count(1_000_000), min: count(1000), max: count(1000) }),
+]);
+const inboxSettingsInput = z.object({
+  inboxIds: z.array(z.uuid()).min(1, "Select at least one inbox").max(5000),
+  dailyLimit: limitInput,
+  minWait: count(1440).optional(),
+  warmupEnabled: z.boolean().optional(),
+  warmupPerDay: count(200).optional(),
+  warmupRampup: count(200).optional(),
+  warmupReplyRate: count(100).optional(),
+}).refine((v) => !("min" in v.dailyLimit) || v.dailyLimit.min <= v.dailyLimit.max, "The lowest daily limit can't be above the highest");
+
+function kickJob(name: string) {
+  after(async () => {
+    const { JOBS, runJob } = await import("@/jobs");
+    const job = JOBS.find((j) => j.name === name);
+    if (job) await runJob(sql, job);
+  });
+}
+
+/** Queues setting changes for Smartlead; the worker pushes them within a minute. */
+export async function updateInboxSettings(input: z.input<typeof inboxSettingsInput>): Promise<ActionResult<{ queued: number; total: number | null }>> {
+  try {
+    const actor = await requireActor();
+    const v = inboxSettingsInput.parse(input);
+    const { distribute, randomInt } = await import("@/lib/distribute");
+    const inboxes = await sql<{ id: string }[]>`
+      select id from inboxes where id in ${sql(v.inboxIds)} and smartlead_account_id is not null and status <> 'removed' order by email`;
+    if (!inboxes.length) return { ok: false, error: "None of these inboxes are linked to Smartlead" };
+
+    const l = v.dailyLimit;
+    const limits: (number | undefined)[] =
+      l.mode === "set" ? inboxes.map(() => l.value)
+      : l.mode === "random" ? inboxes.map(() => randomInt(l.min, l.max))
+      : l.mode === "split" ? distribute(inboxes.length, l.total, l.min, l.max).values
+      : inboxes.map(() => undefined);
+    const common = {
+      ...(v.minWait != null ? { min_wait_mins: v.minWait } : {}),
+      ...(v.warmupEnabled != null ? { warmup_enabled: v.warmupEnabled } : {}),
+      ...(v.warmupPerDay != null ? { warmup_per_day: v.warmupPerDay } : {}),
+      ...(v.warmupRampup != null ? { warmup_rampup: v.warmupRampup } : {}),
+      ...(v.warmupReplyRate != null ? { warmup_reply_rate: v.warmupReplyRate } : {}),
+    };
+    const rows = inboxes.map((ib, i) => ({ inbox_id: ib.id, changes: { ...common, ...(limits[i] != null ? { daily_limit: limits[i] } : {}) } }))
+      .filter((r) => Object.keys(r.changes).length > 0);
+    if (!rows.length) return { ok: false, error: "Nothing to change: pick at least one setting" };
+    await sql`
+      insert into inbox_setting_changes (inbox_id, changes, actor)
+      select r.inbox_id, r.changes, ${actor} from jsonb_to_recordset(${sql.json(rows)}) as r(inbox_id uuid, changes jsonb)`;
+    kickJob("inbox-settings");
+    refresh();
+    const total = limits.every((x) => x != null) ? (limits as number[]).reduce((a, b) => a + b, 0) : null;
+    return { ok: true, data: { queued: rows.length, total } };
+  } catch (e) {
+    return fail(e);
+  }
+}
+
+const planInput = z.object({
+  id: z.uuid().optional(),
+  name: z.string().trim().min(1, "Give the plan a name").max(80),
+  mode: z.enum(["shuffle", "random_total"]),
+  totalMin: count(1_000_000),
+  totalMax: count(1_000_000),
+  inboxMin: count(1000),
+  inboxMax: count(1000),
+  clientId: z.uuid().nullable(),
+  domainIds: z.array(z.uuid()).max(5000).default([]),
+  runHour: z.number().int().min(0).max(23),
+  enabled: z.boolean().default(true),
+}).refine((v) => v.inboxMax > 0, "The highest per-inbox limit must be above 0")
+  .refine((v) => v.inboxMin <= v.inboxMax, "The lowest per-inbox limit can't be above the highest")
+  .refine((v) => v.mode === "shuffle" || v.totalMin <= v.totalMax, "The lowest total can't be above the highest")
+  .refine((v) => v.clientId || v.domainIds.length, "Pick a client or some domains");
+
+export async function saveSendingPlan(input: z.input<typeof planInput>): Promise<ActionResult<{ id: string }>> {
+  try {
+    const actor = await requireActor();
+    const v = planInput.parse(input);
+    const totalMax = v.mode === "shuffle" ? v.totalMin : v.totalMax;
+    const domains = v.clientId ? [] : v.domainIds;
+    const [row] = v.id
+      ? await sql<{ id: string }[]>`
+          update sending_plans set name = ${v.name}, mode = ${v.mode}, total_min = ${v.totalMin}, total_max = ${totalMax},
+            inbox_min = ${v.inboxMin}, inbox_max = ${v.inboxMax}, client_id = ${v.clientId}, domain_ids = ${domains}::uuid[],
+            run_hour = ${v.runHour}, enabled = ${v.enabled}
+          where id = ${v.id} returning id`
+      : await sql<{ id: string }[]>`
+          insert into sending_plans (name, mode, total_min, total_max, inbox_min, inbox_max, client_id, domain_ids, run_hour, enabled, created_by)
+          values (${v.name}, ${v.mode}, ${v.totalMin}, ${totalMax}, ${v.inboxMin}, ${v.inboxMax}, ${v.clientId}, ${domains}::uuid[], ${v.runHour}, ${v.enabled}, ${actor})
+          returning id`;
+    if (!row) return { ok: false, error: "That plan no longer exists" };
+    refresh();
+    return { ok: true, data: { id: row.id } };
+  } catch (e) {
+    return fail(e);
+  }
+}
+
+export async function setSendingPlanEnabled(id: string, enabled: boolean): Promise<ActionResult> {
+  try {
+    await requireActor();
+    await sql`update sending_plans set enabled = ${enabled} where id = ${z.uuid().parse(id)}`;
+    refresh();
+    return { ok: true, data: undefined };
+  } catch (e) {
+    return fail(e);
+  }
+}
+
+export async function deleteSendingPlan(id: string): Promise<ActionResult> {
+  try {
+    await requireActor();
+    await sql`delete from sending_plans where id = ${z.uuid().parse(id)}`;
+    refresh();
+    return { ok: true, data: undefined };
+  } catch (e) {
+    return fail(e);
+  }
+}
+
+/** Runs a plan now (it still runs again tomorrow at its hour). */
+export async function runSendingPlanNow(id: string): Promise<ActionResult<{ total: number; inboxes: number; clamped: boolean }>> {
+  try {
+    const actor = await requireActor();
+    const { loadPlan, runPlan } = await import("@/jobs/inbox-settings");
+    const plan = await loadPlan(sql, z.uuid().parse(id));
+    if (!plan) return { ok: false, error: "That plan no longer exists" };
+    const r = await runPlan(sql, plan, actor);
+    kickJob("inbox-settings");
+    refresh();
+    return { ok: true, data: r };
+  } catch (e) {
+    return fail(e);
+  }
+}
+
+const statsRange = z.object({ from: z.iso.date(), to: z.iso.date() })
+  .refine((v) => v.from <= v.to, "The start date is after the end date")
+  .refine((v) => (Date.parse(v.to) - Date.parse(v.from)) / 86_400_000 < 92, "Pick a range of 92 days or less");
+
+export async function loadStats(input: z.input<typeof statsRange>): Promise<ActionResult<import("@/lib/queries").StatsData>> {
+  try {
+    await requireActor();
+    const { from, to } = statsRange.parse(input);
+    const { getStats } = await import("@/lib/queries");
+    return { ok: true, data: await getStats(from, to) };
+  } catch (e) {
+    return fail(e);
+  }
+}

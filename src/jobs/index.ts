@@ -2,9 +2,10 @@ import type postgres from "postgres";
 import { createHypertide, type Hypertide, type SmartleadCredentials } from "../integrations/hypertide";
 import { createPorkbun, type Porkbun } from "../integrations/porkbun";
 import { createSmartlead, type Smartlead } from "../integrations/smartlead";
-import { syncPorkbunDomains, syncPorkbunNameservers } from "./porkbun-sync";
+import { syncPorkbunDomains } from "./porkbun-sync";
 import { syncHypertideOrders } from "./hypertide-sync";
-import { processNameserverRequests } from "./nameservers";
+import { processInboxChanges, runDuePlans } from "./inbox-settings";
+import { checkNameservers, processNameserverRequests } from "./nameservers";
 import { advanceReplacements, trackHypertideOrders } from "./replacements";
 import { syncAccounts, syncCampaigns, syncClients, syncDomainStats, dayIn } from "./smartlead-sync";
 
@@ -47,6 +48,21 @@ export const JOBS: Job[] = [
     },
   },
   {
+    name: "inbox-settings",
+    label: "Inbox settings and daily plans",
+    everyMinutes: 1,
+    run: needsSmartlead(async ({ sql, smartlead, timezone }) => {
+      const plans = await runDuePlans(sql, timezone);
+      return { ...plans, ...(await processInboxChanges(sql, smartlead)) };
+    }),
+  },
+  {
+    name: "nameserver-check",
+    label: "Nameserver lookups (DNS)",
+    everyMinutes: 30,
+    run: ({ sql, porkbun }) => checkNameservers(sql, porkbun),
+  },
+  {
     name: "nameserver-requests",
     label: "Nameserver changes",
     everyMinutes: 1,
@@ -78,12 +94,6 @@ export const JOBS: Job[] = [
     label: "Porkbun domains",
     everyMinutes: 360,
     run: needsPorkbun(({ sql, porkbun }) => syncPorkbunDomains(sql, porkbun)),
-  },
-  {
-    name: "porkbun-nameservers",
-    label: "Porkbun nameservers",
-    everyMinutes: 60,
-    run: needsPorkbun(({ sql, porkbun }) => syncPorkbunNameservers(sql, porkbun)),
   },
   {
     name: "rollup",

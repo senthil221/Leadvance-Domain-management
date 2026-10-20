@@ -183,6 +183,8 @@ export type DomainRow = {
   burnedAt: Date | null;
   costCents: number | null;
   capacity: number;
+  apiAccess: boolean | null;
+  nameserversCheckedAt: Date | null;
 };
 
 export async function listDomains() {
@@ -202,7 +204,7 @@ export async function listDomains() {
         left join domain_daily_stats s on s.domain_id = d.id and s.day = g.day::date
         order by g.day
       ) as spark,
-      d.tags, d.nameservers, d.draining_since, d.burned_at, d.cost_cents,
+      d.tags, d.nameservers, d.draining_since, d.burned_at, d.cost_cents, d.registrar_api_access as api_access, d.nameservers_checked_at,
       ho.status as ht_order_status, ho.payment_status as ht_payment,
       nr.status as ns_request_status, nr.message as ns_request_message, nr.target as ns_request_target,
       rp.new_domain_id as replaced_by_id, rp.name as replaced_by_name, rp.created_at as replaced_at,
@@ -275,7 +277,7 @@ export async function getDomainDetail(id: string): Promise<DomainDetail | null> 
       (select count(*)::int from alerts a where a.domain_id = d.id and a.status = 'open') as open_alerts,
       '{}'::int[] as spark,
       s7.sent as sl7_sent, s7.replies as sl7_replies, s7.bounces as sl7_bounces,
-      d.tags, ho.status as ht_order_status, ho.payment_status as ht_payment,
+      d.tags, d.registrar_api_access as api_access, ho.status as ht_order_status, ho.payment_status as ht_payment,
       nr.status as ns_request_status, nr.message as ns_request_message, nr.target as ns_request_target,
       null as replaced_by_id, null as replaced_by_name, null as replaced_at,
       (select coalesce(sum(i.daily_limit), 0)::int from inboxes i where i.domain_id = d.id and i.status = 'connected') as capacity
@@ -373,7 +375,7 @@ export async function getInventory() {
 }
 
 export type HypertideSummary = {
-  orders: number; paid: number; unpaid: number; inSetup: number; done: number;
+  orders: number; paid: number; unpaid: number; inSetup: number; done: number; waitingNs: number; recovery: number;
   retiredBilled: { id: string; name: string; status: DomainStatus }[];
   sendingWithout: number; lastSync: Date | null; replacedLast28: number;
 };
@@ -384,9 +386,11 @@ export async function getHypertideSummary(): Promise<HypertideSummary> {
   const [[t], retiredBilled, [job]] = await Promise.all([
     sql<Omit<HypertideSummary, "retiredBilled" | "lastSync">[]>`
       select count(*)::int as orders,
-        count(*) filter (where payment_status = 'Paid')::int as paid,
-        count(*) filter (where payment_status is distinct from 'Paid')::int as unpaid,
-        count(*) filter (where payment_status = 'Paid' and status is distinct from 'Done')::int as in_setup,
+        count(*) filter (where payment_status ilike 'paid%')::int as paid,
+        count(*) filter (where payment_status not ilike 'paid%' and payment_status not ilike '%recovery%')::int as unpaid,
+        count(*) filter (where payment_status ilike 'paid%' and status is distinct from 'Done' and status is distinct from 'NPC')::int as in_setup,
+        count(*) filter (where payment_status ilike 'paid%' and status = 'NPC')::int as waiting_ns,
+        count(*) filter (where payment_status ilike '%recovery%')::int as recovery,
         count(*) filter (where status = 'Done')::int as done,
         (select count(*)::int from domains d where d.status in ('active', 'warming')
           and not exists (select 1 from hypertide_orders o where o.domain_id = d.id and o.gone_at is null)) as sending_without,
@@ -394,7 +398,7 @@ export async function getHypertideSummary(): Promise<HypertideSummary> {
       from hypertide_orders where gone_at is null`,
     sql<HypertideSummary["retiredBilled"]>`
       select distinct d.id, d.name, d.status from hypertide_orders o join domains d on d.id = o.domain_id
-      where o.gone_at is null and o.payment_status = 'Paid' and d.status in ('burned', 'resting')
+      where o.gone_at is null and o.payment_status ilike 'paid%' and d.status in ('burned', 'resting')
       order by d.name`,
     sql<{ lastFinishedAt: Date | null }[]>`select last_finished_at from job_state where job = 'hypertide-orders' and last_ok`,
   ]);
@@ -492,6 +496,9 @@ export async function listOpenAlerts() {
 export type InboxListRow = InboxRow & {
   domainId: string; domain: string; domainStatus: DomainStatus; clientName: string | null; clientHue: number | null;
   sent7: number; replies7: number; human7: number; bounces7: number; campaigns: number;
+  smartleadTags: string[]; providerType: string | null; minWaitMins: number | null; dailySent: number | null;
+  warmupMin: number | null; warmupReplyRate: number | null; warmupStatus: string | null;
+  change: { status: string; error: string | null; changes: Record<string, unknown> } | null;
 };
 
 export async function listInboxes() {
@@ -511,55 +518,83 @@ export async function listInboxes() {
       i.warmup_reputation::float8 as warmup_reputation, i.smartlead_account_id, i.last_synced_at,
       d.id as domain_id, d.name as domain, d.status as domain_status, c.name as client_name, c.hue as client_hue,
       coalesce(ev.sent7, 0) as sent7, coalesce(ev.replies7, 0) as replies7, coalesce(ev.human7, 0) as human7,
-      coalesce(ev.bounces7, 0) as bounces7, coalesce(camp.n, 0) as campaigns
+      coalesce(ev.bounces7, 0) as bounces7, coalesce(camp.n, i.campaign_count, 0) as campaigns,
+      i.smartlead_tags, i.provider_type, i.min_wait_mins, i.daily_sent, i.warmup_min, i.warmup_reply_rate, i.warmup_status,
+      ch.change
     from inboxes i join domains d on d.id = i.domain_id left join clients c on c.id = d.client_id
     left join ev on ev.inbox_id = i.id
     left join camp on camp.inbox_id = i.id
+    left join lateral (
+      select jsonb_build_object('status', x.status, 'error', x.error, 'changes', x.changes) as change
+      from inbox_setting_changes x where x.inbox_id = i.id and x.created_at > now() - interval '2 days'
+      order by x.created_at desc limit 1) ch on true
     where i.status <> 'removed'
     order by d.name, i.email`;
+}
+
+export type PlanRow = {
+  id: string; name: string; enabled: boolean; mode: "shuffle" | "random_total";
+  totalMin: number; totalMax: number; inboxMin: number; inboxMax: number;
+  clientId: string | null; clientName: string | null; clientHue: number | null; domainIds: string[];
+  runHour: number; lastRunOn: string | null; lastResult: { asked: number; total: number; inboxes: number; clamped: boolean; min: number; max: number } | null;
+  inboxes: number;
+};
+
+export async function listSendingPlans() {
+  return sql<PlanRow[]>`
+    select p.id, p.name, p.enabled, p.mode, p.total_min, p.total_max, p.inbox_min, p.inbox_max, p.client_id,
+      c.name as client_name, c.hue as client_hue, p.domain_ids, p.run_hour, to_char(p.last_run_on, 'YYYY-MM-DD') as last_run_on, p.last_result,
+      (select count(*)::int from inboxes i join domains d on d.id = i.domain_id
+        where i.status = 'connected' and i.smartlead_account_id is not null
+          and (p.client_id is null or (d.client_id = p.client_id and d.status in ('active', 'warming')))
+          and (cardinality(p.domain_ids) = 0 or d.id = any(p.domain_ids))) as inboxes
+    from sending_plans p left join clients c on c.id = p.client_id
+    order by p.created_at`;
 }
 
 // ---------------------------------------------------------------------------
 // Stats
 // ---------------------------------------------------------------------------
 
-export const STAT_PERIODS = [1, 7, 14, 30] as const;
-export type StatPeriod = (typeof STAT_PERIODS)[number];
-
-export type DomainStatRow = {
+export type StatDomain = {
   id: string; name: string; status: DomainStatus; clientId: string | null; clientName: string | null; clientHue: number | null;
-  tags: string[]; inboxes: number; capacity: number; days: StatPeriod;
-  sent: number; replies: number; human: number; ooo: number; auto: number; negative: number; bounces: number; reputation: number | null;
+  tags: string[]; inboxes: number; capacity: number;
   prevSent: number; prevReplies: number; prevHuman: number; prevBounces: number;
 };
+/** One domain on one day; only days with any activity. */
+export type StatDay = { d: string; day: string; sent: number; replies: number; human: number; ooo: number; negative: number; bounces: number; rep: number | null };
+export type StatsData = { from: string; to: string; today: string; domains: StatDomain[]; days: StatDay[] };
 
-// Every period in one pass: the period itself and the one before it, for
-// domains that are sending or have any numbers in the last 60 days.
-export async function listDomainStats() {
-  return sql<DomainStatRow[]>`
-    select d.id, d.name, d.status, d.client_id, c.name as client_name, c.hue as client_hue, d.tags, p.days,
-      (select count(*)::int from inboxes i where i.domain_id = d.id and i.status = 'connected') as inboxes,
-      (select coalesce(sum(i.daily_limit), 0)::int from inboxes i where i.domain_id = d.id and i.status = 'connected') as capacity,
-      coalesce(sum(s.sent) filter (where s.day > current_date - p.days), 0)::int as sent,
-      coalesce(sum(s.replies) filter (where s.day > current_date - p.days), 0)::int as replies,
-      coalesce(sum(s.human_replies) filter (where s.day > current_date - p.days), 0)::int as human,
-      coalesce(sum(s.ooo) filter (where s.day > current_date - p.days), 0)::int as ooo,
-      coalesce(sum(s.auto_replies) filter (where s.day > current_date - p.days), 0)::int as auto,
-      coalesce(sum(s.negative) filter (where s.day > current_date - p.days), 0)::int as negative,
-      coalesce(sum(s.bounces) filter (where s.day > current_date - p.days), 0)::int as bounces,
-      avg(s.warmup_reputation) filter (where s.day > current_date - p.days)::float8 as reputation,
-      coalesce(sum(s.sent) filter (where s.day <= current_date - p.days), 0)::int as prev_sent,
-      coalesce(sum(s.replies) filter (where s.day <= current_date - p.days), 0)::int as prev_replies,
-      coalesce(sum(s.human_replies) filter (where s.day <= current_date - p.days), 0)::int as prev_human,
-      coalesce(sum(s.bounces) filter (where s.day <= current_date - p.days), 0)::int as prev_bounces
-    from domains d
-    cross join (values (1), (7), (14), (30)) p(days)
-    left join clients c on c.id = d.client_id
-    left join domain_daily_stats s on s.domain_id = d.id and s.day > current_date - 2 * p.days
-    where d.status in ('warming', 'active', 'draining')
-      or exists (select 1 from domain_daily_stats x where x.domain_id = d.id and x.day > current_date - 60)
-    group by d.id, c.id, p.days
-    order by d.name, p.days`;
+/**
+ * Per-domain, per-day numbers for any range (up to 92 days), plus each
+ * domain's totals for the same-length period just before, for the change.
+ */
+export async function getStats(from: string, to: string): Promise<StatsData> {
+  const [[{ today }], domains, days] = await Promise.all([
+    sql<{ today: string }[]>`
+      select to_char((now() at time zone coalesce((select value #>> '{}' from settings where key = 'stats_timezone'), 'UTC'))::date, 'YYYY-MM-DD') as today`,
+    sql<StatDomain[]>`
+      with r as (select ${from}::date as f, ${to}::date as t, (${to}::date - ${from}::date + 1) as len)
+      select d.id, d.name, d.status, d.client_id, c.name as client_name, c.hue as client_hue, d.tags,
+        (select count(*)::int from inboxes i where i.domain_id = d.id and i.status = 'connected') as inboxes,
+        (select coalesce(sum(i.daily_limit), 0)::int from inboxes i where i.domain_id = d.id and i.status = 'connected') as capacity,
+        coalesce(p.sent, 0) as prev_sent, coalesce(p.replies, 0) as prev_replies, coalesce(p.human, 0) as prev_human, coalesce(p.bounces, 0) as prev_bounces
+      from domains d cross join r
+      left join clients c on c.id = d.client_id
+      left join lateral (
+        select sum(s.sent)::int as sent, sum(s.replies)::int as replies, sum(s.human_replies)::int as human, sum(s.bounces)::int as bounces
+        from domain_daily_stats s where s.domain_id = d.id and s.day between r.f - r.len and r.f - 1) p on true
+      where d.status in ('warming', 'active', 'draining')
+        or exists (select 1 from domain_daily_stats x where x.domain_id = d.id and x.day between r.f - r.len and r.t)
+      order by d.name`,
+    sql<StatDay[]>`
+      select s.domain_id as d, to_char(s.day, 'YYYY-MM-DD') as day, s.sent, s.replies, s.human_replies as human, s.ooo, s.negative, s.bounces,
+        s.warmup_reputation::float8 as rep
+      from domain_daily_stats s
+      where s.day between ${from}::date and ${to}::date and (s.sent > 0 or s.replies > 0 or s.bounces > 0)
+      order by s.day`,
+  ]);
+  return { from, to, today, domains, days };
 }
 
 export type ReplyRow = {
