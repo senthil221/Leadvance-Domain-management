@@ -296,6 +296,10 @@ a, button, input, select, textarea, td, tr {
 }
 .page-title { font-size: 14.5px; font-weight: 600; letter-spacing: -0.01em; color: var(--ink); white-space: nowrap; }
 .page-sub { color: var(--faint); font-size: 12.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.section-tabs { display: inline-flex; gap: 2px; padding: 2px; border-radius: 8px; background: var(--surface-3); border: 1px solid var(--line); }
+.section-tabs a { height: 24px; display: inline-flex; align-items: center; padding: 0 10px; border-radius: 6px; color: var(--muted); font-size: 12.5px; white-space: nowrap; }
+.section-tabs a:hover { color: var(--ink); }
+.section-tabs a[aria-current="page"] { background: var(--surface); color: var(--ink); font-weight: 500; box-shadow: 0 1px 2px rgb(0 0 0 / .06), 0 0 0 1px var(--line); }
 .page-actions { margin-left: auto; display: flex; align-items: center; gap: 8px; }
 .page-body { padding: 14px 20px 24px; display: flex; flex-direction: column; gap: 12px; min-width: 0; }
 .page-body > * { min-width: 0; }
@@ -470,6 +474,17 @@ a.stat:hover { background: var(--surface-2); }
 .toolbar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .toolbar .search-input { width: 240px; max-width: 100%; }
 .toolbar .spacer-auto { margin-left: auto; }
+/* Reputation cell: bar, score, low-inbox count, always the same widths. */
+.rep { display: inline-grid; grid-template-columns: 34px 34px; align-items: center; justify-content: end; gap: 8px; font-variant-numeric: tabular-nums; }
+.rep.has-low { grid-template-columns: 34px 34px 22px; }
+.rep-bar { height: 4px; border-radius: 2px; background: var(--surface-3); overflow: hidden; }
+.rep-bar > span { display: block; height: 100%; border-radius: 2px; background: var(--dot); opacity: .85; }
+.rep-val { text-align: right; color: var(--ink-soft); }
+.rep-val.is-warning { color: var(--warning-ink); font-weight: 500; }
+.rep-val.is-danger { color: var(--danger-ink); font-weight: 500; }
+.rep-low { justify-self: start; min-width: 22px; height: 16px; padding: 0 4px; border-radius: 4px; font-size: 11px; line-height: 16px; text-align: center; color: var(--danger-ink); background: var(--danger-soft-2); }
+.rep-low:empty { background: none; }
+
 /* Nameserver cell: host, then a quiet status word. */
 .ns-cell { display: inline-flex; align-items: center; gap: 7px; min-width: 0; }
 .ns-host { color: var(--ink-soft); }
@@ -484,7 +499,8 @@ a.stat:hover { background: var(--surface-2); }
 .table-bar .view-tabs { border-bottom: 0; }
 .table-bar .view-tabs > a, .table-bar .view-tabs > button { height: 30px; border-radius: 6px; border-bottom: 0; margin: 0; padding: 0 9px; }
 .table-bar .view-tabs > .is-on { background: var(--surface); box-shadow: 0 0 0 1px var(--line), 0 1px 2px rgb(0 0 0 / .05); }
-.table-bar .search-input { width: 190px; max-width: 100%; }
+.table-bar .search-input { width: 180px; max-width: 100%; }
+.search-input .input::placeholder { color: var(--faint); opacity: .6; }
 
 .table-wrap { border: 1px solid var(--line); border-radius: 10px; background: var(--surface); overflow: hidden; min-width: 0; }
 .table-scroll { overflow: auto; }

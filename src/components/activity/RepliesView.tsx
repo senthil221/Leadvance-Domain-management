@@ -66,10 +66,6 @@ export function RepliesView({ replies }: { replies: ReplyRow[] }) {
             </button>
           ))}
         </div>
-        <label className="search-input">
-          <Search size={14} strokeWidth={1.5} />
-          <input className="input" value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search replies, leads, domains" aria-label="Search replies" />
-        </label>
         {clients.length ? (
           <select className="select" style={{ width: 150 }} value={client} onChange={(e) => setClient(e.target.value)} aria-label="Filter by client">
             <option value="">All clients</option>
@@ -79,7 +75,12 @@ export function RepliesView({ replies }: { replies: ReplyRow[] }) {
         <select className="select" style={{ width: 140 }} value={sort} onChange={(e) => setSort(e.target.value as keyof typeof SORTS)} aria-label="Sort replies">
           {Object.entries(SORTS).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}
         </select>
-        <span className="view-tabs-summary"><b>{int(shown.length)}</b> replies</span>
+        <span className="text-[12.5px] text-muted"><b className="num text-ink">{int(shown.length)}</b> replies</span>
+        <span className="spacer-auto" />
+        <label className="search-input">
+          <Search size={14} strokeWidth={1.5} />
+          <input className="input" value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search" aria-label="Search replies" />
+        </label>
       </div>
       <div className="card">
         {shown.length === 0 ? (

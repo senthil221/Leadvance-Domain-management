@@ -5,7 +5,7 @@ import Link from "next/link";
 import { Fragment, useMemo, useState } from "react";
 import { ColumnsMenu, useColumns, type ColumnDef } from "@/components/Columns";
 import { SortTh } from "@/components/SortTh";
-import { ClientCell, Empty, Metric, StatusDot } from "@/components/ui";
+import { ClientCell, Empty, Metric, Rep, StatusDot } from "@/components/ui";
 import { InboxSettingsDialog } from "./InboxSettingsDialog";
 import { PlansCard } from "./PlansCard";
 import { ago, int } from "@/lib/format";
@@ -200,10 +200,6 @@ export function InboxesView({ inboxes, clients, plans, smartleadConnected, dryRu
             </button>
           ))}
         </div>
-        <label className="search-input">
-          <Search size={14} strokeWidth={1.5} />
-          <input className="input" value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search domains, inboxes, senders" aria-label="Search inboxes" />
-        </label>
         <select className="select" style={{ width: 160 }} value={clientId} onChange={(e) => setClientId(e.target.value)} aria-label="Filter by client">
           <option value="">All clients</option>
           {clients.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
@@ -213,8 +209,12 @@ export function InboxesView({ inboxes, clients, plans, smartleadConnected, dryRu
           {esps.map((x) => <option key={x} value={x}>{espLabel(x)}</option>)}
         </select>
         <span className="spacer-auto" />
-        <button type="button" className="btn btn-sm" onClick={() => setOpen(allOpen ? new Set() : new Set(groups.map((g) => g.domainId)))}>
-          {allOpen ? <ChevronsDownUp size={14} /> : <ChevronsUpDown size={14} />} {allOpen ? "Collapse" : "Expand"}
+        <label className="search-input">
+          <Search size={14} strokeWidth={1.5} />
+          <input className="input" value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search" aria-label="Search inboxes" />
+        </label>
+        <button type="button" className="btn btn-sm" aria-label={allOpen ? "Collapse all" : "Expand all"} title={allOpen ? "Collapse all" : "Expand all"} onClick={() => setOpen(allOpen ? new Set() : new Set(groups.map((g) => g.domainId)))}>
+          {allOpen ? <ChevronsDownUp size={14} /> : <ChevronsUpDown size={14} />}
         </button>
         <ColumnsMenu cols={cols} />
       </div>
@@ -281,8 +281,7 @@ export function InboxesView({ inboxes, clients, plans, smartleadConnected, dryRu
                       {on("gap") ? <td className="is-num">{g.avgWait != null ? `${Math.round(g.avgWait)}m` : <span className="zero">—</span>}</td> : null}
                       {on("rep") ? (
                         <td className="is-num" title={g.minRep != null ? `Lowest ${g.minRep.toFixed(0)}${g.lowRep ? `, ${g.lowRep} under 90` : ""}` : undefined}>
-                          <Metric value={g.avgRep} warn={95} bad={90} invert digits={1} suffix="" />
-                          {g.lowRep ? <span className="text-danger-ink"> · {g.lowRep} low</span> : null}
+                          <Rep value={g.avgRep} low={g.lowRep} />
                         </td>
                       ) : null}
                       {on("campaigns") ? <td className="is-num">{g.campaigns ? int(g.campaigns) : <span className="zero">0</span>}</td> : null}
@@ -314,7 +313,7 @@ export function InboxesView({ inboxes, clients, plans, smartleadConnected, dryRu
                         {on("capacity") ? <td className="is-num">{i.dailyLimit ? int(i.dailyLimit) : <span className="zero">0</span>}</td> : null}
                         {on("today") ? <td className="is-num">{i.dailySent ? int(i.dailySent) : <span className="zero">0</span>}</td> : null}
                         {on("gap") ? <td className="is-num">{i.minWaitMins != null ? `${i.minWaitMins}m` : <span className="zero">—</span>}</td> : null}
-                        {on("rep") ? <td className="is-num"><Metric value={i.warmupReputation} warn={95} bad={90} invert digits={0} suffix="" /></td> : null}
+                        {on("rep") ? <td className="is-num"><Rep value={i.warmupReputation} low={0} /></td> : null}
                         {on("campaigns") ? <td className="is-num">{i.campaigns ? int(i.campaigns) : <span className="zero">0</span>}</td> : null}
                         {on("sent7") ? <td className="is-num">{i.sent7 ? int(i.sent7) : <span className="zero">0</span>}</td> : null}
                         {on("reply") ? <td className="is-num"><Metric value={rate(i.replies7, i.sent7)} digits={2} /></td> : null}

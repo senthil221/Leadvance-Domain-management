@@ -16,7 +16,7 @@ export const metadata: Metadata = { title: "Replacements" };
 export default function ReplacementsPage() {
   return (
     <>
-      <PageHead title="Replacements" sub="Every swap: which domain replaced which, when, why and how far setup has got" />
+      <PageHead title="Domains" sub="Every swap: which domain replaced which, when, why and how far setup has got" />
       <div className="page-body">
         <Suspense fallback={<BatchesSkeleton />}>
           <Batches />

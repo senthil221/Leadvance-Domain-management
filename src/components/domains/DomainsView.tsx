@@ -9,7 +9,7 @@ import { toast } from "sonner";
 import { assignClient } from "@/app/actions";
 import { ColumnsMenu, useColumns, type ColumnDef } from "@/components/Columns";
 import { isTyping } from "@/components/shell/AppShell";
-import { ClientCell, Empty, Kbd, Metric, Spark, StatusDot } from "@/components/ui";
+import { ClientCell, Empty, Kbd, Metric, Rep, Spark, StatusDot } from "@/components/ui";
 import { daysSince, int, shortDate } from "@/lib/format";
 import type { ClientRow, DomainRow } from "@/lib/queries";
 import { DOMAIN_STATUSES, type DomainStatus } from "@/lib/status";
@@ -207,11 +207,6 @@ export function DomainsView({ domains, clients }: { domains: DomainRow[]; client
               </button>
             ))}
           </div>
-          <label className="search-input">
-            <Search size={14} strokeWidth={1.5} />
-            <input ref={searchRef} className="input" value={q} onChange={(e) => { setQ(e.target.value); setCursor(-1); }} placeholder="Search domains or clients" aria-label="Search domains" />
-            {!q ? <span className="pointer-events-none absolute right-2"><Kbd>/</Kbd></span> : null}
-          </label>
           <select className="select" style={{ width: 150 }} value={clientId} onChange={(e) => setClientId(e.target.value)} aria-label="Filter by client">
             <option value="">All clients</option>
             {clients.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
@@ -224,6 +219,11 @@ export function DomainsView({ domains, clients }: { domains: DomainRow[]; client
           ) : null}
           {(q || clientId || tag) ? <button type="button" className="btn btn-ghost btn-sm" onClick={() => { setQ(""); setClientId(""); setTag(""); }}>Clear</button> : null}
           <span className="spacer-auto" />
+          <label className="search-input">
+            <Search size={14} strokeWidth={1.5} />
+            <input ref={searchRef} className="input" value={q} onChange={(e) => { setQ(e.target.value); setCursor(-1); }} placeholder="Search" aria-label="Search domains" />
+            {!q ? <span className="pointer-events-none absolute right-2"><Kbd>/</Kbd></span> : null}
+          </label>
           <button type="button" className="btn btn-sm" onClick={exportCsv}><Download size={14} /> Export</button>
           {!storageView ? <ColumnsMenu cols={cols} /> : null}
         </div>
@@ -321,7 +321,7 @@ export function DomainsView({ domains, clients }: { domains: DomainRow[]; client
                           {on("human") ? <td className="is-num"><Metric value={d.sent ? d.humanReplyRate : null} digits={2} /></td> : null}
                           {on("bounces") ? <td className="is-num">{d.bounces ? int(d.bounces) : <span className="zero">0</span>}</td> : null}
                           {on("bounce") ? <td className="is-num"><Metric value={d.sent ? d.bounceRate : null} warn={2} bad={3} /></td> : null}
-                          {on("rep") ? <td className="is-num"><Metric value={d.warmupReputation} warn={95} bad={90} invert digits={0} suffix="" /></td> : null}
+                          {on("rep") ? <td className="is-num"><Rep value={d.warmupReputation} /></td> : null}
                           {on("spark") ? <td><Spark values={d.spark} bad={d.openAlerts > 0} /></td> : null}
                           {on("active") ? <td className="is-num text-muted">{d.activeSince && d.status !== "in_storage" ? `${daysSince(d.activeSince)}d` : <span className="zero">—</span>}</td> : null}
                         </>

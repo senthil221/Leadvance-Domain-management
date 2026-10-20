@@ -8,7 +8,7 @@ import { toast } from "sonner";
 import { loadStats } from "@/app/actions";
 import { ColumnsMenu, useColumns, type ColumnDef } from "@/components/Columns";
 import { SortTh } from "@/components/SortTh";
-import { ClientCell, Empty, Metric, StatusDot } from "@/components/ui";
+import { ClientCell, Empty, Metric, Rep, StatusDot } from "@/components/ui";
 import { int } from "@/lib/format";
 import type { ClientRow, StatDomain, StatsData } from "@/lib/queries";
 import { DOMAIN_STATUSES } from "@/lib/status";
@@ -134,7 +134,7 @@ function Cells({ r, len, on }: { r: Totals; len: number; on: (k: string) => bool
       <td className="is-num"><Metric value={rate(r.bounces, r.sent)} warn={2} bad={3} /><Delta now={rate(r.bounces, r.sent)} before={rate(r.prevBounces, r.prevSent)} points invert /></td>
       ) : null}
       {on("reputation") ? (
-      <td className="is-num">{r.reputation !== undefined ? <Metric value={r.reputation} warn={95} bad={90} invert digits={0} suffix="" /> : null}</td>
+      <td className="is-num">{r.reputation !== undefined ? <Rep value={r.reputation} /> : null}</td>
       ) : null}
     </>
   );
@@ -272,10 +272,6 @@ export function StatsView({ initial, clients }: { initial: StatsData; clients: C
           </span>
         ) : <span className="text-[12.5px] text-muted">{rangeLabel}</span>}
         {loading ? <Loader size={14} className="animate-spin text-faint" aria-label="Loading" /> : null}
-        <label className="search-input">
-          <Search size={14} strokeWidth={1.5} />
-          <input className="input" value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search domains, clients, tags" aria-label="Search stats" />
-        </label>
         <select className="select" style={{ width: 150 }} value={clientId} onChange={(e) => setClientId(e.target.value)} aria-label="Filter by client">
           <option value="">All clients</option>
           {clients.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
@@ -287,6 +283,10 @@ export function StatsView({ initial, clients }: { initial: StatsData; clients: C
           </>
         ) : null}
         <span className="spacer-auto" />
+        <label className="search-input">
+          <Search size={14} strokeWidth={1.5} />
+          <input className="input" value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search" aria-label="Search stats" />
+        </label>
         <button type="button" className="btn btn-sm" onClick={exportCsv}><Download size={14} /> Export</button>
         {view === "domain" ? <ColumnsMenu cols={cols} /> : null}
       </div>

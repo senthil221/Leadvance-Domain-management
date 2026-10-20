@@ -32,9 +32,8 @@ async function NavWithCounts() {
     <NavLinks
       badges={{
         "/domains": { value: c.byStatus.active ?? 0 },
-        "/replacements": { value: c.runningBatches },
+        "/replacements": { value: c.runningBatches, warning: true },
         "/health": { value: c.openAlerts, warning: true },
-        "/inventory": { value: c.byStatus.in_storage ?? 0 },
       }}
     />
   );

@@ -11,7 +11,7 @@ export const metadata: Metadata = { title: "Stats" };
 export default function StatsPage() {
   return (
     <>
-      <PageHead title="Stats" sub="Sent, replies and bounces per domain or per day, for any date range" />
+      <PageHead title="Performance" sub="Sent, replies and bounces per domain or per day, for any date range" />
       <div className="page-body">
         <Suspense fallback={<TableSkeleton rows={12} />}>
           <StatsData />

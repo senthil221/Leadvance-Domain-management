@@ -5,7 +5,7 @@ import { ArrowLeftRight, ArrowRight, Copy, X } from "lucide-react";
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
 import { loadDomainDetail } from "@/app/actions";
-import { Badge, ClientCell, Dot, Metric, Skeleton, StatusDot } from "@/components/ui";
+import { Badge, ClientCell, Dot, Metric, Rep, Skeleton, StatusDot } from "@/components/ui";
 import { ago, daysSince, int, shortDate } from "@/lib/format";
 import type { DomainDetail } from "@/lib/queries";
 import { REPLACEMENT_REASONS, STATUS_META } from "@/lib/status";
@@ -173,7 +173,7 @@ export function DomainSheet({
                             </td>
                             <td className="is-num">{i.warmupEnabled ? int(i.warmupPerDay) : <span className="zero">off</span>}</td>
                             <td className="is-num">{i.dailyLimit ? int(i.dailyLimit) : <span className="zero">0</span>}</td>
-                            <td className="is-num"><Metric value={i.warmupReputation} warn={95} bad={90} invert digits={0} suffix="" /></td>
+                            <td className="is-num"><Rep value={i.warmupReputation} /></td>
                           </tr>
                         ))}
                       </tbody>

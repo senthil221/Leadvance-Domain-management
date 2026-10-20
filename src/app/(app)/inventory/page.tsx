@@ -16,7 +16,7 @@ export const metadata: Metadata = { title: "Inventory" };
 export default function InventoryPage() {
   return (
     <>
-      <PageHead title="Inventory" sub="Every domain you own: free, setting up, active or replaced, where it's registered and what renews next">
+      <PageHead title="Domains" sub="Every domain you own: free, setting up, active or replaced, where it's registered and what renews next">
         <Suspense fallback={<button type="button" className="btn btn-primary" disabled><Plus size={14} /> Add domains</button>}>
           <AddButton />
         </Suspense>

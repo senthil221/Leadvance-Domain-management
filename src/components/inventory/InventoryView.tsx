@@ -136,10 +136,6 @@ export function InventoryView({ domains, clients }: { domains: DomainRow[]; clie
               </button>
             ))}
           </div>
-          <label className="search-input">
-            <Search size={14} strokeWidth={1.5} />
-            <input className="input" value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search domains, clients, tags" aria-label="Search inventory" />
-          </label>
           <select className="select" style={{ width: 150 }} value={clientId} onChange={(e) => setClientId(e.target.value)} aria-label="Filter by client">
             <option value="">All clients</option>
             {clients.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
@@ -158,6 +154,10 @@ export function InventoryView({ domains, clients }: { domains: DomainRow[]; clie
           ) : null}
           {filtered ? <button type="button" className="btn btn-ghost btn-sm" onClick={() => { setQ(""); setClientId(""); setTag(""); setRegistrar(""); }}>Clear</button> : null}
           <span className="spacer-auto" />
+          <label className="search-input">
+            <Search size={14} strokeWidth={1.5} />
+            <input className="input" value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search" aria-label="Search inventory" />
+          </label>
           <button type="button" className="btn btn-sm" onClick={exportCsv}><Download size={14} /> Export</button>
           <ColumnsMenu cols={cols} />
         </div>

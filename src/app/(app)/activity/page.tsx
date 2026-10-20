@@ -10,7 +10,7 @@ export const metadata: Metadata = { title: "Replies" };
 export default function RepliesPage() {
   return (
     <>
-      <PageHead title="Replies" sub="Every reply from Smartlead, sorted into human, out of office and the rest" />
+      <PageHead title="Performance" sub="Every reply from Smartlead, sorted into human, out of office and the rest" />
       <div className="page-body">
         <Suspense fallback={<TableSkeleton rows={10} />}>
           <RepliesData />

@@ -1,14 +1,16 @@
 import type { CSSProperties, ReactNode } from "react";
 import type { LucideIcon } from "lucide-react";
+import { SectionTabs } from "@/components/shell/SectionTabs";
 import { initials } from "@/lib/format";
 import { STATUS_META, type DomainStatus, type Tone } from "@/lib/status";
 
 export function PageHead({ title, sub, children }: { title: string; sub?: ReactNode; children?: ReactNode }) {
   return (
     <header className="page-head">
-      <div className="flex min-w-0 items-baseline gap-3">
+      <div className="flex min-w-0 items-center gap-4">
         <h1 className="page-title">{title}</h1>
-        {sub ? <p className="page-sub hidden md:block">{sub}</p> : null}
+        <SectionTabs />
+        {sub ? <p className="page-sub hidden 2xl:block">{sub}</p> : null}
       </div>
       {children ? <div className="page-actions">{children}</div> : null}
     </header>
@@ -103,4 +105,23 @@ export function Metric({ value, warn, bad, invert = false, digits = 1, suffix = 
   const past = (t?: number) => t != null && (invert ? value < t : value > t);
   const cls = past(bad) ? " is-bad" : past(warn) ? " is-warn" : "";
   return <span className={`metric${cls}${value === 0 && !cls ? " zero" : ""}`}>{value.toFixed(digits)}{suffix}</span>;
+}
+
+/**
+ * Warmup reputation, laid out the same in every row: a short bar (80–100),
+ * the score with one decimal, and an optional fixed slot for how many
+ * inboxes are under 90, so columns line up whatever the values.
+ */
+export function Rep({ value, low }: { value: number | null; low?: number }) {
+  const slot = low !== undefined;
+  if (value == null) return <span className={`rep${slot ? " has-low" : ""}`}><span /><span className="rep-val zero">—</span>{slot ? <span /> : null}</span>;
+  const tone = value < 90 ? "danger" : value < 95 ? "warning" : "success";
+  const fill = Math.max(0.04, Math.min(1, (value - 80) / 20));
+  return (
+    <span className={`rep${slot ? " has-low" : ""}`} title={`Warmup reputation ${value.toFixed(1)}${low ? ` · ${low} inbox${low === 1 ? "" : "es"} under 90` : ""}`}>
+      <span className={`rep-bar tone-${tone}`}><span style={{ width: `${fill * 100}%` }} /></span>
+      <span className={`rep-val is-${tone}`}>{value.toFixed(1)}</span>
+      {slot ? <span className="rep-low">{low ? low : ""}</span> : null}
+    </span>
+  );
 }
