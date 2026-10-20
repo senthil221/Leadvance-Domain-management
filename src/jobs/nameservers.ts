@@ -93,35 +93,45 @@ export async function processNameserverRequests(sql: Sql, ctx: NsContext, limit 
 }
 
 /**
- * Current nameservers from public DNS, for every domain still in use, oldest
- * check first. Works at any registrar and needs no API access. Porkbun's API
- * is only asked when DNS can't answer and the domain allows it.
+ * Current nameservers for every domain still in use, oldest check first.
+ * Public DNS answers for healthy domains at any registrar. When it can't
+ * (SERVFAIL: the registry points at nameservers that don't serve the zone),
+ * the registry's own record (RDAP) says where the domain points, and the
+ * domain is flagged as not answering. Porkbun's API is the last resort.
  */
-export async function checkNameservers(sql: Sql, porkbun: Porkbun | null, batch = 150, lookup = dnsLookup) {
+export async function checkNameservers(sql: Sql, porkbun: Porkbun | null, batch = 150, lookup = dnsLookup, registry = rdapLookup) {
   const due = await sql`
     select d.id, d.name, v.name as registrar, d.registrar_api_access as apiaccess
     from domains d left join vendors v on v.id = d.registrar_id
     where d.status not in ('burned', 'resting')
     order by d.nameservers_checked_at nulls first, d.name
     limit ${batch}`;
-  let checked = 0, empty = 0, failed = 0;
+  let checked = 0, empty = 0, notAnswering = 0, failed = 0;
   const queue = [...due];
   const worker = async () => {
     for (let d = queue.shift(); d; d = queue.shift()) {
+      const name = d.name as string;
       let ns: string[] | null = null;
+      let answering: boolean | null = null;
       try {
-        ns = await lookup(d.name as string);
+        ns = await lookup(name);
+        answering = ns.length > 0;
       } catch {
-        if (porkbun && d.registrar === "Porkbun" && d.apiaccess !== false) ns = await porkbun.getNs(d.name as string).catch(() => null);
+        ns = await registry(name).catch(() => null);
+        if (ns?.length) answering = false;
+        else if (porkbun && d.registrar === "Porkbun" && d.apiaccess !== false) ns = await porkbun.getNs(name).catch(() => null);
       }
       if (ns === null) failed++;
+      else if (answering === false) notAnswering++;
       else if (!ns.length) empty++;
       else checked++;
-      await sql`update domains set nameservers = coalesce(${ns}::text[], nameservers), nameservers_checked_at = now() where id = ${d.id}`;
+      await sql`update domains set nameservers = coalesce(${ns}::text[], nameservers),
+          nameservers_answering = coalesce(${answering}::boolean, nameservers_answering), nameservers_checked_at = now()
+        where id = ${d.id}`;
     }
   };
   await Promise.all(Array.from({ length: 8 }, worker));
-  return { checked, empty, failed };
+  return { checked, notAnswering, empty, failed };
 }
 
 const resolver = new Resolver({ timeout: 4000, tries: 2 });
@@ -136,4 +146,28 @@ async function dnsLookup(name: string): Promise<string[]> {
     if (code === "ENODATA" || code === "ENOTFOUND") return [];
     throw e;
   }
+}
+
+// IANA's list of RDAP servers per TLD, fetched once per process.
+let rdapServers: Promise<Map<string, string>> | null = null;
+function rdapBase(tld: string) {
+  rdapServers ??= fetch("https://data.iana.org/rdap/dns.json", { signal: AbortSignal.timeout(10_000) })
+    .then((r) => r.json())
+    .then((j: { services: [string[], string[]][] }) => {
+      const m = new Map<string, string>();
+      for (const [tlds, urls] of j.services) for (const t of tlds) m.set(t, urls[0]);
+      return m;
+    })
+    .catch((e) => { rdapServers = null; throw e; });
+  return rdapServers.then((m) => m.get(tld) ?? null);
+}
+
+/** The nameservers the registry delegates to, or [] if its RDAP lists none. */
+async function rdapLookup(name: string): Promise<string[]> {
+  const base = await rdapBase(name.slice(name.lastIndexOf(".") + 1));
+  if (!base) throw new Error("no RDAP server for this TLD");
+  const res = await fetch(`${base.replace(/\/?$/, "/")}domain/${name}`, { headers: { accept: "application/rdap+json" }, signal: AbortSignal.timeout(10_000) });
+  if (!res.ok) throw new Error(`RDAP HTTP ${res.status}`);
+  const j = (await res.json()) as { nameservers?: { ldhName?: string }[] };
+  return (j.nameservers ?? []).map((n) => String(n.ldhName ?? "").toLowerCase().replace(/\.$/, "")).filter(Boolean).sort();
 }

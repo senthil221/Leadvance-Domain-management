@@ -22,7 +22,7 @@ export function lifeOf(d: Pick<DomainRow, "status" | "replacedById">): Life {
 }
 
 type Ns = { label: string; tone: Tone; title?: string; copy?: string[] };
-export function nsOf(d: Pick<DomainRow, "nameservers" | "nsRequestStatus" | "nsRequestMessage" | "nsRequestTarget">): Ns {
+export function nsOf(d: Pick<DomainRow, "nameservers" | "nsRequestStatus" | "nsRequestMessage" | "nsRequestTarget"> & Partial<Pick<DomainRow, "nameserversAnswering">>): Ns {
   const target = d.nsRequestTarget ?? undefined;
   switch (d.nsRequestStatus) {
     case "pending": case "running": return { label: "Updating…", tone: "info" };
@@ -33,6 +33,9 @@ export function nsOf(d: Pick<DomainRow, "nameservers" | "nsRequestStatus" | "nsR
   const ns = d.nameservers ?? [];
   if (!ns.length) return { label: "Not checked", tone: "faint" };
   const title = ns.join(", ");
+  if (d.nameserversAnswering === false) {
+    return { label: "Not answering", tone: "danger", title: `The registry points to ${title}, but those nameservers don't serve this domain (the DNS zone is missing there), so nothing on it resolves.` };
+  }
   if (ns.every((n) => n.endsWith(".ns.cloudflare.com"))) return { label: "Cloudflare", tone: "success", title };
   if (ns.some((n) => n.includes("porkbun"))) return { label: "Porkbun default", tone: "faint", title };
   return { label: "Other", tone: "faint", title };

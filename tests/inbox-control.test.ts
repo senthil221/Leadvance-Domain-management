@@ -148,9 +148,17 @@ describe("nameserver lookups", () => {
       if (name === "broken.com") throw new Error("SERVFAIL");
       return ["ada.ns.cloudflare.com", "bob.ns.cloudflare.com"];
     });
-    const r = await checkNameservers(sql, null, 10, lookup);
-    expect(r).toEqual({ checked: 1, empty: 0, failed: 1 });
+    const r = await checkNameservers(sql, null, 10, lookup, async () => { throw new Error("no RDAP"); });
+    expect(r).toEqual({ checked: 1, notAnswering: 0, empty: 0, failed: 1 });
     expect((await sql`select nameservers from domains where name = 'send.com'`)[0].nameservers).toEqual(["ada.ns.cloudflare.com", "bob.ns.cloudflare.com"]);
     expect((await sql`select nameservers from domains where name = 'broken.com'`)[0].nameservers).toEqual(["old.ns.com"]);
+  });
+
+  it("asks the registry when DNS fails and flags the domain as not answering", async () => {
+    const lookup = vi.fn(async () => { throw Object.assign(new Error("SERVFAIL"), { code: "ESERVFAIL" }); });
+    const r = await checkNameservers(sql, null, 10, lookup, async () => ["ns1.dnsimple.com", "ns2.dnsimple-edge.net"]);
+    expect(r).toMatchObject({ notAnswering: 1 });
+    const [d] = await sql`select nameservers, nameservers_answering from domains where name = 'send.com'`;
+    expect(d).toEqual({ nameservers: ["ns1.dnsimple.com", "ns2.dnsimple-edge.net"], nameservers_answering: false });
   });
 });

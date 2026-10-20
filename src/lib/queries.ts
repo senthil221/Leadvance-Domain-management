@@ -185,6 +185,7 @@ export type DomainRow = {
   capacity: number;
   apiAccess: boolean | null;
   nameserversCheckedAt: Date | null;
+  nameserversAnswering: boolean | null;
 };
 
 export async function listDomains() {
@@ -204,7 +205,7 @@ export async function listDomains() {
         left join domain_daily_stats s on s.domain_id = d.id and s.day = g.day::date
         order by g.day
       ) as spark,
-      d.tags, d.nameservers, d.draining_since, d.burned_at, d.cost_cents, d.registrar_api_access as api_access, d.nameservers_checked_at,
+      d.tags, d.nameservers, d.draining_since, d.burned_at, d.cost_cents, d.registrar_api_access as api_access, d.nameservers_checked_at, d.nameservers_answering,
       ho.status as ht_order_status, ho.payment_status as ht_payment,
       nr.status as ns_request_status, nr.message as ns_request_message, nr.target as ns_request_target,
       rp.new_domain_id as replaced_by_id, rp.name as replaced_by_name, rp.created_at as replaced_at,
@@ -277,7 +278,7 @@ export async function getDomainDetail(id: string): Promise<DomainDetail | null> 
       (select count(*)::int from alerts a where a.domain_id = d.id and a.status = 'open') as open_alerts,
       '{}'::int[] as spark,
       s7.sent as sl7_sent, s7.replies as sl7_replies, s7.bounces as sl7_bounces,
-      d.tags, d.registrar_api_access as api_access, ho.status as ht_order_status, ho.payment_status as ht_payment,
+      d.tags, d.registrar_api_access as api_access, d.nameservers_answering, ho.status as ht_order_status, ho.payment_status as ht_payment,
       nr.status as ns_request_status, nr.message as ns_request_message, nr.target as ns_request_target,
       null as replaced_by_id, null as replaced_by_name, null as replaced_at,
       (select coalesce(sum(i.daily_limit), 0)::int from inboxes i where i.domain_id = d.id and i.status = 'connected') as capacity
