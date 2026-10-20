@@ -100,7 +100,9 @@ docker compose run --rm migrate && docker compose up -d --build web worker
 
 ## Smartlead
 
-1. Put the API key in `/docker/domain-engine/deploy/app/.env` as `SMARTLEAD_API_KEY=...`, then `docker compose up -d web worker`.
+1. Add the API key from your computer (it asks for the key, hidden, and restarts the app and worker):
+   `ssh -t -i ~/.ssh/hostinger_vps root@200.97.170.1 bash /docker/domain-engine/deploy/set-secret.sh SMARTLEAD_API_KEY`
+   The same script sets `PORKBUN_API_KEY`, `PORKBUN_SECRET_KEY`, `UNSTOPPABLE_API_KEY`, `HYPERTIDE_API_KEY` and `INTEGRATIONS_DRY_RUN`.
 2. Settings → Background sync → **Run now** on *Smartlead inboxes*. Domains already sending in Smartlead are added to inventory automatically.
 3. Settings → Smartlead webhook → **Copy URL**, and add it in Smartlead (Settings → Webhooks, user level) for *Email Sent*, *Email Reply* and *Email Bounce*. Keep the n8n webhook running alongside until the numbers match.
 4. Writes to Smartlead (limits, warmup, campaigns) stay off until `INTEGRATIONS_DRY_RUN=false`.
