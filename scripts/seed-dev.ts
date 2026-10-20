@@ -57,6 +57,7 @@ await sql.begin(async (tx) => {
   const vendors = await tx<{ id: string; name: string }[]>`
     insert into vendors (name, kind, api_supported) values
       ('Porkbun', 'registrar', true), ('Unstoppable Domains', 'registrar', true), ('Hypertide', 'inbox_provider', true)
+    on conflict (name) do update set kind = excluded.kind
     returning id, name`;
   const vendor = (name: string) => vendors.find((v) => v.name === name)!.id;
 

@@ -18,6 +18,8 @@ npm run db:dev                  # keep running: Postgres on 127.0.0.1:54322
 npm run db:migrate
 npm run db:seed                 # demo data: 5 clients, ~420 domains, 30 days of stats
 npm run dev                     # http://localhost:3000
+npm run worker                  # optional: background jobs (Smartlead sync, rollups)
+npm run job -- rollup           # or run one job now (no name lists them)
 ```
 
 ```bash
@@ -32,6 +34,9 @@ npm run lint
 |---|---|
 | `supabase/migrations/` | Schema. `transition_domain()` is the only way to change a status; `start_replacement()` pairs domains and records lineage; `evaluate_health_rules()` opens and resolves alerts |
 | `src/lib/queries.ts` | All reads |
+| `src/app/api/webhooks/smartlead/[token]` | Smartlead webhook: parses, classifies and stores sent/reply/bounce events |
+| `src/integrations/` | Smartlead client (rate limits, retries, dry-run writes) and response parsers |
+| `src/jobs/`, `scripts/worker.ts` | Background jobs and the worker that schedules them |
 | `src/app/actions.ts` | All writes (server actions, Zod-validated, audited) |
 | `src/components/` | UI: shell and ⌘K, domains table, replace flow, detail panel |
 | `src/app/globals.css` | Leadvance tokens (light and dark) and component classes |

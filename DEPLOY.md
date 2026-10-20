@@ -7,7 +7,7 @@ Nothing here touches those stacks. HTTPS comes from the existing Traefik
 | Stack | Folder on the VPS | What runs |
 |---|---|---|
 | Supabase (trimmed) | `/docker/domain-engine-db` | db, auth, rest, meta, studio, api-gw. All ports on `127.0.0.1` only |
-| App | `/docker/domain-engine` | `web` (Next.js) |
+| App | `/docker/domain-engine` | `web` (Next.js) and `worker` (background jobs) |
 
 ## 1. Supabase
 
@@ -53,7 +53,7 @@ chmod 600 .env
 ```bash
 cd /docker/domain-engine/deploy/app
 docker compose run --rm migrate
-docker compose up -d --build web
+docker compose up -d --build web worker
 curl -s https://domains.srv1826728.hstgr.cloud/api/health   # {"ok":true}
 ```
 
@@ -95,5 +95,14 @@ The same tunnel lets local development use the real database on port 54322.
 
 ```bash
 cd /docker/domain-engine/deploy/app
-docker compose run --rm migrate && docker compose up -d --build web
+docker compose run --rm migrate && docker compose up -d --build web worker
 ```
+
+## Smartlead
+
+1. Put the API key in `/docker/domain-engine/deploy/app/.env` as `SMARTLEAD_API_KEY=...`, then `docker compose up -d web worker`.
+2. Settings → Background sync → **Run now** on *Smartlead inboxes*. Domains already sending in Smartlead are added to inventory automatically.
+3. Settings → Smartlead webhook → **Copy URL**, and add it in Smartlead (Settings → Webhooks, user level) for *Email Sent*, *Email Reply* and *Email Bounce*. Keep the n8n webhook running alongside until the numbers match.
+4. Writes to Smartlead (limits, warmup, campaigns) stay off until `INTEGRATIONS_DRY_RUN=false`.
+
+Worker logs: `docker compose logs -f worker`.

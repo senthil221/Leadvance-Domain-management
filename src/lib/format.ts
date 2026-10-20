@@ -36,3 +36,13 @@ export function shortDate(d: Date | string | null | undefined) {
   if (!d) return "—";
   return new Date(d).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric", timeZone: "UTC" });
 }
+
+// One line from a job result, e.g. "420 accounts, 3 new domains".
+export function summarize(detail: Record<string, unknown> | null | undefined) {
+  if (!detail) return null;
+  if (typeof detail.skipped === "string") return `skipped: ${detail.skipped}`;
+  const parts = Object.entries(detail)
+    .filter(([, v]) => typeof v === "number")
+    .map(([k, v]) => `${v} ${k.replace(/([A-Z])/g, " $1").toLowerCase()}`);
+  return parts.length ? parts.join(", ") : null;
+}

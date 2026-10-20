@@ -247,3 +247,17 @@ export async function saveSettings(input: z.input<typeof settingsInput>): Promis
     return fail(e);
   }
 }
+
+export async function runJobNow(name: string): Promise<ActionResult<Record<string, unknown>>> {
+  try {
+    await requireActor();
+    const { JOBS, runJob } = await import("@/jobs");
+    const job = JOBS.find((j) => j.name === name);
+    if (!job) return { ok: false, error: "Unknown job" };
+    const r = await runJob(sql, job);
+    refresh();
+    return r.ok ? { ok: true, data: r.detail } : { ok: false, error: r.error };
+  } catch (e) {
+    return fail(e);
+  }
+}

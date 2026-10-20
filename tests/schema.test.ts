@@ -150,6 +150,82 @@ describe("evaluate_health_rules", () => {
   });
 });
 
+describe("rollup_daily_stats", () => {
+  async function event(domainName: string, kind: string, cls: string | null, at = "now()") {
+    await db.query(
+      `insert into email_events (dedupe_key, kind, occurred_at, domain_name, reply_class)
+       values (gen_random_uuid()::text, $1::event_kind, ${at}, $2, $3::reply_class)`,
+      [kind, domainName, cls],
+    );
+  }
+
+  it("counts events by type and class, and links events that arrived before the domain existed", async () => {
+    await event("late.com", "reply", "human");
+    await event("late.com", "reply", "ooo");
+    await event("late.com", "bounce", null);
+    for (let i = 0; i < 5; i++) await event("late.com", "sent", null);
+    const id = await addDomain("late.com", "active");
+
+    await db.query("select rollup_daily_stats(current_date - 1)");
+    const s = (await db.query<Record<string, number>>("select sent, replies, human_replies, ooo, bounces from domain_daily_stats where domain_id = $1", [id])).rows[0];
+    expect(s).toEqual({ sent: 5, replies: 2, human_replies: 1, ooo: 1, bounces: 1 });
+    const linked = await db.query("select 1 from email_events where domain_id is null");
+    expect(linked.rows).toHaveLength(0);
+  });
+
+  it("takes the larger sent count of webhooks and Smartlead analytics", async () => {
+    const id = await addDomain("both.com", "active");
+    await event("both.com", "sent", null);
+    await db.query("insert into smartlead_domain_daily (domain_name, day, sent) values ('both.com', current_date, 42)");
+    await db.query("select rollup_daily_stats(current_date)");
+    const s = (await db.query<{ sent: number }>("select sent from domain_daily_stats where domain_id = $1", [id])).rows[0];
+    expect(s.sent).toBe(42);
+  });
+
+  it("records today's average warmup reputation and keeps older history untouched", async () => {
+    const id = await addDomain("rep.com", "active");
+    await db.query("insert into inboxes (domain_id, email, status, warmup_reputation) values ($1, 'a@rep.com', 'connected', 96), ($1, 'b@rep.com', 'connected', 100)", [id]);
+    await db.query("insert into domain_daily_stats (domain_id, day, sent) values ($1, current_date - 10, 300)", [id]);
+    await db.query("select rollup_daily_stats(current_date - 2)");
+    const rows = (await db.query<{ day: string; sent: number; warmup_reputation: string | null }>(
+      "select day::text, sent, warmup_reputation::text from domain_daily_stats where domain_id = $1 order by day", [id])).rows;
+    expect(rows).toHaveLength(2);
+    expect(rows[0].sent).toBe(300);
+    expect(Number(rows[1].warmup_reputation)).toBe(98);
+  });
+});
+
+describe("rollup_daily_stats keeps existing numbers", () => {
+  it("does not zero a day's counts when only reputation is new, nor lower imported sent volume", async () => {
+    const id = await addDomain("kept.com", "active");
+    await db.query("insert into domain_daily_stats (domain_id, day, sent, replies, human_replies, bounces) values ($1, current_date, 250, 4, 2, 3)", [id]);
+    await db.query("insert into inboxes (domain_id, email, status, warmup_reputation) values ($1, 'a@kept.com', 'connected', 97)", [id]);
+    await db.query("select rollup_daily_stats(current_date)");
+    let s = (await db.query<Record<string, unknown>>("select sent, replies, human_replies, bounces, warmup_reputation::text as rep from domain_daily_stats where domain_id = $1", [id])).rows[0];
+    expect(s).toEqual({ sent: 250, replies: 4, human_replies: 2, bounces: 3, rep: "97.00" });
+
+    // One webhook reply arrives for the same day: replies are recounted from events, sent stays.
+    await db.query("insert into email_events (dedupe_key, kind, occurred_at, domain_name, reply_class) values ('k1', 'reply', now(), 'kept.com', 'human')");
+    await db.query("select rollup_daily_stats(current_date)");
+    s = (await db.query<Record<string, unknown>>("select sent, replies, human_replies from domain_daily_stats where domain_id = $1", [id])).rows[0];
+    expect(s).toEqual({ sent: 250, replies: 1, human_replies: 1 });
+  });
+});
+
+describe("retire_drained_domains", () => {
+  it("retires domains once the drain period is over, and only those", async () => {
+    const old = await addDomain("old.com", "active");
+    const fresh = await addDomain("fresh.com", "active");
+    await db.query("select transition_domain($1, 'draining')", [old]);
+    await db.query("select transition_domain($1, 'draining')", [fresh]);
+    await db.query("update domains set draining_since = now() - interval '8 days' where id = $1", [old]);
+    const r = await db.query<{ n: number }>("select retire_drained_domains() as n");
+    expect(r.rows[0].n).toBe(1);
+    expect(await status(old)).toBe("burned");
+    expect(await status(fresh)).toBe("draining");
+  });
+});
+
 describe("start_replacement", () => {
   it("pairs domains, moves the new one under the old client and records lineage", async () => {
     const c = (await db.query<{ id: string }>("insert into clients (name) values ('Westshore') returning id")).rows[0].id;

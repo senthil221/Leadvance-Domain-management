@@ -11,7 +11,9 @@
     "test": "vitest run",
     "db:dev": "tsx scripts/dev-db.ts",
     "db:migrate": "tsx --env-file-if-exists=.env.local scripts/migrate.ts",
-    "db:seed": "tsx --env-file-if-exists=.env.local scripts/seed-dev.ts"
+    "db:seed": "tsx --env-file-if-exists=.env.local scripts/seed-dev.ts",
+    "worker": "tsx --env-file-if-exists=.env.local scripts/worker.ts",
+    "job": "tsx --env-file-if-exists=.env.local scripts/run-job.ts"
   },
   "dependencies": {
     "@supabase/ssr": "^0.12.7",

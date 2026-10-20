@@ -26,6 +26,24 @@ services:
       - traefik.http.routers.domainengine.tls.certresolver=mytlschallenge
       - traefik.http.services.domainengine.loadbalancer.server.port=3000
 
+  # Background jobs: Smartlead sync, daily stats, health rules, retiring.
+  worker:
+    build:
+      context: ../..
+      target: builder
+    image: domain-engine-builder:latest
+    restart: unless-stopped
+    mem_limit: 384m
+    env_file: .env
+    environment:
+      NODE_ENV: production
+    command: ["npx", "tsx", "scripts/worker.ts"]
+    stop_grace_period: 15s
+    networks: [supabase]
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "3" }
+
   # One-off: docker compose run --rm migrate
   migrate:
     build:

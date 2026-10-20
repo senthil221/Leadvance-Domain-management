@@ -442,3 +442,9 @@ export async function getSettings() {
   const map = Object.fromEntries(rows.map((r) => [r.key, r.value]));
   return { drainDays: Number(map.drain_days ?? 7), storageLowThreshold: Number(map.storage_low_threshold ?? 20) };
 }
+
+export type JobStateRow = { job: string; lastStartedAt: Date | null; lastFinishedAt: Date | null; lastOk: boolean | null; lastError: string | null; lastDetail: Record<string, unknown> | null };
+
+export async function listJobState() {
+  return sql<JobStateRow[]>`select job, last_started_at, last_finished_at, last_ok, last_error, last_detail from job_state`;
+}
