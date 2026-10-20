@@ -1,4 +1,5 @@
 import type postgres from "postgres";
+import { buildOrderPayload, type Hypertide, type OrderTemplate, type SmartleadCredentials } from "../integrations/hypertide";
 import { sameNameservers, type Porkbun } from "../integrations/porkbun";
 
 // Moves each replacement pair through its steps:
@@ -26,6 +27,8 @@ type Item = {
   completed: Date | null;
   newid: string; newname: string; newstatus: string; registrar: string | null; apiaccess: boolean | null;
   oldid: string; oldname: string; oldstatus: string;
+  client: string | null;
+  htns: string[] | null; htorder: string | null; htstatus: string | null; htpaid: Date | null; htverified: Date | null;
 };
 
 async function loadItem(sql: Sql, id: string): Promise<Item | undefined> {
@@ -33,11 +36,14 @@ async function loadItem(sql: Sql, id: string): Promise<Item | undefined> {
     select ri.id, ri.step_nameservers as nameservers, ri.step_inboxes as inboxes, ri.step_smartlead as smartlead,
       ri.step_campaigns as campaigns, ri.completed_at as completed,
       nd.id as newid, nd.name as newname, nd.status as newstatus, v.name as registrar, nd.registrar_api_access as apiaccess,
-      od.id as oldid, od.name as oldname, od.status as oldstatus
+      od.id as oldid, od.name as oldname, od.status as oldstatus, c.name as client,
+      ri.hypertide_ns as htns, ri.hypertide_order_id as htorder, ri.hypertide_status as htstatus,
+      ri.hypertide_paid_at as htpaid, ri.hypertide_ns_verified_at as htverified
     from replacement_items ri
     join domains nd on nd.id = ri.new_domain_id
     join domains od on od.id = ri.old_domain_id
     left join vendors v on v.id = nd.registrar_id
+    left join clients c on c.id = nd.client_id
     where ri.id = ${id}`;
   return row as Item | undefined;
 }
@@ -76,7 +82,22 @@ async function syncStatuses(sql: Sql, item: Item, actor: string) {
   }
 }
 
-export type StepContext = { porkbun: Porkbun | null };
+export type StepContext = {
+  porkbun: Porkbun | null;
+  hypertide?: Hypertide | null;
+  hypertideCredentials?: Partial<SmartleadCredentials>;
+};
+
+async function orderTemplate(sql: Sql): Promise<OrderTemplate> {
+  const [row] = await sql`select value from settings where key = 'hypertide_order_template'`;
+  const v = (row?.value ?? {}) as Partial<OrderTemplate>;
+  return {
+    plan: v.plan === "google" ? "google" : "entra",
+    inbox_quantity: v.inbox_quantity === 25 ? 25 : 50,
+    forwarding_domain: typeof v.forwarding_domain === "string" ? v.forwarding_domain : "",
+    client_name: typeof v.client_name === "string" ? v.client_name : "",
+  };
+}
 
 /** Runs whatever the pair's current step can do on its own. */
 export async function advanceItem(sql: Sql, ctx: StepContext, id: string, actor = "system") {
@@ -90,9 +111,22 @@ export async function advanceItem(sql: Sql, ctx: StepContext, id: string, actor 
     if (state === "manual" || state === "failed") return; // waiting on a person
 
     if (step === "nameservers") {
-      const ns = await targetNameservers(sql);
+      // Hypertide reserves a pair per domain; ask once and keep it.
+      let ns = item.htns?.length ? item.htns : [];
+      if (!ns.length && ctx.hypertide) {
+        try {
+          ns = (await ctx.hypertide.previewNameservers([item.newname])).get(item.newname) ?? [];
+          if (ns.length) await sql`update replacement_items set hypertide_ns = ${ns} where id = ${id}`;
+        } catch (e) {
+          await setStep(sql, id, step, "failed", null, e instanceof Error ? e.message : String(e));
+          return;
+        }
+      }
+      if (!ns.length) ns = await targetNameservers(sql);
       if (!ns.length) {
-        await setStep(sql, id, step, "manual", "Add the Hypertide nameservers in Settings → Lifecycle and press Retry, or set them by hand and mark this done.");
+        await setStep(sql, id, step, "manual", ctx.hypertide
+          ? "Hypertide returned no nameservers for this domain. Press Retry, or set them by hand and mark this done."
+          : "Connect Hypertide (or add its nameservers in Settings → Lifecycle) and press Retry, or set them by hand and mark this done.");
         return;
       }
       const isPorkbun = item.registrar === "Porkbun";
@@ -121,6 +155,11 @@ export async function advanceItem(sql: Sql, ctx: StepContext, id: string, actor 
         return;
       }
       continue;
+    }
+
+    if (step === "inboxes" && ctx.hypertide) {
+      if (await hypertideInboxStep(sql, ctx.hypertide, ctx.hypertideCredentials ?? {}, item, state)) continue;
+      return;
     }
 
     if (step === "inboxes") {
@@ -193,4 +232,128 @@ export async function actOnStep(sql: Sql, ctx: StepContext, id: string, step: St
   const after = await loadItem(sql, id);
   const s = after ? currentStep(after) : null;
   return { next: s, completed: Boolean(after?.completed) };
+}
+
+// The inbox step through Hypertide. Returns true when the step finished.
+// Order → (a person approves payment) → nameserver verification and setup,
+// followed by the hypertide-orders job → Done.
+async function hypertideInboxStep(sql: Sql, ht: Hypertide, creds: Partial<SmartleadCredentials>, item: Item, state: string) {
+  const id = item.id;
+  if (item.htorder) {
+    if (!item.htpaid) {
+      // Waiting for someone to approve payment (restored if a Retry cleared it).
+      if (state !== "manual") {
+        await setStep(sql, id, "inboxes", "manual", `Order placed on Hypertide for ${item.newname}, not paid yet. Approve payment to start setup.`);
+      }
+      return false;
+    }
+    if (item.htstatus === "Done") {
+      await setStep(sql, id, "inboxes", "done", null);
+      return true;
+    }
+    const note = !item.htverified
+      ? `Paid. Waiting for Hypertide to see the new nameservers on ${item.newname} (checked every 5 min).`
+      : `Hypertide is setting up the inboxes (status: ${item.htstatus ?? "In progress"}).`;
+    await setStep(sql, id, "inboxes", "running", note);
+    return false;
+  }
+  if (state !== "pending") return false;
+
+  const [template, senders, [warm]] = await Promise.all([
+    orderTemplate(sql),
+    sql`select distinct sender_name as name from inboxes
+      where domain_id = ${item.oldid} and status <> 'removed' and sender_name is not null order by 1`,
+    sql`select round(avg(warmup_per_day))::int as perday, round(avg(warmup_rampup))::int as rampup,
+        round(avg(nullif(daily_limit, 0)))::int as daily
+      from inboxes where domain_id = ${item.oldid} and status <> 'removed'`,
+  ]);
+  const built = buildOrderPayload({
+    template,
+    domain: item.newname,
+    clientName: item.client,
+    senders: senders.map((r) => r.name as string),
+    warmup: { perDay: warm?.perday ?? null, rampup: warm?.rampup ?? null, dailyLimit: warm?.daily ?? null },
+    credentials: creds,
+  });
+  if (!built.ok) {
+    await setStep(sql, id, "inboxes", "manual",
+      `Can't order on Hypertide yet: ${built.problems.join("; ")}. Fix this and press Retry, or order by hand and mark this done.`);
+    return false;
+  }
+  const what = `${template.plan === "entra" ? `${template.inbox_quantity} Microsoft inboxes` : "3 Google inboxes"} for ${item.newname}`;
+  try {
+    const order = await ht.createOrder(built.payload);
+    if (order.dryRun || !order.recordId) {
+      await setStep(sql, id, "inboxes", "manual",
+        `Dry run: Hypertide checked the order (${what}) and accepted it. Turn dry run off and press Retry to place it, or order by hand and mark this done.`);
+      return false;
+    }
+    await sql`update replacement_items set hypertide_order_id = ${order.recordId}, hypertide_status = 'Unpaid' where id = ${id}`;
+    await setStep(sql, id, "inboxes", "manual", `Order placed on Hypertide (${what}), not paid yet. Approve payment to start setup.`);
+  } catch (e) {
+    await setStep(sql, id, "inboxes", "failed", null, e instanceof Error ? e.message : String(e));
+  }
+  return false;
+}
+
+/**
+ * Worker job: for paid orders, ask Hypertide to verify the nameservers once
+ * ours are set, then follow each order's status until it is Done.
+ */
+export async function trackHypertideOrders(sql: postgres.Sql, ctx: StepContext & { hypertide: Hypertide }) {
+  const open = await sql`
+    select ri.id, ri.hypertide_order_id as order, ri.hypertide_ns_verified_at as verified,
+      ri.step_nameservers as ns, nd.name as domain
+    from replacement_items ri
+    join replacement_batches rb on rb.id = ri.batch_id
+    join domains nd on nd.id = ri.new_domain_id
+    where rb.status = 'running' and ri.completed_at is null and ri.hypertide_order_id is not null
+      and ri.hypertide_paid_at is not null and ri.step_inboxes not in ('done', 'skipped')`;
+  if (!open.length) return { open: 0 };
+
+  let verified = 0;
+  const toVerify = open.filter((o) => !o.verified && (o.ns === "done" || o.ns === "skipped"));
+  if (toVerify.length && !ctx.hypertide.dryRun) {
+    const r = await ctx.hypertide.verifyNameservers(toVerify.map((o) => o.order as string));
+    for (const res of r.results) {
+      const match = toVerify.find((o) => o.domain === res.domain);
+      if (!match) continue;
+      if (res.verified) {
+        await sql`update replacement_items set hypertide_ns_verified_at = now() where id = ${match.id}`;
+        verified++;
+      } else if (res.message) {
+        const note = `Waiting for Hypertide to see the new nameservers: ${res.message}`;
+        await sql`update replacement_items set note = ${note} where id = ${match.id}`;
+      }
+    }
+  }
+
+  const statuses = new Map((await ctx.hypertide.activeOrders()).map((o) => [o.id, o.status]));
+  let done = 0;
+  for (const o of open) {
+    const status = statuses.get(o.order as string);
+    if (!status) continue;
+    await sql`update replacement_items set hypertide_status = ${status} where id = ${o.id}`;
+    if (status === "Done") {
+      done++;
+      await advanceItem(sql, ctx, o.id as string);
+    }
+  }
+  return { open: open.length, verified, done };
+}
+
+/** A person approved paying for these orders: charge once, then move on. */
+export async function approveHypertidePayment(sql: Sql, ctx: StepContext & { hypertide: Hypertide }, itemIds: string[], actor: string) {
+  const rows = await sql`
+    select ri.id, ri.hypertide_order_id as order from replacement_items ri
+    join replacement_batches rb on rb.id = ri.batch_id
+    where ri.id = any(${itemIds}::uuid[]) and rb.status = 'running' and ri.completed_at is null
+      and ri.hypertide_order_id is not null and ri.hypertide_paid_at is null`;
+  if (!rows.length) throw new Error("Nothing to pay for: these orders are already paid or not placed yet");
+  const r = await ctx.hypertide.charge(rows.map((x) => x.order as string), `Domain Engine replacement, approved by ${actor}`);
+  if (r.dryRun) return { charged: 0, dryRun: true };
+  const ids = rows.map((x) => x.id as string);
+  await sql`update replacement_items set hypertide_paid_at = now(), hypertide_status = 'Paid', note = null where id = any(${ids}::uuid[])`;
+  for (const x of rows) await advanceItem(sql, ctx, x.id as string, actor);
+  return { charged: rows.length, dryRun: false };
 }

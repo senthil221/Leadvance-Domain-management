@@ -286,11 +286,49 @@ export async function actOnReplacementStep(input: z.input<typeof stepInput>): Pr
     const { jobContext } = await import("@/jobs");
     const { actOnStep } = await import("@/jobs/replacements");
     const ctx = await jobContext(sql);
-    const r = await actOnStep(sql, { porkbun: ctx.porkbun }, itemId, step, action, actor);
+    const r = await actOnStep(sql, { porkbun: ctx.porkbun, hypertide: ctx.hypertide, hypertideCredentials: ctx.hypertideCredentials }, itemId, step, action, actor);
     refresh();
     return { ok: true, data: r };
   } catch (e) {
     if (e instanceof Error && /Finish the earlier|already finished|not found/.test(e.message)) return { ok: false, error: e.message };
+    return fail(e);
+  }
+}
+
+// Charges Hypertide for placed orders. Only ever runs on this explicit click.
+export async function approveHypertidePayment(itemIds: string[]): Promise<ActionResult<{ charged: number; dryRun: boolean }>> {
+  try {
+    const actor = await requireActor();
+    const ids = z.array(z.uuid()).min(1).max(100).parse(itemIds);
+    const { jobContext } = await import("@/jobs");
+    const { approveHypertidePayment: approve } = await import("@/jobs/replacements");
+    const ctx = await jobContext(sql);
+    if (!ctx.hypertide) return { ok: false, error: "Hypertide isn't connected" };
+    const r = await approve(sql, { porkbun: ctx.porkbun, hypertide: ctx.hypertide, hypertideCredentials: ctx.hypertideCredentials }, ids, actor);
+    refresh();
+    return { ok: true, data: r };
+  } catch (e) {
+    if (e instanceof Error && /Nothing to pay for|Hypertide/.test(e.message)) return { ok: false, error: e.message };
+    return fail(e);
+  }
+}
+
+const templateInput = z.object({
+  plan: z.enum(["entra", "google"]),
+  inbox_quantity: z.union([z.literal(25), z.literal(50)]),
+  forwarding_domain: z.string().trim().toLowerCase().max(200),
+  client_name: z.string().trim().max(120),
+});
+
+export async function saveHypertideTemplate(input: z.input<typeof templateInput>): Promise<ActionResult> {
+  try {
+    await requireActor();
+    const t = templateInput.parse(input);
+    await sql`insert into settings (key, value) values ('hypertide_order_template', ${sql.json(t)})
+      on conflict (key) do update set value = excluded.value, updated_at = now()`;
+    refresh();
+    return { ok: true, data: undefined };
+  } catch (e) {
     return fail(e);
   }
 }

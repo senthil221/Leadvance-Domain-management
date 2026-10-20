@@ -1,14 +1,22 @@
 import type postgres from "postgres";
+import { createHypertide, type Hypertide, type SmartleadCredentials } from "../integrations/hypertide";
 import { createPorkbun, type Porkbun } from "../integrations/porkbun";
 import { createSmartlead, type Smartlead } from "../integrations/smartlead";
 import { syncPorkbunDomains, syncPorkbunNameservers } from "./porkbun-sync";
-import { advanceReplacements } from "./replacements";
+import { advanceReplacements, trackHypertideOrders } from "./replacements";
 import { syncAccounts, syncCampaigns, syncClients, syncDomainStats, dayIn } from "./smartlead-sync";
 
 // The worker's jobs and how often each runs. A job that needs an integration
 // whose key is missing reports "skipped" instead of failing.
 
-export type JobContext = { sql: postgres.Sql; smartlead: Smartlead | null; porkbun: Porkbun | null; timezone: string };
+export type JobContext = {
+  sql: postgres.Sql;
+  smartlead: Smartlead | null;
+  porkbun: Porkbun | null;
+  hypertide: Hypertide | null;
+  hypertideCredentials: Partial<SmartleadCredentials>;
+  timezone: string;
+};
 export type Job = { name: string; label: string; everyMinutes: number; run: (ctx: JobContext) => Promise<Record<string, unknown>> };
 
 const needsSmartlead = (fn: (ctx: JobContext & { smartlead: Smartlead }) => Promise<Record<string, unknown>>) =>
@@ -22,7 +30,15 @@ export const JOBS: Job[] = [
     name: "replacement-steps",
     label: "Replacement steps",
     everyMinutes: 1,
-    run: ({ sql, porkbun }) => advanceReplacements(sql, { porkbun }),
+    run: ({ sql, porkbun, hypertide, hypertideCredentials }) => advanceReplacements(sql, { porkbun, hypertide, hypertideCredentials }),
+  },
+  {
+    name: "hypertide-orders",
+    label: "Hypertide orders",
+    everyMinutes: 5,
+    run: async (ctx) => (ctx.hypertide
+      ? trackHypertideOrders(ctx.sql, { porkbun: ctx.porkbun, hypertide: ctx.hypertide, hypertideCredentials: ctx.hypertideCredentials })
+      : { skipped: "HYPERTIDE_API_URL / HYPERTIDE_API_KEY not set" }),
   },
   {
     name: "smartlead-accounts",
@@ -83,8 +99,17 @@ export async function jobContext(sql: postgres.Sql): Promise<JobContext> {
   const apiKey = process.env.SMARTLEAD_API_KEY;
   const dryRun = process.env.INTEGRATIONS_DRY_RUN !== "false";
   const pbKey = process.env.PORKBUN_API_KEY, pbSecret = process.env.PORKBUN_SECRET_KEY;
+  const htUrl = process.env.HYPERTIDE_API_URL, htKey = process.env.HYPERTIDE_API_KEY;
   return {
     sql,
+    hypertide: htUrl && htKey ? createHypertide({ baseUrl: htUrl, apiKey: htKey, sql, dryRun }) : null,
+    // Hypertide needs the Smartlead login to connect new inboxes.
+    hypertideCredentials: {
+      api_key: apiKey,
+      username: process.env.HYPERTIDE_SMARTLEAD_USERNAME,
+      password: process.env.HYPERTIDE_SMARTLEAD_PASSWORD,
+      oauth_link: process.env.HYPERTIDE_SMARTLEAD_OAUTH_LINK,
+    },
     porkbun: pbKey && pbSecret ? createPorkbun({ apiKey: pbKey, secretKey: pbSecret, sql, dryRun }) : null,
     timezone: (tz?.tz as string) || "UTC",
     smartlead: apiKey ? createSmartlead({ apiKey, sql, dryRun }) : null,

@@ -352,6 +352,9 @@ export type BatchItem = {
   lastError: string | null;
   note: string | null;
   completedAt: Date | null;
+  htOrderId: string | null;
+  htStatus: string | null;
+  htPaidAt: Date | null;
 };
 
 export type Batch = {
@@ -373,7 +376,8 @@ export async function listBatches(limit = 50): Promise<Batch[]> {
   const items = await sql<(BatchItem & { batchId: string })[]>`
     select ri.id, ri.batch_id, ri.old_domain_id, od.name as old_domain, ri.new_domain_id, nd.name as new_domain,
       c.name as client_name, c.hue as client_hue,
-      ri.step_nameservers, ri.step_inboxes, ri.step_smartlead, ri.step_campaigns, ri.last_error, ri.note, ri.completed_at
+      ri.step_nameservers, ri.step_inboxes, ri.step_smartlead, ri.step_campaigns, ri.last_error, ri.note, ri.completed_at,
+      ri.hypertide_order_id as ht_order_id, ri.hypertide_status as ht_status, ri.hypertide_paid_at as ht_paid_at
     from replacement_items ri
     join domains od on od.id = ri.old_domain_id
     join domains nd on nd.id = ri.new_domain_id
@@ -455,6 +459,12 @@ export async function getSettings() {
     drainDays: Number(map.drain_days ?? 7),
     storageLowThreshold: Number(map.storage_low_threshold ?? 20),
     hypertideNameservers: Array.isArray(map.hypertide_nameservers) ? (map.hypertide_nameservers as string[]) : [],
+    hypertideTemplate: {
+      plan: (map.hypertide_order_template as { plan?: string })?.plan === "google" ? ("google" as const) : ("entra" as const),
+      inbox_quantity: (map.hypertide_order_template as { inbox_quantity?: number })?.inbox_quantity === 25 ? (25 as const) : (50 as const),
+      forwarding_domain: String((map.hypertide_order_template as { forwarding_domain?: string })?.forwarding_domain ?? ""),
+      client_name: String((map.hypertide_order_template as { client_name?: string })?.client_name ?? ""),
+    },
   };
 }
 
