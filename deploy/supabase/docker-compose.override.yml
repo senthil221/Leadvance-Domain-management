@@ -1,0 +1,51 @@
+# Trims the official self-hosted Supabase stack to what Domain Engine uses:
+# Postgres, Auth, PostgREST, postgres-meta, Studio and the API gateway.
+# Everything else is parked behind the "off" profile, so it never starts.
+# All ports bind to 127.0.0.1 on the VPS: reach them over an SSH tunnel.
+
+services:
+  db:
+    mem_limit: 2g
+    ports:
+      - "127.0.0.1:54322:5432"
+    command:
+      [
+        "postgres",
+        "-c", "config_file=/etc/postgresql/postgresql.conf",
+        "-c", "log_min_messages=fatal",
+        "-c", "shared_buffers=512MB",
+        "-c", "effective_cache_size=1536MB",
+        "-c", "work_mem=16MB",
+        "-c", "maintenance_work_mem=128MB",
+        "-c", "max_connections=100"
+      ]
+
+  auth:
+    mem_limit: 256m
+
+  rest:
+    mem_limit: 256m
+
+  meta:
+    mem_limit: 256m
+
+  studio:
+    mem_limit: 768m
+
+  api-gw:
+    mem_limit: 256m
+
+  realtime:
+    profiles: ["off"]
+
+  storage:
+    profiles: ["off"]
+
+  imgproxy:
+    profiles: ["off"]
+
+  functions:
+    profiles: ["off"]
+
+  supavisor:
+    profiles: ["off"]
