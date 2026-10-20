@@ -38,7 +38,7 @@ export const JOBS: Job[] = [
     everyMinutes: 5,
     run: async (ctx) => (ctx.hypertide
       ? trackHypertideOrders(ctx.sql, { porkbun: ctx.porkbun, hypertide: ctx.hypertide, hypertideCredentials: ctx.hypertideCredentials })
-      : { skipped: "HYPERTIDE_API_URL / HYPERTIDE_API_KEY not set" }),
+      : { skipped: "HYPERTIDE_API_KEY not set" }),
   },
   {
     name: "smartlead-accounts",
@@ -99,10 +99,11 @@ export async function jobContext(sql: postgres.Sql): Promise<JobContext> {
   const apiKey = process.env.SMARTLEAD_API_KEY;
   const dryRun = process.env.INTEGRATIONS_DRY_RUN !== "false";
   const pbKey = process.env.PORKBUN_API_KEY, pbSecret = process.env.PORKBUN_SECRET_KEY;
-  const htUrl = process.env.HYPERTIDE_API_URL, htKey = process.env.HYPERTIDE_API_KEY;
+  const htUrl = process.env.HYPERTIDE_API_URL || "https://backend.hypertide.io/api/v1";
+  const htKey = process.env.HYPERTIDE_API_KEY;
   return {
     sql,
-    hypertide: htUrl && htKey ? createHypertide({ baseUrl: htUrl, apiKey: htKey, sql, dryRun }) : null,
+    hypertide: htKey ? createHypertide({ baseUrl: htUrl, apiKey: htKey, sql, dryRun }) : null,
     // Hypertide needs the Smartlead login to connect new inboxes.
     hypertideCredentials: {
       api_key: apiKey,

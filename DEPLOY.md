@@ -119,3 +119,19 @@ Worker logs: `docker compose logs -f worker`.
 4. Settings → Background sync → **Run now** on *Porkbun domains*. New domains land in storage; ones already sending in Smartlead become active on the next Smartlead sync.
 5. Settings → Lifecycle → **Hypertide nameservers**: the nameservers new domains are pointed at during a replacement.
 6. While `INTEGRATIONS_DRY_RUN=true`, the nameserver step only logs what it would do and asks you to mark it done. Set it to `false` with set-secret.sh to let it change nameservers.
+
+## Hypertide
+
+The API host defaults to `https://backend.hypertide.io/api/v1` (override with `HYPERTIDE_API_URL`).
+
+1. Save the keys and the Smartlead login Hypertide uses to connect new inboxes (run each, paste when asked):
+   `ssh -t -i ~/.ssh/hostinger_vps root@200.97.170.1 bash /docker/domain-engine/deploy/set-secret.sh HYPERTIDE_API_KEY`
+   `… set-secret.sh HYPERTIDE_SMARTLEAD_USERNAME`
+   `… set-secret.sh HYPERTIDE_SMARTLEAD_PASSWORD`
+   `… set-secret.sh HYPERTIDE_SMARTLEAD_OAUTH_LINK` (Microsoft/Entra plan only; from Smartlead's settings)
+2. Settings → **Hypertide orders**: plan, inboxes per domain, forwarding domain, default client name.
+3. In a replacement, the nameserver step uses the pair Hypertide reserves for that domain; the inbox
+   step places the order **unpaid**. Nothing is charged until someone presses **Approve payment** on the
+   Replacements page. The *Hypertide orders* job then verifies nameservers and follows the order to Done.
+4. While `INTEGRATIONS_DRY_RUN=true`, orders and payments are sent with Hypertide's `x-dry-run` header:
+   Hypertide validates them, nothing is created or charged.

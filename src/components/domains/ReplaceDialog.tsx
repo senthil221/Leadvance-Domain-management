@@ -7,14 +7,16 @@ import { useEffect, useMemo, useState, useTransition } from "react";
 import { toast } from "sonner";
 import { loadStorageCandidates, startReplacement } from "@/app/actions";
 import { ClientCell, Skeleton } from "@/components/ui";
+import { hypertideAcceptsDomain } from "@/integrations/hypertide";
 import type { StorageCandidate } from "@/lib/queries";
 import { REPLACEMENT_REASONS, type ReplacementReason } from "@/lib/status";
 
 export type ReplaceTarget = { id: string; name: string; tld: string | null; clientName: string | null; clientHue: number | null };
 
 // One storage domain per old domain: same TLD first, then the oldest purchase.
+// Domains Hypertide refuses (hyphens, over 35 characters) are never auto-picked.
 function autoAssign(targets: ReplaceTarget[], candidates: StorageCandidate[]) {
-  const free = [...candidates];
+  const free = candidates.filter((c) => hypertideAcceptsDomain(c.name));
   const out: Record<string, string> = {};
   for (const t of targets) {
     let i = free.findIndex((c) => c.tld === t.tld);
@@ -158,7 +160,7 @@ export function ReplaceDialog({
                           .filter((c) => c.id === assign[t.id] || !used.has(c.id))
                           .map((c) => (
                             <option key={c.id} value={c.id}>
-                              {c.name}{c.registrar ? ` · ${c.registrar}` : ""}
+                              {c.name}{c.registrar ? ` · ${c.registrar}` : ""}{hypertideAcceptsDomain(c.name) ? "" : " · Hypertide won't accept"}
                             </option>
                           ))}
                       </select>

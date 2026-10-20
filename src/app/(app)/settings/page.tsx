@@ -1,7 +1,7 @@
 import type { Metadata } from "next";
 import { headers } from "next/headers";
 import { Suspense } from "react";
-import { ClientsList, LifecycleForm } from "@/components/settings/SettingsForms";
+import { ClientsList, HypertideOrderForm, LifecycleForm } from "@/components/settings/SettingsForms";
 import { CopyUrl, SyncPanel, type SyncJob } from "@/components/settings/SyncPanel";
 import { Badge, PageHead, Skeleton } from "@/components/ui";
 import { JOBS } from "@/jobs";
@@ -15,7 +15,9 @@ const INTEGRATIONS = [
   { name: "Smartlead", env: ["SMARTLEAD_API_KEY"], use: "Inbox sync, warmup and limits, campaigns" },
   { name: "Porkbun", env: ["PORKBUN_API_KEY", "PORKBUN_SECRET_KEY"], use: "Imports your domains; reads and updates nameservers" },
   { name: "Unstoppable Domains", env: ["UNSTOPPABLE_API_KEY"], use: "Nameserver updates (reseller API)" },
-  { name: "Hypertide", env: ["HYPERTIDE_API_KEY"], use: "Ordering inboxes, nameserver targets" },
+  { name: "Hypertide", env: ["HYPERTIDE_API_KEY"], use: "Nameserver pairs, ordering inboxes, order status" },
+  { name: "Smartlead login for Hypertide", env: ["HYPERTIDE_SMARTLEAD_USERNAME", "HYPERTIDE_SMARTLEAD_PASSWORD"], use: "Hypertide uses it to connect new inboxes to Smartlead" },
+  { name: "Smartlead Microsoft OAuth link", env: ["HYPERTIDE_SMARTLEAD_OAUTH_LINK"], use: "Needed for Microsoft (Entra) orders" },
 ];
 
 export default function SettingsPage() {
@@ -101,6 +103,11 @@ async function SettingsContent() {
       <section className="card" aria-labelledby="life-title">
         <div className="card-head"><h2 id="life-title" className="card-title">Lifecycle</h2></div>
         <LifecycleForm drainDays={settings.drainDays} storageLowThreshold={settings.storageLowThreshold} hypertideNameservers={settings.hypertideNameservers} />
+      </section>
+
+      <section className="card" aria-labelledby="ht-title">
+        <div className="card-head"><h2 id="ht-title" className="card-title">Hypertide orders</h2><span className="card-sub">used when a replacement orders inboxes</span></div>
+        <HypertideOrderForm template={settings.hypertideTemplate} />
       </section>
 
       <section className="card" aria-labelledby="clients-title">

@@ -3,7 +3,8 @@ import { PGLiteSocketServer } from "@electric-sql/pglite-socket";
 import postgres from "postgres";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Porkbun } from "../src/integrations/porkbun";
-import { actOnStep, advanceItem, advanceReplacements } from "../src/jobs/replacements";
+import type { Hypertide } from "../src/integrations/hypertide";
+import { actOnStep, advanceItem, advanceReplacements, approveHypertidePayment, trackHypertideOrders } from "../src/jobs/replacements";
 import { loadMigrations } from "../scripts/migrations";
 
 // The step runner uses the same Postgres client as production, so it runs
@@ -129,5 +130,76 @@ describe("replacement steps", () => {
 
   it("only lets a person act on the current step", async () => {
     await expect(actOnStep(sql, { porkbun: null }, itemId, "campaigns", "done", "me")).rejects.toThrow(/earlier steps/);
+  });
+});
+
+describe("replacement steps through Hypertide", () => {
+  const pair = ["ada.ns.cloudflare.com", "bob.ns.cloudflare.com"];
+  const creds = { api_key: "sl", username: "ops@leadvance.io", password: "pw", oauth_link: "https://login.microsoftonline.com/x" };
+  const fakeHypertide = (over: Partial<Hypertide> = {}) => ({
+    dryRun: false,
+    previewNameservers: vi.fn(async () => new Map([["freshsend.com", pair]])),
+    createOrder: vi.fn(async () => ({ dryRun: false, recordId: "recNEW1", nameservers: new Map(), message: null })),
+    charge: vi.fn(async () => ({ dryRun: false, message: "Payment processed successfully" })),
+    verifyNameservers: vi.fn(async () => ({ dryRun: false, results: [{ domain: "freshsend.com", verified: true, message: null, expected: pair, current: pair }] })),
+    activeOrders: vi.fn(async () => [{ id: "recNEW1", domain: "freshsend.com", status: "Done", paymentStatus: "Paid" }]),
+    ...over,
+  }) as unknown as Hypertide;
+  const setTemplate = (forwarding: string) =>
+    sql`update settings set value = ${sql.json({ plan: "entra", inbox_quantity: 50, forwarding_domain: forwarding, client_name: "" })} where key = 'hypertide_order_template'`;
+
+  it("points the domain at its own Hypertide pair, orders, waits for payment, then follows the order to Done", async () => {
+    await setTemplate("leadvance.io");
+    const ht = fakeHypertide();
+    const pb = fakePorkbun({ getNs: vi.fn(async () => pair) } as Partial<Porkbun>);
+    const ctx = { porkbun: pb, hypertide: ht, hypertideCredentials: creds };
+
+    await advanceItem(sql, ctx, itemId);
+    expect(pb.updateNs).toHaveBeenCalledWith("freshsend.com", pair);
+    expect((await sql`select hypertide_ns from replacement_items where id = ${itemId}`)[0].hypertide_ns).toEqual(pair);
+
+    // The order went out with the old domain's senders and the template.
+    const payload = (ht.createOrder as ReturnType<typeof vi.fn>).mock.calls[0][0];
+    expect(payload).toMatchObject({ plan: "entra", domains: ["freshsend.com"], forwarding_domain: "leadvance.io", client_name: "Qualifi" });
+    expect(payload.users).toEqual([{ first_name: "Amelia", last_name: "Wren" }, { first_name: "Sophia", last_name: "Lark" }]);
+    const inboxes = await step("step_inboxes");
+    expect(inboxes.s).toBe("manual");
+    expect(inboxes.note).toMatch(/not paid yet/);
+    expect(ht.charge).not.toHaveBeenCalled();
+
+    // Nothing is charged until a person approves; then the order is tracked.
+    const paid = await approveHypertidePayment(sql, ctx, [itemId], "me");
+    expect(paid).toEqual({ charged: 1, dryRun: false });
+    expect(ht.charge).toHaveBeenCalledWith(["recNEW1"], expect.stringContaining("approved by me"));
+    expect((await step("step_inboxes")).s).toBe("running");
+
+    const tracked = await trackHypertideOrders(sql, ctx);
+    expect(tracked).toMatchObject({ open: 1, verified: 1, done: 1 });
+    expect((await step("step_inboxes")).s).toBe("done");
+    expect((await step("step_smartlead")).s).toBe("running");
+
+    await expect(approveHypertidePayment(sql, ctx, [itemId], "me")).rejects.toThrow(/Nothing to pay for/);
+  });
+
+  it("in dry-run, has Hypertide check the order without placing it", async () => {
+    await setTemplate("leadvance.io");
+    await sql`update replacement_items set step_nameservers = 'done' where id = ${itemId}`;
+    const ht = fakeHypertide({ dryRun: true, createOrder: vi.fn(async () => ({ dryRun: true, recordId: null, nameservers: new Map(), message: "ok" })) } as Partial<Hypertide>);
+    await advanceItem(sql, { porkbun: null, hypertide: ht, hypertideCredentials: creds }, itemId);
+    const s = await step("step_inboxes");
+    expect(s.s).toBe("manual");
+    expect(s.note).toMatch(/^Dry run: Hypertide checked the order \(50 Microsoft inboxes for freshsend\.com\)/);
+    expect((await sql`select hypertide_order_id from replacement_items where id = ${itemId}`)[0].hypertide_order_id).toBeNull();
+  });
+
+  it("says what's missing instead of sending an incomplete order", async () => {
+    await setTemplate("");
+    await sql`update replacement_items set step_nameservers = 'done' where id = ${itemId}`;
+    const ht = fakeHypertide();
+    await advanceItem(sql, { porkbun: null, hypertide: ht, hypertideCredentials: { api_key: "sl" } }, itemId);
+    const s = await step("step_inboxes");
+    expect(s.s).toBe("manual");
+    expect(s.note).toMatch(/Can't order on Hypertide yet: .*forwarding domain.*Smartlead login.*OAuth/);
+    expect(ht.createOrder).not.toHaveBeenCalled();
   });
 });

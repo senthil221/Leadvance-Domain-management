@@ -353,7 +353,9 @@ export async function approveHypertidePayment(sql: Sql, ctx: StepContext & { hyp
   const r = await ctx.hypertide.charge(rows.map((x) => x.order as string), `Domain Engine replacement, approved by ${actor}`);
   if (r.dryRun) return { charged: 0, dryRun: true };
   const ids = rows.map((x) => x.id as string);
-  await sql`update replacement_items set hypertide_paid_at = now(), hypertide_status = 'Paid', note = null where id = any(${ids}::uuid[])`;
+  // Paid: the step is no longer waiting on a person, so the runner takes over.
+  await sql`update replacement_items set hypertide_paid_at = now(), hypertide_status = 'Paid', note = null,
+      step_inboxes = 'pending' where id = any(${ids}::uuid[])`;
   for (const x of rows) await advanceItem(sql, ctx, x.id as string, actor);
   return { charged: rows.length, dryRun: false };
 }

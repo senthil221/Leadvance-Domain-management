@@ -3,6 +3,7 @@ import Link from "next/link";
 import { Suspense } from "react";
 import { ArrowLeftRight, ArrowRight, Check, CircleAlert, Loader } from "lucide-react";
 import { AutoRefresh } from "@/components/AutoRefresh";
+import { ApprovePayment } from "@/components/replacements/ApprovePayment";
 import { StepActions } from "@/components/replacements/StepActions";
 import { Badge, ClientCell, Empty, PageHead, Skeleton } from "@/components/ui";
 import { getCurrentUser } from "@/lib/auth";
@@ -52,6 +53,7 @@ async function Batches() {
 function BatchCard({ batch: b }: { batch: Batch }) {
   const doneItems = b.items.filter((i) => STEPS.every((s) => isDone(i[s]))).length;
   const failed = b.items.filter((i) => STEPS.some((s) => i[s] === "failed")).length;
+  const unpaid = b.items.filter((i) => i.htOrderId && !i.htPaidAt && !i.completedAt && isDone(i.stepNameservers) && !isDone(i.stepInboxes));
   const pct = b.items.length ? Math.round((100 * b.items.reduce((a, i) => a + STEPS.filter((s) => isDone(i[s])).length, 0)) / (b.items.length * STEPS.length)) : 0;
 
   return (
@@ -66,6 +68,7 @@ function BatchCard({ batch: b }: { batch: Batch }) {
           </span>
         </div>
         <div className="ml-auto flex items-center gap-3">
+          {unpaid.length > 1 ? <ApprovePayment itemIds={unpaid.map((i) => i.id)} domains={unpaid.map((i) => i.newDomain)} /> : null}
           {failed > 0 ? <Badge tone="danger">{failed} need attention</Badge> : null}
           {b.status === "running" ? (
             <span className="flex items-center gap-2 text-muted">
@@ -114,6 +117,7 @@ function ItemRow({ item: i }: { item: BatchItem }) {
           <p className={`min-w-0 flex-1 text-[12.5px] ${i.lastError ? "text-danger-ink" : "text-muted"}`} style={{ minWidth: 240 }}>
             {i.lastError ?? i.note}
           </p>
+          {current === "inboxes" && i.htOrderId && !i.htPaidAt ? <ApprovePayment itemIds={[i.id]} domains={[i.newDomain]} /> : null}
           {current ? <StepActions itemId={i.id} step={current} status={i[STEP_KEY[current]]} /> : null}
         </div>
       ) : null}
