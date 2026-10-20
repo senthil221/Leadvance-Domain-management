@@ -47,6 +47,7 @@ export function ReplaceDialog({
   const [assign, setAssign] = useState<Record<string, string>>({});
   const [reason, setReason] = useState<ReplacementReason>(defaultReason);
   const [note, setNote] = useState("");
+  const [manualInboxes, setManualInboxes] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [pending, startTransition] = useTransition();
 
@@ -89,6 +90,7 @@ export function ReplaceDialog({
         newIds: targets.map((t) => assign[t.id]),
         reason,
         note: note || undefined,
+        manualInboxes,
       });
       if (!res.ok) {
         setError(res.error);
@@ -170,6 +172,14 @@ export function ReplaceDialog({
               </div>
             </div>
 
+            <label className="flex items-start gap-2">
+              <input type="checkbox" className="checkbox mt-0.5" checked={manualInboxes} onChange={(e) => setManualInboxes(e.target.checked)} />
+              <span>
+                I&apos;ll order the inboxes on Hypertide myself
+                <span className="field-hint block">The app still sets the nameservers, and ticks the inbox step off when the Hypertide order shows Done.</span>
+              </span>
+            </label>
+
             {short > 0 ? (
               <div className="callout tone-warning">
                 <TriangleAlert size={15} strokeWidth={1.75} />
@@ -179,8 +189,8 @@ export function ReplaceDialog({
               <div className="callout tone-info">
                 <Info size={15} strokeWidth={1.75} />
                 <span>
-                  Next: nameservers point to Hypertide, inboxes are ordered with the same sender names, connected to Smartlead with the same
-                  settings, then added to the old domain&apos;s campaigns. Old domains drain, then retire automatically.
+                  Next: nameservers point to Hypertide, inboxes are {manualInboxes ? "ordered by you" : "ordered by the app"} with the same sender names,
+                  connected to Smartlead, then added to the old domain&apos;s campaigns. Old domains drain, then retire automatically.
                 </span>
               </div>
             )}

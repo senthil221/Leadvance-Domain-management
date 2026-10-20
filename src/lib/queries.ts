@@ -169,6 +169,20 @@ export type DomainRow = {
   sl7Sent: number | null;
   sl7Replies: number | null;
   sl7Bounces: number | null;
+  tags: string[];
+  nameservers: string[];
+  htOrderStatus: string | null;
+  htPayment: string | null;
+  nsRequestStatus: string | null;
+  nsRequestMessage: string | null;
+  nsRequestTarget: string[] | null;
+  replacedById: string | null;
+  replacedByName: string | null;
+  replacedAt: Date | null;
+  drainingSince: Date | null;
+  burnedAt: Date | null;
+  costCents: number | null;
+  capacity: number;
 };
 
 export async function listDomains() {
@@ -187,12 +201,27 @@ export async function listDomains() {
         from generate_series(current_date - 13, current_date, interval '1 day') g(day)
         left join domain_daily_stats s on s.domain_id = d.id and s.day = g.day::date
         order by g.day
-      ) as spark
+      ) as spark,
+      d.tags, d.nameservers, d.draining_since, d.burned_at, d.cost_cents,
+      ho.status as ht_order_status, ho.payment_status as ht_payment,
+      nr.status as ns_request_status, nr.message as ns_request_message, nr.target as ns_request_target,
+      rp.new_domain_id as replaced_by_id, rp.name as replaced_by_name, rp.created_at as replaced_at,
+      (select coalesce(sum(i.daily_limit), 0)::int from inboxes i where i.domain_id = d.id and i.status = 'connected') as capacity
     from domains d
     left join clients c on c.id = d.client_id
     left join vendors v on v.id = d.registrar_id
     left join domain_health_7d h on h.domain_id = d.id
     left join smartlead_domain_7d s7 on s7.domain_name = d.name
+    left join lateral (
+      select o.status, o.payment_status from hypertide_orders o
+      where o.domain_id = d.id and o.gone_at is null order by o.last_seen_at desc limit 1) ho on true
+    left join lateral (
+      select r.status, r.message, r.target from nameserver_requests r
+      where r.domain_id = d.id and r.created_at > now() - interval '14 days' order by r.created_at desc limit 1) nr on true
+    left join lateral (
+      select ri.new_domain_id, nd.name, ri.created_at from replacement_items ri
+      join replacement_batches rb on rb.id = ri.batch_id join domains nd on nd.id = ri.new_domain_id
+      where ri.old_domain_id = d.id and rb.status <> 'cancelled' order by ri.created_at desc limit 1) rp on true
     order by d.name`;
 }
 
@@ -245,13 +274,23 @@ export async function getDomainDetail(id: string): Promise<DomainDetail | null> 
       d.draining_since, d.burned_at, d.created_at, d.auto_renew, d.registrar_api_access, d.nameservers_checked_at,
       (select count(*)::int from alerts a where a.domain_id = d.id and a.status = 'open') as open_alerts,
       '{}'::int[] as spark,
-      s7.sent as sl7_sent, s7.replies as sl7_replies, s7.bounces as sl7_bounces
+      s7.sent as sl7_sent, s7.replies as sl7_replies, s7.bounces as sl7_bounces,
+      d.tags, ho.status as ht_order_status, ho.payment_status as ht_payment,
+      nr.status as ns_request_status, nr.message as ns_request_message, nr.target as ns_request_target,
+      null as replaced_by_id, null as replaced_by_name, null as replaced_at,
+      (select coalesce(sum(i.daily_limit), 0)::int from inboxes i where i.domain_id = d.id and i.status = 'connected') as capacity
     from domains d
     left join clients c on c.id = d.client_id
     left join vendors v on v.id = d.registrar_id
     left join vendors ip on ip.id = d.inbox_provider_id
     left join domain_health_7d h on h.domain_id = d.id
     left join smartlead_domain_7d s7 on s7.domain_name = d.name
+    left join lateral (
+      select o.status, o.payment_status from hypertide_orders o
+      where o.domain_id = d.id and o.gone_at is null order by o.last_seen_at desc limit 1) ho on true
+    left join lateral (
+      select r.status, r.message, r.target from nameserver_requests r
+      where r.domain_id = d.id order by r.created_at desc limit 1) nr on true
     where d.id = ${id}`;
   if (!domain) return null;
 
@@ -331,6 +370,35 @@ export async function getInventory() {
       from domains`,
   ]);
   return { registrars, renewals, totals };
+}
+
+export type HypertideSummary = {
+  orders: number; paid: number; unpaid: number; inSetup: number; done: number;
+  retiredBilled: { id: string; name: string; status: DomainStatus }[];
+  sendingWithout: number; lastSync: Date | null; replacedLast28: number;
+};
+
+// Hypertide orders next to inventory: what is paid for, what is still being
+// set up, and retired domains whose subscription is still running.
+export async function getHypertideSummary(): Promise<HypertideSummary> {
+  const [[t], retiredBilled, [job]] = await Promise.all([
+    sql<Omit<HypertideSummary, "retiredBilled" | "lastSync">[]>`
+      select count(*)::int as orders,
+        count(*) filter (where payment_status = 'Paid')::int as paid,
+        count(*) filter (where payment_status is distinct from 'Paid')::int as unpaid,
+        count(*) filter (where payment_status = 'Paid' and status is distinct from 'Done')::int as in_setup,
+        count(*) filter (where status = 'Done')::int as done,
+        (select count(*)::int from domains d where d.status in ('active', 'warming')
+          and not exists (select 1 from hypertide_orders o where o.domain_id = d.id and o.gone_at is null)) as sending_without,
+        (select count(*)::int from domain_status_history where to_status = 'draining' and at > now() - interval '28 days') as replaced_last28
+      from hypertide_orders where gone_at is null`,
+    sql<HypertideSummary["retiredBilled"]>`
+      select distinct d.id, d.name, d.status from hypertide_orders o join domains d on d.id = o.domain_id
+      where o.gone_at is null and o.payment_status = 'Paid' and d.status in ('burned', 'resting')
+      order by d.name`,
+    sql<{ lastFinishedAt: Date | null }[]>`select last_finished_at from job_state where job = 'hypertide-orders' and last_ok`,
+  ]);
+  return { ...t, retiredBilled, lastSync: job?.lastFinishedAt ?? null };
 }
 
 // ---------------------------------------------------------------------------
@@ -421,16 +489,77 @@ export async function listOpenAlerts() {
 // Inboxes and replies
 // ---------------------------------------------------------------------------
 
-export type InboxListRow = InboxRow & { domainId: string; domain: string; domainStatus: DomainStatus; clientName: string | null; clientHue: number | null };
+export type InboxListRow = InboxRow & {
+  domainId: string; domain: string; domainStatus: DomainStatus; clientName: string | null; clientHue: number | null;
+  sent7: number; replies7: number; human7: number; bounces7: number; campaigns: number;
+};
 
 export async function listInboxes() {
   return sql<InboxListRow[]>`
+    with ev as (
+      select inbox_id,
+        count(*) filter (where kind = 'sent')::int as sent7,
+        count(*) filter (where kind = 'reply')::int as replies7,
+        count(*) filter (where kind = 'reply' and reply_class = 'human')::int as human7,
+        count(*) filter (where kind = 'bounce')::int as bounces7
+      from email_events where occurred_at > now() - interval '7 days' and inbox_id is not null
+      group by inbox_id
+    ), camp as (
+      select inbox_id, count(*)::int as n from campaign_inboxes group by inbox_id
+    )
     select i.id, i.email, i.sender_name, i.status, i.warmup_enabled, i.warmup_per_day, i.warmup_rampup, i.daily_limit,
       i.warmup_reputation::float8 as warmup_reputation, i.smartlead_account_id, i.last_synced_at,
-      d.id as domain_id, d.name as domain, d.status as domain_status, c.name as client_name, c.hue as client_hue
+      d.id as domain_id, d.name as domain, d.status as domain_status, c.name as client_name, c.hue as client_hue,
+      coalesce(ev.sent7, 0) as sent7, coalesce(ev.replies7, 0) as replies7, coalesce(ev.human7, 0) as human7,
+      coalesce(ev.bounces7, 0) as bounces7, coalesce(camp.n, 0) as campaigns
     from inboxes i join domains d on d.id = i.domain_id left join clients c on c.id = d.client_id
+    left join ev on ev.inbox_id = i.id
+    left join camp on camp.inbox_id = i.id
     where i.status <> 'removed'
     order by d.name, i.email`;
+}
+
+// ---------------------------------------------------------------------------
+// Stats
+// ---------------------------------------------------------------------------
+
+export const STAT_PERIODS = [1, 7, 14, 30] as const;
+export type StatPeriod = (typeof STAT_PERIODS)[number];
+
+export type DomainStatRow = {
+  id: string; name: string; status: DomainStatus; clientId: string | null; clientName: string | null; clientHue: number | null;
+  tags: string[]; inboxes: number; capacity: number; days: StatPeriod;
+  sent: number; replies: number; human: number; ooo: number; auto: number; negative: number; bounces: number; reputation: number | null;
+  prevSent: number; prevReplies: number; prevHuman: number; prevBounces: number;
+};
+
+// Every period in one pass: the period itself and the one before it, for
+// domains that are sending or have any numbers in the last 60 days.
+export async function listDomainStats() {
+  return sql<DomainStatRow[]>`
+    select d.id, d.name, d.status, d.client_id, c.name as client_name, c.hue as client_hue, d.tags, p.days,
+      (select count(*)::int from inboxes i where i.domain_id = d.id and i.status = 'connected') as inboxes,
+      (select coalesce(sum(i.daily_limit), 0)::int from inboxes i where i.domain_id = d.id and i.status = 'connected') as capacity,
+      coalesce(sum(s.sent) filter (where s.day > current_date - p.days), 0)::int as sent,
+      coalesce(sum(s.replies) filter (where s.day > current_date - p.days), 0)::int as replies,
+      coalesce(sum(s.human_replies) filter (where s.day > current_date - p.days), 0)::int as human,
+      coalesce(sum(s.ooo) filter (where s.day > current_date - p.days), 0)::int as ooo,
+      coalesce(sum(s.auto_replies) filter (where s.day > current_date - p.days), 0)::int as auto,
+      coalesce(sum(s.negative) filter (where s.day > current_date - p.days), 0)::int as negative,
+      coalesce(sum(s.bounces) filter (where s.day > current_date - p.days), 0)::int as bounces,
+      avg(s.warmup_reputation) filter (where s.day > current_date - p.days)::float8 as reputation,
+      coalesce(sum(s.sent) filter (where s.day <= current_date - p.days), 0)::int as prev_sent,
+      coalesce(sum(s.replies) filter (where s.day <= current_date - p.days), 0)::int as prev_replies,
+      coalesce(sum(s.human_replies) filter (where s.day <= current_date - p.days), 0)::int as prev_human,
+      coalesce(sum(s.bounces) filter (where s.day <= current_date - p.days), 0)::int as prev_bounces
+    from domains d
+    cross join (values (1), (7), (14), (30)) p(days)
+    left join clients c on c.id = d.client_id
+    left join domain_daily_stats s on s.domain_id = d.id and s.day > current_date - 2 * p.days
+    where d.status in ('warming', 'active', 'draining')
+      or exists (select 1 from domain_daily_stats x where x.domain_id = d.id and x.day > current_date - 60)
+    group by d.id, c.id, p.days
+    order by d.name, p.days`;
 }
 
 export type ReplyRow = {

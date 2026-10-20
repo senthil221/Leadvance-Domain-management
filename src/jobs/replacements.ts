@@ -29,6 +29,7 @@ type Item = {
   oldid: string; oldname: string; oldstatus: string;
   client: string | null;
   htns: string[] | null; htorder: string | null; htstatus: string | null; htpaid: Date | null; htverified: Date | null;
+  manual: boolean;
 };
 
 async function loadItem(sql: Sql, id: string): Promise<Item | undefined> {
@@ -38,8 +39,9 @@ async function loadItem(sql: Sql, id: string): Promise<Item | undefined> {
       nd.id as newid, nd.name as newname, nd.status as newstatus, v.name as registrar, nd.registrar_api_access as apiaccess,
       od.id as oldid, od.name as oldname, od.status as oldstatus, c.name as client,
       ri.hypertide_ns as htns, ri.hypertide_order_id as htorder, ri.hypertide_status as htstatus,
-      ri.hypertide_paid_at as htpaid, ri.hypertide_ns_verified_at as htverified
+      ri.hypertide_paid_at as htpaid, ri.hypertide_ns_verified_at as htverified, rb.manual_inboxes as manual
     from replacement_items ri
+    join replacement_batches rb on rb.id = ri.batch_id
     join domains nd on nd.id = ri.new_domain_id
     join domains od on od.id = ri.old_domain_id
     left join vendors v on v.id = nd.registrar_id
@@ -157,7 +159,7 @@ export async function advanceItem(sql: Sql, ctx: StepContext, id: string, actor 
       continue;
     }
 
-    if (step === "inboxes" && ctx.hypertide) {
+    if (step === "inboxes" && ctx.hypertide && !item.manual) {
       if (await hypertideInboxStep(sql, ctx.hypertide, ctx.hypertideCredentials ?? {}, item, state)) continue;
       return;
     }
@@ -169,9 +171,10 @@ export async function advanceItem(sql: Sql, ctx: StepContext, id: string, actor 
         group by 1 order by 1`;
       const total = senders.reduce((a, s) => a + Number(s.n), 0);
       const who = senders.map((s) => (Number(s.n) > 1 ? `${s.name} ×${s.n}` : s.name)).join(", ");
-      await setStep(sql, id, step, "manual", total
-        ? `Order ${total} inbox${total === 1 ? "" : "es"} on Hypertide for ${item.newname} (${who}) and connect them to Smartlead, then mark this done.`
-        : `Order inboxes on Hypertide for ${item.newname} and connect them to Smartlead, then mark this done.`);
+      const then = ctx.hypertide ? " This step finishes on its own once the Hypertide order shows Done." : " Then mark this done.";
+      await setStep(sql, id, step, "manual", (total
+        ? `Order ${total} inbox${total === 1 ? "" : "es"} on Hypertide for ${item.newname} (${who}) and connect them to Smartlead.`
+        : `Order inboxes on Hypertide for ${item.newname} and connect them to Smartlead.`) + then);
       return;
     }
 

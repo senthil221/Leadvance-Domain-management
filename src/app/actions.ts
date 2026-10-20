@@ -1,6 +1,7 @@
 "use server";
 
 import { refresh } from "next/cache";
+import { after } from "next/server";
 import { z } from "zod";
 import { requireActor } from "@/lib/auth";
 import { sql } from "@/lib/db";
@@ -83,6 +84,7 @@ const replacementInput = z
     newIds: ids,
     reason: z.enum(Object.keys(REPLACEMENT_REASONS) as [keyof typeof REPLACEMENT_REASONS]),
     note: z.string().trim().max(1000).optional(),
+    manualInboxes: z.boolean().optional(),
   })
   .refine((v) => v.oldIds.length === v.newIds.length, "Need one new domain for each old domain")
   .refine((v) => new Set(v.newIds).size === v.newIds.length, "Each new domain can only be used once");
@@ -90,9 +92,13 @@ const replacementInput = z
 export async function startReplacement(input: z.input<typeof replacementInput>): Promise<ActionResult<{ batchId: string }>> {
   try {
     const actor = await requireActor();
-    const { oldIds, newIds, reason, note } = replacementInput.parse(input);
-    const [row] = await sql<{ batchId: string }[]>`
-      select start_replacement(${oldIds}::uuid[], ${newIds}::uuid[], ${reason}::replacement_reason, ${note ?? null}, ${actor}) as batch_id`;
+    const { oldIds, newIds, reason, note, manualInboxes } = replacementInput.parse(input);
+    const row = await sql.begin(async (tx) => {
+      const [r] = await tx<{ batchId: string }[]>`
+        select start_replacement(${oldIds}::uuid[], ${newIds}::uuid[], ${reason}::replacement_reason, ${note ?? null}, ${actor}) as batch_id`;
+      if (manualInboxes) await tx`update replacement_batches set manual_inboxes = true where id = ${r.batchId}`;
+      return r;
+    });
     refresh();
     return { ok: true, data: { batchId: row.batchId } };
   } catch (e) {
@@ -331,4 +337,83 @@ export async function saveHypertideTemplate(input: z.input<typeof templateInput>
   } catch (e) {
     return fail(e);
   }
+}
+
+const nsName = z.string().trim().toLowerCase().regex(/^[a-z0-9-]+(\.[a-z0-9-]+)+$/, "Not a nameserver");
+const setupInput = z.object({
+  ids,
+  // undefined leaves the client as it is; null clears it.
+  clientId: z.uuid().nullable().optional(),
+  addTags: z.array(z.string().trim().min(1).max(40)).max(20).default([]),
+  removeTags: z.array(z.string().trim().min(1).max(40)).max(20).default([]),
+  nameservers: z.discriminatedUnion("mode", [
+    z.object({ mode: z.literal("leave") }),
+    z.object({ mode: z.literal("hypertide") }),
+    z.object({ mode: z.literal("custom"), list: z.array(nsName).min(2, "Give at least two nameservers").max(13) }),
+  ]),
+  startSetup: z.boolean().default(false),
+});
+
+/**
+ * The hand-ordering workflow in one step: client, tags, nameservers (queued,
+ * applied right after this returns and by the worker) and, for domains in
+ * storage, the move to Provisioning.
+ */
+export async function setupDomains(input: z.input<typeof setupInput>): Promise<ActionResult<{ provisioning: number; nameservers: number; updated: number }>> {
+  try {
+    const actor = await requireActor();
+    const v = setupInput.parse(input);
+    const result = await sql.begin(async (tx) => {
+      await tx`select set_config('app.actor', ${actor}, true)`;
+      let provisioning = 0;
+      if (v.startSetup) {
+        const moved = await tx`
+          select transition_domain(id, 'provisioning', 'set up for Hypertide', ${actor}) from domains
+          where id in ${tx(v.ids)} and status = 'in_storage'`;
+        provisioning = moved.length;
+      }
+      if (v.clientId !== undefined) await tx`update domains set client_id = ${v.clientId} where id in ${tx(v.ids)}`;
+      if (v.addTags.length || v.removeTags.length) {
+        await tx`
+          update domains set tags = array(
+            select distinct t from unnest(tags || ${v.addTags}::text[]) t
+            where not (lower(t) = any(${v.removeTags.map((t) => t.toLowerCase())}::text[])) order by t)
+          where id in ${tx(v.ids)}`;
+      }
+      let nameservers = 0;
+      if (v.nameservers.mode !== "leave") {
+        // A newer request replaces any still waiting for the same domain.
+        await tx`delete from nameserver_requests where domain_id in ${tx(v.ids)} and status = 'pending'`;
+        const target = v.nameservers.mode === "custom" ? v.nameservers.list : null;
+        const rows = await tx`
+          insert into nameserver_requests (domain_id, source, target, actor)
+          select id, ${v.nameservers.mode}, ${target}::text[], ${actor} from domains
+          where id in ${tx(v.ids)} and status not in ('burned', 'resting')
+          returning id`;
+        nameservers = rows.length;
+      }
+      return { provisioning, nameservers, updated: v.ids.length };
+    });
+    if (result.nameservers) {
+      after(async () => {
+        const { JOBS, runJob } = await import("@/jobs");
+        const job = JOBS.find((j) => j.name === "nameserver-requests");
+        if (job) await runJob(sql, job);
+      });
+    }
+    refresh();
+    return { ok: true, data: result };
+  } catch (e) {
+    return fail(e);
+  }
+}
+
+export async function loadNameserverStatus(domainIds: string[]) {
+  await requireActor();
+  const list = z.array(z.uuid()).max(2000).parse(domainIds);
+  if (!list.length) return [];
+  return sql<{ domainId: string; status: string; message: string | null; target: string[] | null }[]>`
+    select distinct on (domain_id) domain_id, status, message, target
+    from nameserver_requests where domain_id in ${sql(list)}
+    order by domain_id, created_at desc`;
 }

@@ -1,4 +1,4 @@
-import { Activity, ArrowLeftRight, Boxes, Globe, Inbox, LayoutGrid, MessageSquareText, Settings2, type LucideIcon } from "lucide-react";
+import { Activity, ArrowLeftRight, BarChart3, Boxes, Globe, Inbox, LayoutGrid, MessageSquareText, Settings2, type LucideIcon } from "lucide-react";
 
 export type NavItem = { href: string; label: string; icon: LucideIcon; key: string };
 
@@ -10,6 +10,7 @@ export const NAV: { label: string; items: NavItem[] }[] = [
       { href: "/", label: "Overview", icon: LayoutGrid, key: "o" },
       { href: "/domains", label: "Domains", icon: Globe, key: "d" },
       { href: "/replacements", label: "Replacements", icon: ArrowLeftRight, key: "r" },
+      { href: "/stats", label: "Stats", icon: BarChart3, key: "t" },
       { href: "/health", label: "Health", icon: Activity, key: "h" },
       { href: "/inboxes", label: "Inboxes", icon: Inbox, key: "i" },
       { href: "/activity", label: "Replies", icon: MessageSquareText, key: "a" },

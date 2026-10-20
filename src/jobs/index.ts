@@ -3,6 +3,8 @@ import { createHypertide, type Hypertide, type SmartleadCredentials } from "../i
 import { createPorkbun, type Porkbun } from "../integrations/porkbun";
 import { createSmartlead, type Smartlead } from "../integrations/smartlead";
 import { syncPorkbunDomains, syncPorkbunNameservers } from "./porkbun-sync";
+import { syncHypertideOrders } from "./hypertide-sync";
+import { processNameserverRequests } from "./nameservers";
 import { advanceReplacements, trackHypertideOrders } from "./replacements";
 import { syncAccounts, syncCampaigns, syncClients, syncDomainStats, dayIn } from "./smartlead-sync";
 
@@ -36,9 +38,19 @@ export const JOBS: Job[] = [
     name: "hypertide-orders",
     label: "Hypertide orders",
     everyMinutes: 5,
-    run: async (ctx) => (ctx.hypertide
-      ? trackHypertideOrders(ctx.sql, { porkbun: ctx.porkbun, hypertide: ctx.hypertide, hypertideCredentials: ctx.hypertideCredentials })
-      : { skipped: "HYPERTIDE_API_KEY not set" }),
+    run: async (ctx) => {
+      if (!ctx.hypertide) return { skipped: "HYPERTIDE_API_KEY not set" };
+      const stepCtx = { porkbun: ctx.porkbun, hypertide: ctx.hypertide, hypertideCredentials: ctx.hypertideCredentials };
+      const synced = await syncHypertideOrders(ctx.sql, stepCtx);
+      const tracked = await trackHypertideOrders(ctx.sql, stepCtx);
+      return { ...synced, tracking: tracked.open };
+    },
+  },
+  {
+    name: "nameserver-requests",
+    label: "Nameserver changes",
+    everyMinutes: 1,
+    run: ({ sql, porkbun, hypertide }) => processNameserverRequests(sql, { porkbun, hypertide }),
   },
   {
     name: "smartlead-accounts",

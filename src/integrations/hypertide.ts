@@ -21,7 +21,17 @@ type Options = {
   fetchImpl?: typeof fetch;
 };
 
-export type OrderStatus = { id: string; domain: string; status: string | null; paymentStatus: string | null };
+export type OrderStatus = {
+  id: string;
+  domain: string;
+  status: string | null;
+  paymentStatus: string | null;
+  subscriptionId?: string | null;
+  forwardingDomain?: string | null;
+  sendingTool?: string | null;
+  organizationName?: string | null;
+  createdAt?: string | null;
+};
 export type NsResult = { domain: string; verified: boolean; message: string | null; expected: string[]; current: string[] };
 
 type Json = Record<string, unknown>;
@@ -160,19 +170,35 @@ export function createHypertide({ baseUrl, apiKey, sql, dryRun = true, minSpacin
       return { dryRun: Boolean(r.dryRun), results };
     },
 
-    async activeOrders(): Promise<OrderStatus[]> {
-      const r = await call("GET", "/orders/active");
-      return (Array.isArray(r.orders) ? r.orders : []).map((x) => {
-        const o = obj(x);
-        return {
-          id: String(o.id ?? ""),
-          domain: String(o.domain ?? "").toLowerCase(),
-          status: typeof o.status === "string" ? o.status : null,
-          paymentStatus: typeof o.paymentStatus === "string" ? o.paymentStatus : null,
-        };
-      });
-    },
+    /** Paid orders on the account. */
+    activeOrders: async () => readOrders(await call("GET", "/orders/active")),
+
+    /** Placed but not yet charged. */
+    pendingOrders: async () => readOrders(await call("GET", "/orders/pending")),
   };
+}
+
+const str = (v: unknown) => (typeof v === "string" && v.trim() !== "" ? v.trim() : null);
+
+/** Orders from GET /orders/active or /orders/pending. */
+export function readOrders(json: unknown): OrderStatus[] {
+  const list = obj(json).orders;
+  return (Array.isArray(list) ? list : [])
+    .map((x) => {
+      const o = obj(x);
+      return {
+        id: String(o.id ?? ""),
+        domain: String(o.domain ?? "").trim().toLowerCase(),
+        status: str(o.status),
+        paymentStatus: str(o.paymentStatus),
+        subscriptionId: str(o.subscriptionId),
+        forwardingDomain: str(o.forwardingDomain),
+        sendingTool: str(o.sendingTool),
+        organizationName: str(o.organizationName),
+        createdAt: str(o.createdAt),
+      };
+    })
+    .filter((o) => o.id && o.domain);
 }
 
 export type Hypertide = ReturnType<typeof createHypertide>;

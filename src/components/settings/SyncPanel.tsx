@@ -24,7 +24,7 @@ function JobRow({ job }: { job: SyncJob }) {
       <span className={`dot tone-${tone}`} style={{ marginTop: 6 }} />
       <div className="list-main">
         <span className="list-title">{job.label}</span>
-        <span className="list-meta" style={{ whiteSpace: "normal" }}>
+        <span className="list-meta" style={{ whiteSpace: "normal" }} suppressHydrationWarning>
           {job.lastFinishedAt ? `${ago(job.lastFinishedAt)} · ` : "Not run yet · "}every {job.everyMinutes} min
           {job.lastOk === false && job.lastError ? <span className="text-danger-ink"> · {job.lastError}</span> : job.summary ? ` · ${job.summary}` : null}
         </span>

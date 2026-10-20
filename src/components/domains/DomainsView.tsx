@@ -2,7 +2,7 @@
 
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { DropdownMenu } from "radix-ui";
-import { ArrowDown, ArrowLeftRight, ArrowUp, Building2, ChevronDown, CircleDot, Download, Globe, Search, TriangleAlert, X } from "lucide-react";
+import { ArrowDown, ArrowLeftRight, ArrowUp, Building2, ChevronDown, CircleDot, Download, Globe, Search, Tag, TriangleAlert, X } from "lucide-react";
 import { useSearchParams } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState, useTransition } from "react";
 import { toast } from "sonner";
@@ -15,6 +15,7 @@ import { DOMAIN_STATUSES, type DomainStatus } from "@/lib/status";
 import { ChangeStatusDialog } from "./ChangeStatusDialog";
 import { DomainSheet } from "./DomainSheet";
 import { ReplaceDialog, type ReplaceTarget } from "./ReplaceDialog";
+import { SetupDialog } from "./SetupDialog";
 
 type ViewKey = "all" | "active" | "setup" | "draining" | "storage" | "retired" | "flagged";
 const VIEWS: { key: ViewKey; label: string; match: (d: DomainRow) => boolean }[] = [
@@ -49,6 +50,8 @@ export function DomainsView({ domains, clients }: { domains: DomainRow[]; client
   const [view, setView] = useState<ViewKey>(() => (VIEWS.some((v) => v.key === params.get("view")) ? (params.get("view") as ViewKey) : "active"));
   const [q, setQ] = useState(() => params.get("q") ?? "");
   const [clientId, setClientId] = useState(() => params.get("client") ?? "");
+  const [tag, setTag] = useState(() => params.get("tag") ?? "");
+  const [setupOpen, setSetupOpen] = useState(false);
   const [openId, setOpenId] = useState<string | null>(() => params.get("d"));
   const [sort, setSort] = useState<Sort>({ key: "name", dir: 1 });
   const [selected, setSelected] = useState<Set<string>>(new Set());
@@ -66,12 +69,14 @@ export function DomainsView({ domains, clients }: { domains: DomainRow[]; client
     if (view !== "active") p.set("view", view);
     if (q) p.set("q", q);
     if (clientId) p.set("client", clientId);
+    if (tag) p.set("tag", tag);
     if (openId) p.set("d", openId);
     const s = p.toString();
     window.history.replaceState(null, "", s ? `?${s}` : window.location.pathname);
-  }, [view, q, clientId, openId]);
+  }, [view, q, clientId, tag, openId]);
 
-  const byClient = useMemo(() => (clientId ? domains.filter((d) => d.clientId === clientId) : domains), [domains, clientId]);
+  const allTags = useMemo(() => [...new Set(domains.flatMap((d) => d.tags))].sort((a, b) => a.localeCompare(b)), [domains]);
+  const byClient = useMemo(() => domains.filter((d) => (!clientId || d.clientId === clientId) && (!tag || d.tags.includes(tag))), [domains, clientId, tag]);
   const counts = useMemo(() => Object.fromEntries(VIEWS.map((v) => [v.key, byClient.filter(v.match).length])), [byClient]);
 
   const rows = useMemo(() => {
@@ -202,7 +207,13 @@ export function DomainsView({ domains, clients }: { domains: DomainRow[]; client
             <option value="">All clients</option>
             {clients.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
           </select>
-          {(q || clientId) ? <button type="button" className="btn btn-ghost btn-sm" onClick={() => { setQ(""); setClientId(""); }}>Clear</button> : null}
+          {allTags.length ? (
+            <select className="select" style={{ width: 150 }} value={tag} onChange={(e) => setTag(e.target.value)} aria-label="Filter by tag">
+              <option value="">All tags</option>
+              {allTags.map((t) => <option key={t} value={t}>{t}</option>)}
+            </select>
+          ) : null}
+          {(q || clientId || tag) ? <button type="button" className="btn btn-ghost btn-sm" onClick={() => { setQ(""); setClientId(""); setTag(""); }}>Clear</button> : null}
           <div className="view-tabs-summary">
             <b>{int(rows.length)}</b> domains
             {!storageView ? <> · <b>{int(totals.sent)}</b> sent this week</> : null}
@@ -270,6 +281,8 @@ export function DomainsView({ domains, clients }: { domains: DomainRow[]; client
                       <td className="col-first">
                         <span className="flex items-center gap-2">
                           <span className="strong">{d.name}</span>
+                          {d.tags.slice(0, 2).map((t) => <span key={t} className="badge">{t}</span>)}
+                          {d.tags.length > 2 ? <span className="badge" title={d.tags.join(", ")}>+{d.tags.length - 2}</span> : null}
                           {d.openAlerts > 0 && replaceable(d) ? <TriangleAlert size={13} className="text-warning-ink" aria-label={`${d.openAlerts} open alerts`} /> : null}
                         </span>
                       </td>
@@ -304,8 +317,8 @@ export function DomainsView({ domains, clients }: { domains: DomainRow[]; client
               </tbody>
             </table>
             {rows.length === 0 ? (
-              <Empty icon={Globe} title={q || clientId ? "No domains match" : "Nothing here yet"}>
-                {q || clientId ? "Try a different search or client." : view === "flagged" ? "No sending domain is breaking a health rule." : "Domains in this state will show up here."}
+              <Empty icon={Globe} title={q || clientId || tag ? "No domains match" : "Nothing here yet"}>
+                {q || clientId || tag ? "Try a different search, client or tag." : view === "flagged" ? "No sending domain is breaking a health rule." : "Domains in this state will show up here."}
               </Empty>
             ) : null}
           </div>
@@ -327,8 +340,13 @@ export function DomainsView({ domains, clients }: { domains: DomainRow[]; client
       {selected.size > 0 ? (
         <div className="bulk-bar" role="toolbar" aria-label="Selected domains">
           <span className="bulk-count">{selected.size} selected</span>
-          <button type="button" className="btn btn-primary btn-sm" onClick={() => startReplace(selectedRows)}>
-            <ArrowLeftRight size={14} /> Replace
+          {selectedRows.some(replaceable) ? (
+            <button type="button" className="btn btn-primary btn-sm" onClick={() => startReplace(selectedRows)}>
+              <ArrowLeftRight size={14} /> Replace
+            </button>
+          ) : null}
+          <button type="button" className={`btn btn-sm${selectedRows.some(replaceable) ? "" : " btn-primary"}`} onClick={() => setSetupOpen(true)}>
+            <Tag size={14} /> Set up
           </button>
           <button type="button" className="btn btn-sm" onClick={() => setStatusOpen(true)}>
             <CircleDot size={14} /> Status
@@ -368,6 +386,14 @@ export function DomainsView({ domains, clients }: { domains: DomainRow[]; client
         open={replaceTargets !== null}
         onOpenChange={(o) => !o && setReplaceTargets(null)}
         targets={replaceTargets ?? []}
+        onDone={afterChange}
+      />
+      <SetupDialog
+        open={setupOpen}
+        onOpenChange={setSetupOpen}
+        targets={selectedRows.map((d) => ({ id: d.id, name: d.name, status: d.status, tags: d.tags, registrar: d.registrar }))}
+        clients={clients}
+        allTags={allTags}
         onDone={afterChange}
       />
       <ChangeStatusDialog

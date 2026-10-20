@@ -91,14 +91,19 @@ export async function syncAccounts(sql: Sql, sl: Smartlead) {
       returning id`;
 
     // A domain sitting in storage (say, imported from Porkbun first) that turns
-    // out to be sending in Smartlead is really active or warming.
+    // out to be sending in Smartlead is really active or warming. So is one set
+    // up by hand (provisioning) once its inboxes connect; domains inside a
+    // running replacement are left to the replacement steps.
     const promoted = await tx`
       select transition_domain(d.id,
         (case when max(coalesce(i.daily_limit, 0)) > 0 then 'active' else 'warming' end)::domain_status,
-        'found sending in Smartlead', 'smartlead sync', null, true) as id
+        (case when d.status = 'in_storage' then 'found sending in Smartlead' else 'inboxes connected in Smartlead' end),
+        'smartlead sync', null, true) as id
       from domains d join inboxes i on i.domain_id = d.id and i.status = 'connected'
-      where d.status = 'in_storage'
-      group by d.id`;
+      where (d.status = 'in_storage' or (d.status = 'provisioning' and not exists (
+        select 1 from replacement_items ri join replacement_batches rb on rb.id = ri.batch_id
+        where ri.new_domain_id = d.id and rb.status = 'running' and ri.completed_at is null)))
+      group by d.id, d.status`;
 
     // Domains without a client take the one their Smartlead inboxes belong to.
     await tx`
