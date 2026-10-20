@@ -165,6 +165,8 @@ export async function createClient(name: string): Promise<ActionResult<{ id: str
     const clean = z.string().trim().min(1, "Name the client").max(80).parse(name);
     const [{ n }] = await sql<{ n: number }[]>`select count(*)::int as n from clients`;
     const [row] = await sql<{ id: string }[]>`insert into clients (name, hue) values (${clean}, ${HUES[n % HUES.length]}) returning id`;
+    // Campaigns and domains whose names mention the new client pick it up.
+    await sql`select * from assign_clients_from_campaigns()`;
     refresh();
     return { ok: true, data: { id: row.id } };
   } catch (e) {

@@ -166,6 +166,9 @@ export type DomainRow = {
   expiresAt: Date | null;
   openAlerts: number;
   spark: number[];
+  sl7Sent: number | null;
+  sl7Replies: number | null;
+  sl7Bounces: number | null;
 };
 
 export async function listDomains() {
@@ -178,6 +181,7 @@ export async function listDomains() {
       h.warmup_reputation::float8 as warmup_reputation,
       d.active_since, d.purchased_at, d.expires_at,
       (select count(*)::int from alerts a where a.domain_id = d.id and a.status = 'open') as open_alerts,
+      s7.sent as sl7_sent, s7.replies as sl7_replies, s7.bounces as sl7_bounces,
       array(
         select coalesce(s.sent, 0)
         from generate_series(current_date - 13, current_date, interval '1 day') g(day)
@@ -188,6 +192,7 @@ export async function listDomains() {
     left join clients c on c.id = d.client_id
     left join vendors v on v.id = d.registrar_id
     left join domain_health_7d h on h.domain_id = d.id
+    left join smartlead_domain_7d s7 on s7.domain_name = d.name
     order by d.name`;
 }
 
@@ -239,12 +244,14 @@ export async function getDomainDetail(id: string): Promise<DomainDetail | null> 
       d.active_since, d.purchased_at, d.expires_at, d.nameservers, d.notes, d.cost_cents,
       d.draining_since, d.burned_at, d.created_at, d.auto_renew, d.registrar_api_access, d.nameservers_checked_at,
       (select count(*)::int from alerts a where a.domain_id = d.id and a.status = 'open') as open_alerts,
-      '{}'::int[] as spark
+      '{}'::int[] as spark,
+      s7.sent as sl7_sent, s7.replies as sl7_replies, s7.bounces as sl7_bounces
     from domains d
     left join clients c on c.id = d.client_id
     left join vendors v on v.id = d.registrar_id
     left join vendors ip on ip.id = d.inbox_provider_id
     left join domain_health_7d h on h.domain_id = d.id
+    left join smartlead_domain_7d s7 on s7.domain_name = d.name
     where d.id = ${id}`;
   if (!domain) return null;
 

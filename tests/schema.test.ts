@@ -19,6 +19,9 @@ async function status(id: string) {
 
 beforeEach(async () => {
   db = await PGlite.create();
+  // Production Postgres runs in UTC; match it so "today" is the same day the
+  // rollup (which works in UTC by default) means, whatever the local clock says.
+  await db.exec("set timezone = 'UTC'");
   for (const m of loadMigrations()) await db.exec(m.sql);
 });
 
@@ -209,6 +212,28 @@ describe("rollup_daily_stats keeps existing numbers", () => {
     await db.query("select rollup_daily_stats(current_date)");
     s = (await db.query<Record<string, unknown>>("select sent, replies, human_replies from domain_daily_stats where domain_id = $1", [id])).rows[0];
     expect(s).toEqual({ sent: 250, replies: 1, human_replies: 1 });
+  });
+});
+
+describe("assign_clients_from_campaigns", () => {
+  it("matches clients named in campaign names (longest wins) and passes them to sending domains", async () => {
+    const [kap, lead, leadRec] = (
+      await db.query<{ id: string }>("insert into clients (name) values ('Kapable'), ('Lead'), ('Leadvance') returning id")
+    ).rows.map((r) => r.id);
+    await db.query(`insert into campaigns (id, name) values
+      (1, 'Kapable TM 19-10-26'), (2, 'Leadvance Recruitment 13-10-26'), (3, 'Manufapp Info Request')`);
+    const dom = await addDomain("farnholt.com", "active");
+    const stored = await addDomain("spare.com");
+    const inbox = (await db.query<{ id: string }>("insert into inboxes (domain_id, email) values ($1, 'a@farnholt.com') returning id", [dom])).rows[0].id;
+    await db.query("insert into campaign_inboxes (campaign_id, inbox_id) values (2, $1)", [inbox]);
+
+    const r = (await db.query<{ campaigns: number; domains: number }>("select * from assign_clients_from_campaigns()")).rows[0];
+    expect(r).toEqual({ campaigns: 2, domains: 1 });
+    const camps = (await db.query<{ id: number; client_id: string | null }>("select id, client_id from campaigns order by id")).rows;
+    expect(camps.map((c) => c.client_id)).toEqual([kap, leadRec, null]);
+    expect((await db.query<{ client_id: string }>("select client_id from domains where id = $1", [dom])).rows[0].client_id).toBe(leadRec);
+    expect((await db.query<{ client_id: string | null }>("select client_id from domains where id = $1", [stored])).rows[0].client_id).toBeNull();
+    expect(lead).toBeTruthy();
   });
 });
 

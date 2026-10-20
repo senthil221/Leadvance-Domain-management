@@ -41,7 +41,7 @@ export const JOBS: Job[] = [
   },
   {
     name: "smartlead-domain-stats",
-    label: "Smartlead daily numbers",
+    label: "Smartlead 7-day numbers",
     everyMinutes: 30,
     run: needsSmartlead(({ sql, smartlead, timezone }) => syncDomainStats(sql, smartlead, timezone)),
   },

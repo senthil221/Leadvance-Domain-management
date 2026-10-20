@@ -285,7 +285,11 @@ export function DomainsView({ domains, clients }: { domains: DomainRow[]; client
                           <td><StatusDot status={d.status} /></td>
                           <td><ClientCell name={d.clientName} hue={d.clientHue} /></td>
                           <td className="is-num">{d.inboxCount ? d.inboxCount : <span className="zero">0</span>}</td>
-                          <td className="is-num">{d.sent ? int(d.sent) : <span className="zero">0</span>}</td>
+                          <td className="is-num">
+                            {d.sent ? int(d.sent) : d.sl7Sent ? (
+                              <span className="text-faint" title="From Smartlead's 7-day analytics. The app's own count starts with the Email Sent webhook.">{int(d.sl7Sent)}*</span>
+                            ) : <span className="zero">0</span>}
+                          </td>
                           <td className="is-num"><Metric value={d.sent ? d.humanReplyRate : null} digits={2} /></td>
                           <td className="is-num"><Metric value={d.sent ? d.bounceRate : null} warn={2} bad={3} /></td>
                           <td className="is-num"><Metric value={d.warmupReputation} warn={95} bad={90} invert digits={0} suffix="" /></td>

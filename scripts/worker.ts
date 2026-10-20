@@ -16,12 +16,19 @@ let stopping = false;
 const log = (msg: string, extra?: unknown) =>
   console.log(`${new Date().toISOString()} ${msg}${extra === undefined ? "" : " " + JSON.stringify(extra)}`);
 
+// A job skipped for a missing key is retried every 5 minutes, so adding the
+// key takes effect quickly instead of after the job's full interval.
+const SKIPPED_RETRY_MIN = 5;
+
 async function dueJobs() {
-  const state = await sql<{ job: string; last_started_at: Date | null }[]>`select job, last_started_at from job_state`;
-  const last = new Map(state.map((s) => [s.job, s.last_started_at]));
+  const state = await sql<{ job: string; last_started_at: Date | null; skipped: boolean }[]>`
+    select job, last_started_at, coalesce(last_detail ? 'skipped', false) as skipped from job_state`;
+  const last = new Map(state.map((s) => [s.job, s]));
   return JOBS.filter((j) => {
-    const t = last.get(j.name);
-    return !t || Date.now() - t.getTime() >= j.everyMinutes * 60_000;
+    const s = last.get(j.name);
+    if (!s?.last_started_at) return true;
+    const every = s.skipped ? Math.min(SKIPPED_RETRY_MIN, j.everyMinutes) : j.everyMinutes;
+    return Date.now() - s.last_started_at.getTime() >= every * 60_000;
   });
 }
 

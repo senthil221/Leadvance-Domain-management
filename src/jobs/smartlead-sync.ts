@@ -144,7 +144,8 @@ export async function syncCampaigns(sql: Sql, sl: Smartlead) {
     });
     mapped++;
   }
-  return { campaigns: campaigns.length, mapped };
+  const [assigned] = await sql`select campaigns, domains from assign_clients_from_campaigns()`;
+  return { campaigns: campaigns.length, mapped, campaignClients: Number(assigned.campaigns), domainClients: Number(assigned.domains) };
 }
 
 // YYYY-MM-DD for a date in a timezone.
@@ -153,25 +154,27 @@ export function dayIn(tz: string, offsetDays = 0, now = new Date()) {
   return new Intl.DateTimeFormat("en-CA", { timeZone: tz, year: "numeric", month: "2-digit", day: "2-digit" }).format(d);
 }
 
-/** Smartlead's per-domain numbers for yesterday and today. */
+/**
+ * Smartlead's per-domain totals for the last 7 days. Its domain analytics
+ * return nothing for one- or two-day ranges, so the app's daily numbers come
+ * from the Email Sent webhook and these are kept as a cross-check.
+ */
 export async function syncDomainStats(sql: Sql, sl: Smartlead, tz: string) {
-  let stored = 0;
-  for (const day of [dayIn(tz, -1), dayIn(tz, 0)]) {
-    const raw = await sl.domainHealth(day, day, tz);
-    const { rows, recognised } = parseDomainHealth(raw);
-    if (!recognised) {
-      const sample = JSON.stringify(raw).slice(0, 400);
-      throw new Error(`Unrecognised domain-wise analytics response, sample: ${sample}`);
-    }
-    if (!rows.length) continue;
-    await sql`
-      insert into smartlead_domain_daily (domain_name, day, sent, replies, bounces, synced_at)
-      select r.domain, ${day}::date, r.sent, coalesce(r.replies, 0), coalesce(r.bounces, 0), now()
-      from jsonb_to_recordset(${sql.json(rows.map((r) => ({ domain: r.domain, sent: r.sent, replies: r.replies, bounces: r.bounces })))})
-        as r(domain text, sent int, replies int, bounces int)
-      on conflict (domain_name, day) do update set sent = excluded.sent, replies = excluded.replies,
-        bounces = excluded.bounces, synced_at = now()`;
-    stored += rows.length;
+  const raw = await sl.domainHealth(dayIn(tz, -7), dayIn(tz, 0), tz);
+  const { rows, recognised } = parseDomainHealth(raw);
+  if (!recognised) {
+    throw new Error(`Unrecognised domain-wise analytics response, sample: ${JSON.stringify(raw).slice(0, 400)}`);
   }
-  return { domainDays: stored };
+  await sql.begin(async (tx) => {
+    await tx`delete from smartlead_domain_7d`;
+    if (rows.length) {
+      await tx`
+        insert into smartlead_domain_7d (domain_name, sent, replies, bounces, synced_at)
+        select r.domain, r.sent, coalesce(r.replies, 0), coalesce(r.bounces, 0), now()
+        from jsonb_to_recordset(${tx.json(rows.map((r) => ({ domain: r.domain, sent: r.sent, replies: r.replies, bounces: r.bounces })))})
+          as r(domain text, sent int, replies int, bounces int)
+        on conflict (domain_name) do update set sent = excluded.sent, replies = excluded.replies, bounces = excluded.bounces, synced_at = now()`;
+    }
+  });
+  return { domains7d: rows.length, sent7d: rows.reduce((n, r) => n + r.sent, 0) };
 }
