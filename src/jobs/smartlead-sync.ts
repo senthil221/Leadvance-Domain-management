@@ -90,6 +90,16 @@ export async function syncAccounts(sql: Sql, sl: Smartlead) {
       where smartlead_account_id is not null and status <> 'removed' and not (smartlead_account_id = any(${ids}::bigint[]))
       returning id`;
 
+    // A domain sitting in storage (say, imported from Porkbun first) that turns
+    // out to be sending in Smartlead is really active or warming.
+    const promoted = await tx`
+      select transition_domain(d.id,
+        (case when max(coalesce(i.daily_limit, 0)) > 0 then 'active' else 'warming' end)::domain_status,
+        'found sending in Smartlead', 'smartlead sync', null, true) as id
+      from domains d join inboxes i on i.domain_id = d.id and i.status = 'connected'
+      where d.status = 'in_storage'
+      group by d.id`;
+
     // Domains without a client take the one their Smartlead inboxes belong to.
     await tx`
       update domains d set client_id = c.id
@@ -97,7 +107,7 @@ export async function syncAccounts(sql: Sql, sl: Smartlead) {
       join clients c on c.smartlead_client_id = x.sl_client
       where d.name = x.domain and d.client_id is null and d.status <> 'in_storage'`;
 
-    return { accounts: accounts.length, newDomains: newDomains.length, upserted: upserted.length, removed: removed.length };
+    return { accounts: accounts.length, newDomains: newDomains.length, promoted: promoted.length, upserted: upserted.length, removed: removed.length };
   });
 }
 

@@ -3,6 +3,7 @@ import Link from "next/link";
 import { Suspense } from "react";
 import { ArrowLeftRight, ArrowRight, Check, CircleAlert, Loader } from "lucide-react";
 import { AutoRefresh } from "@/components/AutoRefresh";
+import { StepActions } from "@/components/replacements/StepActions";
 import { Badge, ClientCell, Empty, PageHead, Skeleton } from "@/components/ui";
 import { getCurrentUser } from "@/lib/auth";
 import { ago, shortDate } from "@/lib/format";
@@ -85,7 +86,10 @@ function BatchCard({ batch: b }: { batch: Batch }) {
   );
 }
 
+const STEP_KEY = { nameservers: "stepNameservers", inboxes: "stepInboxes", smartlead: "stepSmartlead", campaigns: "stepCampaigns" } as const;
+
 function ItemRow({ item: i }: { item: BatchItem }) {
+  const current = (Object.keys(STEP_KEY) as (keyof typeof STEP_KEY)[]).find((s) => !isDone(i[STEP_KEY[s]])) ?? null;
   return (
     <div className="list-row flex-wrap" style={{ alignItems: "center" }}>
       <div className="flex min-w-0 flex-1 items-center gap-2" style={{ minWidth: 260 }}>
@@ -105,7 +109,14 @@ function ItemRow({ item: i }: { item: BatchItem }) {
           </span>
         ))}
       </div>
-      {i.lastError ? <p className="basis-full pl-0 text-[12px] text-danger-ink">{i.lastError}</p> : null}
+      {!i.completedAt && (i.note || i.lastError || current) ? (
+        <div className="flex basis-full flex-wrap items-center gap-x-3 gap-y-2 pt-1">
+          <p className={`min-w-0 flex-1 text-[12.5px] ${i.lastError ? "text-danger-ink" : "text-muted"}`} style={{ minWidth: 240 }}>
+            {i.lastError ?? i.note}
+          </p>
+          {current ? <StepActions itemId={i.id} step={current} status={i[STEP_KEY[current]]} /> : null}
+        </div>
+      ) : null}
     </div>
   );
 }

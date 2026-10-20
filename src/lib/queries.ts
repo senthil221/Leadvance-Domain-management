@@ -214,6 +214,9 @@ export type DomainDetail = {
     burnedAt: Date | null;
     createdAt: Date;
     inboxProvider: string | null;
+    autoRenew: boolean | null;
+    registrarApiAccess: boolean | null;
+    nameserversCheckedAt: Date | null;
   };
   inboxes: InboxRow[];
   daily: { day: string; sent: number; humanReplies: number; ooo: number; bounces: number; warmupReputation: number | null }[];
@@ -234,7 +237,7 @@ export async function getDomainDetail(id: string): Promise<DomainDetail | null> 
       h.bounce_rate::float8 as bounce_rate, h.human_reply_rate::float8 as human_reply_rate,
       h.warmup_reputation::float8 as warmup_reputation,
       d.active_since, d.purchased_at, d.expires_at, d.nameservers, d.notes, d.cost_cents,
-      d.draining_since, d.burned_at, d.created_at,
+      d.draining_since, d.burned_at, d.created_at, d.auto_renew, d.registrar_api_access, d.nameservers_checked_at,
       (select count(*)::int from alerts a where a.domain_id = d.id and a.status = 'open') as open_alerts,
       '{}'::int[] as spark
     from domains d
@@ -317,7 +320,7 @@ export async function getInventory() {
     sql<{ owned: number; storage: number; annualCents: number; retiredRenewing: number }[]>`
       select count(*)::int as owned, count(*) filter (where status = 'in_storage')::int as storage,
         coalesce(sum(cost_cents) filter (where status not in ('burned', 'resting')), 0)::int as annual_cents,
-        count(*) filter (where status in ('burned', 'resting') and expires_at between current_date and current_date + 60)::int as retired_renewing
+        count(*) filter (where status in ('burned', 'resting') and auto_renew is not false and expires_at between current_date and current_date + 60)::int as retired_renewing
       from domains`,
   ]);
   return { registrars, renewals, totals };
@@ -340,6 +343,7 @@ export type BatchItem = {
   stepSmartlead: StepStatus;
   stepCampaigns: StepStatus;
   lastError: string | null;
+  note: string | null;
   completedAt: Date | null;
 };
 
@@ -362,7 +366,7 @@ export async function listBatches(limit = 50): Promise<Batch[]> {
   const items = await sql<(BatchItem & { batchId: string })[]>`
     select ri.id, ri.batch_id, ri.old_domain_id, od.name as old_domain, ri.new_domain_id, nd.name as new_domain,
       c.name as client_name, c.hue as client_hue,
-      ri.step_nameservers, ri.step_inboxes, ri.step_smartlead, ri.step_campaigns, ri.last_error, ri.completed_at
+      ri.step_nameservers, ri.step_inboxes, ri.step_smartlead, ri.step_campaigns, ri.last_error, ri.note, ri.completed_at
     from replacement_items ri
     join domains od on od.id = ri.old_domain_id
     join domains nd on nd.id = ri.new_domain_id
@@ -440,7 +444,11 @@ export async function listReplies(limit = 500) {
 export async function getSettings() {
   const rows = await sql<{ key: string; value: unknown }[]>`select key, value from settings`;
   const map = Object.fromEntries(rows.map((r) => [r.key, r.value]));
-  return { drainDays: Number(map.drain_days ?? 7), storageLowThreshold: Number(map.storage_low_threshold ?? 20) };
+  return {
+    drainDays: Number(map.drain_days ?? 7),
+    storageLowThreshold: Number(map.storage_low_threshold ?? 20),
+    hypertideNameservers: Array.isArray(map.hypertide_nameservers) ? (map.hypertide_nameservers as string[]) : [],
+  };
 }
 
 export type JobStateRow = { job: string; lastStartedAt: Date | null; lastFinishedAt: Date | null; lastOk: boolean | null; lastError: string | null; lastDetail: Record<string, unknown> | null };

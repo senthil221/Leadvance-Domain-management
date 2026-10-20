@@ -47,7 +47,7 @@ export const STEP_LABELS = {
   stepNameservers: "Nameservers",
   stepInboxes: "Inboxes",
   stepSmartlead: "Smartlead",
-  stepCampaigns: "Live",
+  stepCampaigns: "Campaigns",
 } as const;
 export type StepKey = keyof typeof STEP_LABELS;
 export type StepStatus = "pending" | "running" | "done" | "failed" | "skipped" | "manual";

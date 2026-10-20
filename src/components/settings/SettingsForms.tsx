@@ -7,11 +7,13 @@ import { createClient, saveSettings } from "@/app/actions";
 import { ClientCell } from "@/components/ui";
 import type { ClientRow } from "@/lib/queries";
 
-export function LifecycleForm({ drainDays, storageLowThreshold }: { drainDays: number; storageLowThreshold: number }) {
+export function LifecycleForm({ drainDays, storageLowThreshold, hypertideNameservers }: { drainDays: number; storageLowThreshold: number; hypertideNameservers: string[] }) {
   const [drain, setDrain] = useState(String(drainDays));
   const [low, setLow] = useState(String(storageLowThreshold));
+  const [ns, setNs] = useState(hypertideNameservers.join("\n"));
   const [pending, startTransition] = useTransition();
-  const dirty = drain !== String(drainDays) || low !== String(storageLowThreshold);
+  const nsList = ns.split(/[\s,]+/).map((x) => x.trim()).filter(Boolean);
+  const dirty = drain !== String(drainDays) || low !== String(storageLowThreshold) || nsList.join(",") !== hypertideNameservers.join(",");
 
   return (
     <form
@@ -19,7 +21,7 @@ export function LifecycleForm({ drainDays, storageLowThreshold }: { drainDays: n
       onSubmit={(e) => {
         e.preventDefault();
         startTransition(async () => {
-          const r = await saveSettings({ drainDays: Number(drain), storageLowThreshold: Number(low) });
+          const r = await saveSettings({ drainDays: Number(drain), storageLowThreshold: Number(low), hypertideNameservers: nsList });
           if (!r.ok) toast.error(r.error);
           else toast.success("Settings saved");
         });
@@ -43,6 +45,11 @@ export function LifecycleForm({ drainDays, storageLowThreshold }: { drainDays: n
           <span className="field-hint">Overview turns amber when free domains drop to this.</span>
         </label>
       </div>
+      <label className="field">
+        <span className="field-label">Hypertide nameservers</span>
+        <textarea className="textarea mono" rows={2} style={{ minHeight: 60, maxWidth: 420 }} value={ns} onChange={(e) => setNs(e.target.value)} placeholder={"ns1.example.com\nns2.example.com"} />
+        <span className="field-hint">New domains are pointed here during a replacement. One per line.</span>
+      </label>
       <div><button type="submit" className="btn" disabled={!dirty || pending}>{pending ? "Saving…" : "Save"}</button></div>
     </form>
   );

@@ -13,7 +13,7 @@ export const metadata: Metadata = { title: "Settings" };
 
 const INTEGRATIONS = [
   { name: "Smartlead", env: ["SMARTLEAD_API_KEY"], use: "Inbox sync, warmup and limits, campaigns" },
-  { name: "Porkbun", env: ["PORKBUN_API_KEY", "PORKBUN_SECRET_KEY"], use: "Domain list and nameserver updates" },
+  { name: "Porkbun", env: ["PORKBUN_API_KEY", "PORKBUN_SECRET_KEY"], use: "Imports your domains; reads and updates nameservers" },
   { name: "Unstoppable Domains", env: ["UNSTOPPABLE_API_KEY"], use: "Nameserver updates (reseller API)" },
   { name: "Hypertide", env: ["HYPERTIDE_API_KEY"], use: "Ordering inboxes, nameserver targets" },
 ];
@@ -100,7 +100,7 @@ async function SettingsContent() {
 
       <section className="card" aria-labelledby="life-title">
         <div className="card-head"><h2 id="life-title" className="card-title">Lifecycle</h2></div>
-        <LifecycleForm drainDays={settings.drainDays} storageLowThreshold={settings.storageLowThreshold} />
+        <LifecycleForm drainDays={settings.drainDays} storageLowThreshold={settings.storageLowThreshold} hypertideNameservers={settings.hypertideNameservers} />
       </section>
 
       <section className="card" aria-labelledby="clients-title">

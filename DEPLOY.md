@@ -108,3 +108,14 @@ docker compose run --rm migrate && docker compose up -d --build web worker
 4. Writes to Smartlead (limits, warmup, campaigns) stay off until `INTEGRATIONS_DRY_RUN=false`.
 
 Worker logs: `docker compose logs -f worker`.
+
+## Porkbun
+
+1. Create an API key at porkbun.com/account/api. The **Manage, but no purchases** preset is enough (nameservers need the `domains` permission).
+2. Turn on **API Access** for each domain the app should manage (Domain Management → Details). Domains without it are imported but skipped for nameserver work.
+3. Save both keys:
+   `ssh -t -i ~/.ssh/hostinger_vps root@200.97.170.1 bash /docker/domain-engine/deploy/set-secret.sh PORKBUN_API_KEY`
+   `ssh -t -i ~/.ssh/hostinger_vps root@200.97.170.1 bash /docker/domain-engine/deploy/set-secret.sh PORKBUN_SECRET_KEY`
+4. Settings → Background sync → **Run now** on *Porkbun domains*. New domains land in storage; ones already sending in Smartlead become active on the next Smartlead sync.
+5. Settings → Lifecycle → **Hypertide nameservers**: the nameservers new domains are pointed at during a replacement.
+6. While `INTEGRATIONS_DRY_RUN=true`, the nameserver step only logs what it would do and asks you to mark it done. Set it to `false` with set-secret.sh to let it change nameservers.

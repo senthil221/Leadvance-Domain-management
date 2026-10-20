@@ -1,17 +1,29 @@
 import type postgres from "postgres";
+import { createPorkbun, type Porkbun } from "../integrations/porkbun";
 import { createSmartlead, type Smartlead } from "../integrations/smartlead";
+import { syncPorkbunDomains, syncPorkbunNameservers } from "./porkbun-sync";
+import { advanceReplacements } from "./replacements";
 import { syncAccounts, syncCampaigns, syncClients, syncDomainStats, dayIn } from "./smartlead-sync";
 
 // The worker's jobs and how often each runs. A job that needs an integration
 // whose key is missing reports "skipped" instead of failing.
 
-export type JobContext = { sql: postgres.Sql; smartlead: Smartlead | null; timezone: string };
+export type JobContext = { sql: postgres.Sql; smartlead: Smartlead | null; porkbun: Porkbun | null; timezone: string };
 export type Job = { name: string; label: string; everyMinutes: number; run: (ctx: JobContext) => Promise<Record<string, unknown>> };
 
 const needsSmartlead = (fn: (ctx: JobContext & { smartlead: Smartlead }) => Promise<Record<string, unknown>>) =>
   async (ctx: JobContext) => (ctx.smartlead ? fn({ ...ctx, smartlead: ctx.smartlead }) : { skipped: "SMARTLEAD_API_KEY not set" });
 
+const needsPorkbun = (fn: (ctx: JobContext & { porkbun: Porkbun }) => Promise<Record<string, unknown>>) =>
+  async (ctx: JobContext) => (ctx.porkbun ? fn({ ...ctx, porkbun: ctx.porkbun }) : { skipped: "PORKBUN_API_KEY / PORKBUN_SECRET_KEY not set" });
+
 export const JOBS: Job[] = [
+  {
+    name: "replacement-steps",
+    label: "Replacement steps",
+    everyMinutes: 1,
+    run: ({ sql, porkbun }) => advanceReplacements(sql, { porkbun }),
+  },
   {
     name: "smartlead-accounts",
     label: "Smartlead inboxes",
@@ -32,6 +44,18 @@ export const JOBS: Job[] = [
     label: "Smartlead daily numbers",
     everyMinutes: 30,
     run: needsSmartlead(({ sql, smartlead, timezone }) => syncDomainStats(sql, smartlead, timezone)),
+  },
+  {
+    name: "porkbun-domains",
+    label: "Porkbun domains",
+    everyMinutes: 360,
+    run: needsPorkbun(({ sql, porkbun }) => syncPorkbunDomains(sql, porkbun)),
+  },
+  {
+    name: "porkbun-nameservers",
+    label: "Porkbun nameservers",
+    everyMinutes: 60,
+    run: needsPorkbun(({ sql, porkbun }) => syncPorkbunNameservers(sql, porkbun)),
   },
   {
     name: "rollup",
@@ -57,10 +81,13 @@ export const JOBS: Job[] = [
 export async function jobContext(sql: postgres.Sql): Promise<JobContext> {
   const [tz] = await sql`select value #>> '{}' as tz from settings where key = 'stats_timezone'`;
   const apiKey = process.env.SMARTLEAD_API_KEY;
+  const dryRun = process.env.INTEGRATIONS_DRY_RUN !== "false";
+  const pbKey = process.env.PORKBUN_API_KEY, pbSecret = process.env.PORKBUN_SECRET_KEY;
   return {
     sql,
+    porkbun: pbKey && pbSecret ? createPorkbun({ apiKey: pbKey, secretKey: pbSecret, sql, dryRun }) : null,
     timezone: (tz?.tz as string) || "UTC",
-    smartlead: apiKey ? createSmartlead({ apiKey, sql, dryRun: process.env.INTEGRATIONS_DRY_RUN !== "false" }) : null,
+    smartlead: apiKey ? createSmartlead({ apiKey, sql, dryRun }) : null,
   };
 }
 

@@ -114,13 +114,26 @@ export function DomainSheet({
                   <dt>Nameservers</dt>
                   <dd className="flex flex-col">
                     {d.domain.nameservers.length ? d.domain.nameservers.map((ns) => <span key={ns} className="mono">{ns}</span>) : "—"}
+                    {d.domain.nameserversCheckedAt ? <span className="text-[12px] text-faint">checked {ago(d.domain.nameserversCheckedAt)}</span> : null}
                   </dd>
                   <dt>Active since</dt>
                   <dd>{d.domain.activeSince ? `${shortDate(d.domain.activeSince)} · ${daysSince(d.domain.activeSince)} days` : "—"}</dd>
                   {d.domain.drainingSince ? (<><dt>Draining since</dt><dd>{shortDate(d.domain.drainingSince)}</dd></>) : null}
                   {d.domain.burnedAt ? (<><dt>Retired</dt><dd>{shortDate(d.domain.burnedAt)}</dd></>) : null}
                   <dt>Purchased</dt><dd>{shortDate(d.domain.purchasedAt)}</dd>
-                  <dt>Renews</dt><dd>{shortDate(d.domain.expiresAt)}</dd>
+                  <dt>Renews</dt>
+                  <dd>
+                    {shortDate(d.domain.expiresAt)}
+                    {d.domain.autoRenew != null ? <span className="text-muted"> · auto-renew {d.domain.autoRenew ? "on" : "off"}</span> : null}
+                  </dd>
+                  {d.domain.registrar === "Porkbun" && d.domain.registrarApiAccess != null ? (
+                    <>
+                      <dt>Porkbun API access</dt>
+                      <dd>
+                        {d.domain.registrarApiAccess ? "On" : <span className="text-warning-ink">Off: turn it on at Porkbun so nameservers can be changed from here</span>}
+                      </dd>
+                    </>
+                  ) : null}
                   <dt>Cost</dt><dd>{d.domain.costCents != null ? `$${(d.domain.costCents / 100).toFixed(2)} / yr` : "—"}</dd>
                   {d.domain.notes ? (<><dt>Notes</dt><dd>{d.domain.notes}</dd></>) : null}
                 </dl>

@@ -233,13 +233,22 @@ export async function reclassifyReply(id: number, cls: "human" | "ooo" | "auto" 
   }
 }
 
-const settingsInput = z.object({ drainDays: z.number().int().min(1).max(60), storageLowThreshold: z.number().int().min(0).max(10_000) });
+const hostname = z.string().trim().toLowerCase().regex(/^[a-z0-9-]+(.[a-z0-9-]+)+.?$/, "Nameservers must be hostnames like ns1.example.com");
+const settingsInput = z.object({
+  drainDays: z.number().int().min(1).max(60),
+  storageLowThreshold: z.number().int().min(0).max(10_000),
+  hypertideNameservers: z.array(hostname).max(13),
+});
 
 export async function saveSettings(input: z.input<typeof settingsInput>): Promise<ActionResult> {
   try {
     await requireActor();
     const s = settingsInput.parse(input);
-    await sql`insert into settings (key, value) values ('drain_days', ${sql.json(s.drainDays)}), ('storage_low_threshold', ${sql.json(s.storageLowThreshold)})
+    const ns = s.hypertideNameservers.map((n) => n.replace(/\.$/, ""));
+    await sql`insert into settings (key, value) values
+        ('drain_days', ${sql.json(s.drainDays)}),
+        ('storage_low_threshold', ${sql.json(s.storageLowThreshold)}),
+        ('hypertide_nameservers', ${sql.json(ns)})
       on conflict (key) do update set value = excluded.value, updated_at = now()`;
     refresh();
     return { ok: true, data: undefined };
@@ -258,6 +267,28 @@ export async function runJobNow(name: string): Promise<ActionResult<Record<strin
     refresh();
     return r.ok ? { ok: true, data: r.detail } : { ok: false, error: r.error };
   } catch (e) {
+    return fail(e);
+  }
+}
+
+const stepInput = z.object({
+  itemId: z.uuid(),
+  step: z.enum(["nameservers", "inboxes", "smartlead", "campaigns"]),
+  action: z.enum(["done", "retry", "skip"]),
+});
+
+export async function actOnReplacementStep(input: z.input<typeof stepInput>): Promise<ActionResult<{ next: string | null; completed: boolean }>> {
+  try {
+    const actor = await requireActor();
+    const { itemId, step, action } = stepInput.parse(input);
+    const { jobContext } = await import("@/jobs");
+    const { actOnStep } = await import("@/jobs/replacements");
+    const ctx = await jobContext(sql);
+    const r = await actOnStep(sql, { porkbun: ctx.porkbun }, itemId, step, action, actor);
+    refresh();
+    return { ok: true, data: r };
+  } catch (e) {
+    if (e instanceof Error && /Finish the earlier|already finished|not found/.test(e.message)) return { ok: false, error: e.message };
     return fail(e);
   }
 }
