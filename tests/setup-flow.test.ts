@@ -98,20 +98,24 @@ describe("Hypertide order sync", () => {
 
   it("mirrors orders, adds unknown domains and moves ordered storage domains to provisioning", async () => {
     const ht = fakeHypertide(
-      [{ id: "rec1", domain: "freeone.com", status: "In progress", paymentStatus: "Paid", subscriptionId: "sub_1" }],
+      [
+        { id: "rec1", domain: "freeone.com", status: "In progress", paymentStatus: "Paid", subscriptionId: "sub_1" },
+        // NPC is what Hypertide's dashboard shows as Cancelled.
+        { id: "rec3", domain: "freetwo.com", status: "NPC", paymentStatus: "Paid" },
+      ],
       [{ id: "rec2", domain: "brandnew.com", status: "Todo", paymentStatus: "Unpaid" }],
     );
     const r = await syncHypertideOrders(sql, { porkbun: null, hypertide: ht });
-    expect(r).toMatchObject({ orders: 2, added: 1, provisioning: 2 });
+    expect(r).toMatchObject({ orders: 3, added: 1, provisioning: 2 });
     expect((await domain("freeone.com")).status).toBe("provisioning");
     expect((await domain("brandnew.com")).status).toBe("provisioning");
     expect((await domain("freetwo.com")).status).toBe("in_storage");
     const [o] = await sql`select * from hypertide_orders where id = 'rec1'`;
     expect(o).toMatchObject({ payment_status: "Paid", subscription_id: "sub_1", gone_at: null });
 
-    // Cancelled orders drop out of the feed and are marked gone.
+    // Orders that drop out of the feed are marked gone.
     await syncHypertideOrders(sql, { porkbun: null, hypertide: fakeHypertide() });
-    expect((await sql`select count(*)::int as n from hypertide_orders where gone_at is not null`)[0].n).toBe(2);
+    expect((await sql`select count(*)::int as n from hypertide_orders where gone_at is not null`)[0].n).toBe(3);
   });
 
   it("finishes a hand-ordered replacement's inbox step once the order is Done", async () => {

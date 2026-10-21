@@ -76,8 +76,8 @@ export function htOf(d: Pick<DomainRow, "htOrderStatus" | "htPayment">): { label
   if (pay.includes("recovery")) return { label: "Recovery pool", tone: "violet" };
   if (pay && !pay.startsWith("paid")) return { label: "Unpaid", tone: "warning" };
   if (d.htOrderStatus === "Done") return { label: "Done", tone: "success" };
-  // NPC: Hypertide is waiting for the domain's nameservers to change.
-  if (d.htOrderStatus === "NPC") return { label: "Waiting for NS", tone: "warning" };
+  // The API's "NPC" is what Hypertide's dashboard shows as Cancelled: no longer billed.
+  if (d.htOrderStatus === "NPC") return { label: "Cancelled", tone: "faint" };
   return { label: d.htOrderStatus ?? "Ordered", tone: "info" };
 }
 

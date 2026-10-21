@@ -60,12 +60,13 @@ export async function syncHypertideOrders(sql: Sql, ctx: StepContext & { hyperti
       update domains d set inbox_provider_id = ${ht.id}
       from hypertide_orders o where o.domain_id = d.id and o.gone_at is null and d.inbox_provider_id is distinct from ${ht.id}`;
 
-    // Ordered domains still sitting in storage are being set up.
+    // Ordered domains still sitting in storage are being set up. A cancelled
+    // order (NPC in the API) doesn't count.
     const provisioning = await tx`
       select transition_domain(d.id, 'provisioning', 'ordered on Hypertide', 'hypertide sync') as id
       from domains d
       where d.status = 'in_storage'
-        and exists (select 1 from hypertide_orders o where o.domain_id = d.id and o.gone_at is null)`;
+        and exists (select 1 from hypertide_orders o where o.domain_id = d.id and o.gone_at is null and o.status is distinct from 'NPC')`;
 
     return { added: added.length, gone: gone.length, provisioning: provisioning.length };
   });

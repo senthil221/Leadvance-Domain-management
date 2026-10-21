@@ -84,10 +84,9 @@ async function InventoryContent() {
             <span className="card-title">Hypertide</span>
             <span className="card-sub">{ht.lastSync ? `synced ${ago(ht.lastSync)}` : "not synced yet"}</span>
             <span className="ml-auto flex flex-wrap items-center gap-x-5 gap-y-1 text-[12.5px] text-muted">
-              <span><b className="num text-ink">{int(ht.paid)}</b> paid orders</span>
-              <span><b className="num text-ink">{int(ht.done)}</b> done</span>
+              <span title="Only Done orders are billed"><b className="num text-ink">{int(ht.done)}</b> billed (Done)</span>
               <span><b className="num text-ink">{int(ht.inSetup)}</b> in setup</span>
-              <span className={ht.waitingNs ? "text-warning-ink" : undefined} title="Hypertide status NPC: waiting for the domain's nameservers to point to Hypertide"><b className="num">{int(ht.waitingNs)}</b> waiting for nameservers</span>
+              <span title="Shown as Cancelled in Hypertide (NPC in its API): not billed"><b className="num text-ink">{int(ht.cancelled)}</b> cancelled</span>
               {ht.recovery ? <span><b className="num text-ink">{int(ht.recovery)}</b> in recovery pool</span> : null}
               <span className={ht.unpaid ? "text-warning-ink" : undefined}><b className="num">{int(ht.unpaid)}</b> unpaid</span>
               {ht.sendingWithout ? <span title="Active or warming domains with no Hypertide order: other inbox providers, or orders under another account"><b className="num text-ink">{int(ht.sendingWithout)}</b> sending without an order</span> : null}
@@ -100,7 +99,7 @@ async function InventoryContent() {
         <div className="callout tone-warning">
           <TriangleAlert size={15} strokeWidth={1.75} />
           <span>
-            {ht.retiredBilled.length} retired domain{ht.retiredBilled.length === 1 ? " is" : "s are"} still billed on Hypertide:{" "}
+            {ht.retiredBilled.length} retired domain{ht.retiredBilled.length === 1 ? " has" : "s have"} a Done order on Hypertide, so {ht.retiredBilled.length === 1 ? "it is" : "they are"} still billed:{" "}
             {ht.retiredBilled.slice(0, 6).map((d) => d.name).join(", ")}{ht.retiredBilled.length > 6 ? ` and ${ht.retiredBilled.length - 6} more` : ""}. Cancel the subscriptions there.
           </span>
         </div>

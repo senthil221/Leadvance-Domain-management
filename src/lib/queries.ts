@@ -376,13 +376,14 @@ export async function getInventory() {
 }
 
 export type HypertideSummary = {
-  orders: number; paid: number; unpaid: number; inSetup: number; done: number; waitingNs: number; recovery: number;
+  orders: number; paid: number; unpaid: number; inSetup: number; done: number; cancelled: number; recovery: number;
   retiredBilled: { id: string; name: string; status: DomainStatus }[];
   sendingWithout: number; lastSync: Date | null; replacedLast28: number;
 };
 
-// Hypertide orders next to inventory: what is paid for, what is still being
-// set up, and retired domains whose subscription is still running.
+// Hypertide orders next to inventory: what is billed, what is still being set
+// up, and retired domains whose subscription is still running. Only Done orders
+// are billed; the API's "NPC" status is a cancelled order.
 export async function getHypertideSummary(): Promise<HypertideSummary> {
   const [[t], retiredBilled, [job]] = await Promise.all([
     sql<Omit<HypertideSummary, "retiredBilled" | "lastSync">[]>`
@@ -390,16 +391,16 @@ export async function getHypertideSummary(): Promise<HypertideSummary> {
         count(*) filter (where payment_status ilike 'paid%')::int as paid,
         count(*) filter (where payment_status not ilike 'paid%' and payment_status not ilike '%recovery%')::int as unpaid,
         count(*) filter (where payment_status ilike 'paid%' and status is distinct from 'Done' and status is distinct from 'NPC')::int as in_setup,
-        count(*) filter (where payment_status ilike 'paid%' and status = 'NPC')::int as waiting_ns,
+        count(*) filter (where status = 'NPC' and payment_status not ilike '%recovery%')::int as cancelled,
         count(*) filter (where payment_status ilike '%recovery%')::int as recovery,
         count(*) filter (where status = 'Done')::int as done,
         (select count(*)::int from domains d where d.status in ('active', 'warming')
-          and not exists (select 1 from hypertide_orders o where o.domain_id = d.id and o.gone_at is null)) as sending_without,
+          and not exists (select 1 from hypertide_orders o where o.domain_id = d.id and o.gone_at is null and o.status is distinct from 'NPC')) as sending_without,
         (select count(*)::int from domain_status_history where to_status = 'draining' and at > now() - interval '28 days') as replaced_last28
       from hypertide_orders where gone_at is null`,
     sql<HypertideSummary["retiredBilled"]>`
       select distinct d.id, d.name, d.status from hypertide_orders o join domains d on d.id = o.domain_id
-      where o.gone_at is null and o.payment_status ilike 'paid%' and d.status in ('burned', 'resting')
+      where o.gone_at is null and o.status = 'Done' and d.status in ('burned', 'resting')
       order by d.name`,
     sql<{ lastFinishedAt: Date | null }[]>`select last_finished_at from job_state where job = 'hypertide-orders' and last_ok`,
   ]);
@@ -650,7 +651,7 @@ export async function listJobState() {
 // ---------------------------------------------------------------------------
 
 export type Issues = {
-  flagged: number; noZone: number; disconnected: number; lowRep: number; htUnpaid: number; htWaiting: number;
+  flagged: number; noZone: number; disconnected: number; lowRep: number; htUnpaid: number; htCancelledLive: number;
   billedRetired: number; renew14: number; nsFailed: number; settingsFailed: number; stuckSetup: number; freeLow: boolean; free: number;
 };
 export type ClientInsight = {
@@ -669,9 +670,11 @@ export async function getInsights() {
         (select count(*)::int from inboxes i join domains d on d.id = i.domain_id where i.status = 'disconnected' and d.status in ('active', 'warming')) as disconnected,
         (select count(*)::int from inboxes i join domains d on d.id = i.domain_id where i.status = 'connected' and i.warmup_reputation < 90 and d.status in ('active', 'warming')) as low_rep,
         (select count(*)::int from hypertide_orders where gone_at is null and payment_status not ilike 'paid%' and payment_status not ilike '%recovery%') as ht_unpaid,
-        (select count(*)::int from hypertide_orders where gone_at is null and status = 'NPC') as ht_waiting,
         (select count(distinct o.domain_id)::int from hypertide_orders o join domains d on d.id = o.domain_id
-          where o.gone_at is null and o.payment_status ilike 'paid%' and d.status in ('burned', 'resting')) as billed_retired,
+          where o.gone_at is null and o.status = 'NPC' and d.status in ('active', 'warming', 'provisioning')
+          and not exists (select 1 from hypertide_orders o2 where o2.domain_id = d.id and o2.gone_at is null and o2.status is distinct from 'NPC')) as ht_cancelled_live,
+        (select count(distinct o.domain_id)::int from hypertide_orders o join domains d on d.id = o.domain_id
+          where o.gone_at is null and o.status = 'Done' and d.status in ('burned', 'resting')) as billed_retired,
         (select count(*)::int from domains where expires_at between current_date and current_date + 14 and status not in ('burned', 'resting')) as renew14,
         (select count(*)::int from nameserver_requests where status = 'failed' and created_at > now() - interval '7 days') as ns_failed,
         (select count(distinct inbox_id)::int from inbox_setting_changes where status = 'failed' and created_at > now() - interval '2 days') as settings_failed,
