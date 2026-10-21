@@ -4,20 +4,28 @@ import type { Tone } from "./status";
 // Inventory wording for where a domain is in its life, where its nameservers
 // point and what Hypertide knows about it. Shared by server and client code.
 
-// Three buckets: in use (setting up counts, since the domain is taken),
-// free in storage, and replaced (draining, burned or resting).
-export type Life = "active" | "free" | "replaced";
+// Where a domain is in its life: sending, being set up, free in storage,
+// replaced (draining or burned) or in recovery (resting, or in Hypertide's
+// recovery pool).
+export type Life = "active" | "setup" | "free" | "replaced" | "recovery";
 export const LIFE: Record<Life, { label: string; tone: Tone }> = {
   active: { label: "Active", tone: "success" },
+  setup: { label: "Setting up", tone: "info" },
   free: { label: "Free", tone: "faint" },
   replaced: { label: "Replaced", tone: "warning" },
+  recovery: { label: "Recovery", tone: "violet" },
 };
-export const LIFE_ORDER: Life[] = ["active", "free", "replaced"];
+export const LIFE_ORDER: Life[] = ["active", "setup", "free", "replaced", "recovery"];
+/** The Inventory tabs; setting-up domains show under All. */
+export const LIFE_TABS: Life[] = ["active", "free", "replaced", "recovery"];
 
-export function lifeOf(d: Pick<DomainRow, "status">): Life {
+export const inRecoveryPool = (payment: string | null | undefined) => /recovery/i.test(payment ?? "");
+
+export function lifeOf(d: Pick<DomainRow, "status" | "htPayment">): Life {
   if (d.status === "in_storage") return "free";
-  if (d.status === "provisioning" || d.status === "warming" || d.status === "active") return "active";
-  return "replaced";
+  if (d.status === "provisioning" || d.status === "warming") return "setup";
+  if (d.status === "active") return "active";
+  return d.status === "resting" || inRecoveryPool(d.htPayment) ? "recovery" : "replaced";
 }
 
 // Who hosts a domain's DNS, from its nameserver names.

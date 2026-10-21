@@ -98,6 +98,35 @@ const sortValue = (g: Group, k: SortKey): string | number | null => {
   }
 };
 
+/** The same columns for one inbox, so an open domain's inboxes follow the table's sort. */
+const inboxValue = (i: InboxListRow, k: SortKey): string | number | null => {
+  switch (k) {
+    case "client": return i.senderName?.toLowerCase() ?? null;
+    case "esp": return i.providerType;
+    case "tags": return i.smartleadTags.join(", ").toLowerCase() || null;
+    case "age": return i.smartleadCreatedAt ? -new Date(i.smartleadCreatedAt).getTime() : null;
+    case "warmupState": { const w = warmupOf(i); return w === "blocked" ? 100 : w === "paused" ? 1 : 0; }
+    case "connection": return i.status === "disconnected" ? 1 : 0;
+    case "avgWarmup": return i.warmupEnabled ? i.warmupPerDay : null;
+    case "avgLimit": case "capacity": return i.dailyLimit;
+    case "sentToday": return i.dailySent;
+    case "avgWait": return i.minWaitMins;
+    case "avgRep": return i.warmupReputation;
+    case "campaigns": return i.campaigns;
+    case "sent7": return i.sent7;
+    case "replyRate": return rate(i.replies7, i.sent7);
+    case "bounceRate": return rate(i.bounces7, i.sent7);
+    default: return null;
+  }
+};
+const byValue = <T,>(value: (x: T) => string | number | null, tie: (a: T, b: T) => number, dir: 1 | -1) => (a: T, b: T) => {
+  const x = value(a), y = value(b);
+  if (x === y) return tie(a, b);
+  if (x === null) return 1;
+  if (y === null) return -1;
+  return (x < y ? -1 : 1) * dir;
+};
+
 const n0 = (v: number | null, digits = 0) => (v == null ? <span className="zero">—</span> : v.toFixed(digits));
 
 const COLUMNS: ColumnDef[] = [
@@ -388,7 +417,7 @@ export function InboxesView({ inboxes, clients, plans, smartleadConnected, dryRu
                       {on("reply") ? <td className="is-num"><Metric value={rate(g.replies7, g.sent7)} digits={2} /></td> : null}
                       {on("bounce") ? <td className="is-num"><Metric value={rate(g.bounces7, g.sent7)} warn={2} bad={3} /></td> : null}
                     </tr>
-                    {isOpen ? g.inboxes.map((i) => (
+                    {isOpen ? [...g.inboxes].sort(byValue((i: InboxListRow) => inboxValue(i, sort.key), (a, b) => a.email.localeCompare(b.email), sort.dir)).map((i) => (
                       <tr key={i.id} className="is-clickable" data-selected={selected.has(i.id)} style={{ background: "var(--surface-2)" }} onClick={() => toggleIds([i.id])}>
                         <td className="col-check"><input type="checkbox" className="checkbox" checked={selected.has(i.id)} onChange={() => {}} aria-label={`Select ${i.email}`} tabIndex={-1} /></td>
                         <td className="col-first" style={{ paddingLeft: 34 }}>

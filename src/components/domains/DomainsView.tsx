@@ -45,7 +45,9 @@ const sortValue = (d: DomainRow, k: SortKey): string | number | null => {
     case "status": return statusRank(d.status);
     case "client": return d.clientName?.toLowerCase() ?? null;
     case "registrar": return d.registrar?.toLowerCase() ?? null;
-    case "activeSince": case "purchasedAt": case "expiresAt": return d[k] ? new Date(d[k]!).getTime() : null;
+    // The column shows days active, so more days sorts higher.
+    case "activeSince": return d.activeSince ? -new Date(d.activeSince).getTime() : null;
+    case "purchasedAt": case "expiresAt": return d[k] ? new Date(d[k]!).getTime() : null;
     default: return d[k] as string | number | null;
   }
 };

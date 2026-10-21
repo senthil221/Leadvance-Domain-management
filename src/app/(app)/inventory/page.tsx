@@ -40,8 +40,7 @@ async function InventoryContent() {
   await getCurrentUser();
   const [{ registrars, renewals, totals }, domains, clients, ht] = await Promise.all([getInventory(), listDomains(), listClients(), getHypertideSummary()]);
   const money = (c: number) => `${(c / 100).toLocaleString("en-US", { maximumFractionDigits: 0 })}`;
-  const life = { active: 0, free: 0, replaced: 0 };
-  const setup = domains.filter((d) => d.status === "provisioning" || d.status === "warming").length;
+  const life = { active: 0, setup: 0, free: 0, replaced: 0, recovery: 0 };
   for (const d of domains) life[lifeOf(d)]++;
   const activeCapacity = domains.filter((d) => d.status === "active").reduce((a, d) => a + d.capacity, 0);
   const activeInboxes = domains.filter((d) => d.status === "active").reduce((a, d) => a + d.inboxCount, 0);
@@ -51,11 +50,11 @@ async function InventoryContent() {
 
   return (
     <>
-      <section className="stats" aria-label="Inventory numbers">
+      <section className="stats is-5" aria-label="Inventory numbers">
         <Link href="/inventory" className="stat">
           <span className="stat-label"><Dot tone="success" />Active</span>
           <span className="stat-value">{int(life.active)}</span>
-          <span className="stat-foot">{int(activeInboxes)} inboxes · {int(activeCapacity)} emails / day{setup ? ` · ${setup} setting up` : ""}</span>
+          <span className="stat-foot">{int(activeInboxes)} inboxes · {int(activeCapacity)} emails / day{life.setup ? ` · ${life.setup} more setting up` : ""}</span>
         </Link>
         <Link href="/inventory?view=free" className="stat">
           <span className="stat-label"><Dot tone="faint" />Free</span>
@@ -66,6 +65,11 @@ async function InventoryContent() {
           <span className="stat-label"><Dot tone="warning" />Replaced</span>
           <span className="stat-value">{int(life.replaced)}</span>
           <span className="stat-foot">{int(ht.replacedLast28)} in the last 4 weeks</span>
+        </Link>
+        <Link href="/inventory?view=recovery" className="stat">
+          <span className="stat-label"><Dot tone="violet" />Recovery</span>
+          <span className="stat-value">{int(life.recovery)}</span>
+          <span className="stat-foot">{ht.recovery ? `${ht.recovery} in Hypertide's recovery pool` : "resting, not in use"}</span>
         </Link>
         <div className="stat">
           <span className="stat-label">Owned · yearly cost</span>

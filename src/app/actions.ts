@@ -64,15 +64,20 @@ export async function changeStatus(input: z.input<typeof changeStatusInput>): Pr
   }
 }
 
-/** Old data: records domains as replaced (burned) without running a replacement. */
-export async function markReplaced(input: { ids: string[]; note?: string }): Promise<ActionResult<{ changed: number }>> {
+/**
+ * Records domains as replaced (burned) without running a replacement, for old
+ * data, or moves them to recovery (resting).
+ */
+export async function markReplaced(input: { ids: string[]; note?: string; to?: "replaced" | "recovery" }): Promise<ActionResult<{ changed: number }>> {
   try {
     const actor = await requireActor();
-    const v = z.object({ ids, note: z.string().trim().max(300).optional() }).parse(input);
-    const reason = `Marked as replaced${v.note ? `: ${v.note}` : ""}`;
+    const v = z.object({ ids, note: z.string().trim().max(300).optional(), to: z.enum(["replaced", "recovery"]).default("replaced") }).parse(input);
+    const reason = `${v.to === "recovery" ? "Moved to recovery" : "Marked as replaced"}${v.note ? `: ${v.note}` : ""}`;
+    const target = v.to === "recovery" ? "resting" : "burned";
+    const skip = v.to === "recovery" ? ["resting"] : ["draining", "burned", "resting"];
     const rows = await sql.begin((tx) => tx<{ id: string }[]>`
-      select (transition_domain(id, 'burned', ${reason}, ${actor}, null, true)).id from domains
-      where id in ${sql(v.ids)} and status not in ('draining', 'burned', 'resting')`);
+      select (transition_domain(id, ${target}::domain_status, ${reason}, ${actor}, null, true)).id from domains
+      where id in ${sql(v.ids)} and status::text <> all(${skip}::text[])`);
     refresh();
     return { ok: true, data: { changed: rows.length } };
   } catch (e) {
