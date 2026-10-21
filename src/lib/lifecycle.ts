@@ -4,21 +4,20 @@ import type { Tone } from "./status";
 // Inventory wording for where a domain is in its life, where its nameservers
 // point and what Hypertide knows about it. Shared by server and client code.
 
-export type Life = "free" | "setup" | "active" | "replaced" | "retired";
+// Three buckets: in use (setting up counts, since the domain is taken),
+// free in storage, and replaced (draining, burned or resting).
+export type Life = "active" | "free" | "replaced";
 export const LIFE: Record<Life, { label: string; tone: Tone }> = {
-  free: { label: "Free", tone: "faint" },
-  setup: { label: "Setting up", tone: "info" },
   active: { label: "Active", tone: "success" },
+  free: { label: "Free", tone: "faint" },
   replaced: { label: "Replaced", tone: "warning" },
-  retired: { label: "Retired", tone: "danger" },
 };
-export const LIFE_ORDER: Life[] = ["free", "setup", "active", "replaced", "retired"];
+export const LIFE_ORDER: Life[] = ["active", "free", "replaced"];
 
-export function lifeOf(d: Pick<DomainRow, "status" | "replacedById">): Life {
+export function lifeOf(d: Pick<DomainRow, "status">): Life {
   if (d.status === "in_storage") return "free";
-  if (d.status === "provisioning" || d.status === "warming") return "setup";
-  if (d.status === "active") return "active";
-  return d.replacedById ? "replaced" : "retired";
+  if (d.status === "provisioning" || d.status === "warming" || d.status === "active") return "active";
+  return "replaced";
 }
 
 // Who hosts a domain's DNS, from its nameserver names.

@@ -114,14 +114,12 @@ export function Metric({ value, warn, bad, invert = false, digits = 1, suffix = 
  */
 export function Rep({ value, low }: { value: number | null; low?: number }) {
   const slot = low !== undefined;
-  if (value == null) return <span className={`rep${slot ? " has-low" : ""}`}><span /><span className="rep-val zero">—</span>{slot ? <span /> : null}</span>;
+  if (value == null) return <span className={`rep${slot ? " has-low" : ""}`}><span className="rep-val zero">—</span>{slot ? <span /> : null}</span>;
   const tone = value < 90 ? "danger" : value < 95 ? "warning" : "success";
-  const fill = Math.max(0.04, Math.min(1, (value - 80) / 20));
   return (
     <span className={`rep${slot ? " has-low" : ""}`} title={`Warmup reputation ${value.toFixed(1)}${low ? ` · ${low} inbox${low === 1 ? "" : "es"} under 90` : ""}`}>
-      <span className={`rep-bar tone-${tone}`}><span style={{ width: `${fill * 100}%` }} /></span>
       <span className={`rep-val is-${tone}`}>{value.toFixed(1)}</span>
-      {slot ? <span className="rep-low">{low ? low : ""}</span> : null}
+      {slot ? <span className="rep-low" title={low ? `${low} inbox${low === 1 ? "" : "es"} under 90` : undefined}>{low ? `${low} low` : ""}</span> : null}
     </span>
   );
 }

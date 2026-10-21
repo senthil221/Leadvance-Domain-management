@@ -1,7 +1,7 @@
 "use client";
 
 import { ChevronRight, ChevronsDownUp, ChevronsUpDown, Inbox, Info, PlugZap, Search, Settings2, ShieldCheck, Shuffle, X } from "lucide-react";
-import { useTransition } from "react";
+import { type ReactNode, useTransition } from "react";
 import { toast } from "sonner";
 import { reconnectInboxes, validateDns } from "@/app/actions";
 import Link from "next/link";
@@ -13,7 +13,7 @@ import { InboxSettingsDialog } from "./InboxSettingsDialog";
 import { PlansCard } from "./PlansCard";
 import { ago, int } from "@/lib/format";
 import type { ClientRow, InboxListRow, PlanRow } from "@/lib/queries";
-import type { DomainStatus } from "@/lib/status";
+import { DOMAIN_STATUSES, type DomainStatus } from "@/lib/status";
 
 const TABS = [
   { key: "connected", label: "Connected", match: (i: InboxListRow) => i.status === "connected" },
@@ -80,9 +80,10 @@ function group(rows: InboxListRow[]): Group[] {
   });
 }
 
-type SortKey = "domain" | "client" | "esp" | "tags" | "age" | "dnsMissing" | "warmupState" | "blacklist" | "connection" | "count" | "avgWarmup" | "avgLimit" | "capacity" | "sentToday" | "avgWait" | "avgRep" | "campaigns" | "sent7" | "replyRate" | "bounceRate";
+type SortKey = "domain" | "status" | "client" | "esp" | "tags" | "age" | "dnsMissing" | "warmupState" | "blacklist" | "connection" | "count" | "avgWarmup" | "avgLimit" | "capacity" | "sentToday" | "avgWait" | "avgRep" | "campaigns" | "sent7" | "replyRate" | "bounceRate";
 const sortValue = (g: Group, k: SortKey): string | number | null => {
   switch (k) {
+    case "status": return DOMAIN_STATUSES.indexOf(g.status);
     case "client": return g.clientName?.toLowerCase() ?? null;
     case "esp": return g.esp;
     case "tags": return g.tags.join(", ").toLowerCase() || null;
@@ -100,7 +101,7 @@ const sortValue = (g: Group, k: SortKey): string | number | null => {
 const n0 = (v: number | null, digits = 0) => (v == null ? <span className="zero">—</span> : v.toFixed(digits));
 
 const COLUMNS: ColumnDef[] = [
-  { key: "client", label: "Client / sender" }, { key: "esp", label: "ESP" }, { key: "tags", label: "Smartlead tags" },
+  { key: "status", label: "Status" }, { key: "client", label: "Client / sender" }, { key: "esp", label: "ESP" }, { key: "tags", label: "Smartlead tags" },
   { key: "count", label: "Inboxes" }, { key: "warmup", label: "Warmup / day" }, { key: "limit", label: "Limit / inbox", hidden: true },
   { key: "capacity", label: "Per day" }, { key: "today", label: "Sent today" }, { key: "gap", label: "Gap", hidden: true },
   { key: "rep", label: "Reputation" }, { key: "campaigns", label: "Campaigns", hidden: true }, { key: "sent7", label: "Sent 7d" },
@@ -130,23 +131,28 @@ function dnsOf(i: InboxListRow): Dns {
 const warmupOf = (i: InboxListRow) => (i.warmupBlockedReason || /BLOCK/i.test(i.warmupStatus ?? "") ? "blocked" : i.warmupEnabled !== true || /INACTIVE|PAUSE/i.test(i.warmupStatus ?? "") ? "paused" : "active");
 const ageLabel = (days: number | null) => (days == null ? null : days < 60 ? `${days}d` : days < 730 ? `${Math.round(days / 30)}mo` : `${(days / 365).toFixed(1)}y`);
 
+/** A healthy value: quiet, so problems in the same column stand out. */
+function Ok({ children, title }: { children: ReactNode; title?: string }) {
+  return <span className="ok-cell" title={title}>{children}</span>;
+}
+
 function DnsCell({ dns }: { dns: Dns }) {
   if (dns.state === "nozone") return <span className="ns-status tone-danger" title="The domain's nameservers have no zone for it: nothing resolves">No DNS zone</span>;
   if (dns.state === "unknown") return <span className="zero" title="Not checked yet">—</span>;
   return (
     dns.state === "ok"
-      ? <span className="text-success-ink" title="SPF, DKIM, DMARC and MX all published">Validated</span>
+      ? <Ok title="SPF, DKIM, DMARC and MX all published">Valid</Ok>
       : <span className="dns" title={`Missing: ${dns.missing.join(", ")}`}>{dns.missing.map((k) => <span key={k} className="dns-chip is-bad">{k}</span>)}</span>
   );
 }
 function WarmupCell({ blocked, paused, total, reason }: { blocked: number; paused: number; total: number; reason?: string | null }) {
   if (blocked) return <span className="ns-status tone-danger" title={reason ?? "Smartlead blocked warmup"}>{total > 1 ? `${blocked} blocked` : "Blocked"}</span>;
   if (paused) return <span className="ns-status tone-warning" title="Warmup is turned off in Smartlead">{paused === total ? "Off" : `${paused} off`}</span>;
-  return <span className="text-success-ink">Active</span>;
+  return <Ok>On</Ok>;
 }
 function BlacklistCell({ count, listings }: { count: number | null; listings: string[] }) {
   if (count == null) return <span className="zero" title="Not scanned yet. The scan needs a Smartlead token (SMARTLEAD_JWT) and runs every 6 hours.">—</span>;
-  if (count === 0) return <span className="text-success-ink">Clean</span>;
+  if (count === 0) return <Ok>Clean</Ok>;
   return <span className="ns-status tone-danger" title={listings.join(", ") || undefined}>Listed on {count}</span>;
 }
 
@@ -312,6 +318,7 @@ export function InboxesView({ inboxes, clients, plans, smartleadConnected, dryRu
                     onChange={() => setSelected((s0) => { const n = new Set(s0); for (const id of allIds) if (allSel) n.delete(id); else n.add(id); return n; })} />
                 </th>
                 <SortTh k="domain" sort={sort} onSort={sortBy}>Domain</SortTh>
+                {on("status") ? <SortTh k="status" sort={sort} onSort={sortBy}>Status</SortTh> : null}
                 {on("client") ? <SortTh k="client" sort={sort} onSort={sortBy}>Client / sender</SortTh> : null}
                 {on("esp") ? <SortTh k="esp" sort={sort} onSort={sortBy}>ESP</SortTh> : null}
                 {on("tags") ? <SortTh k="tags" sort={sort} onSort={sortBy}>Smartlead tags</SortTh> : null}
@@ -349,10 +356,10 @@ export function InboxesView({ inboxes, clients, plans, smartleadConnected, dryRu
                         <span className="flex items-center gap-1.5">
                           <ChevronRight size={14} className="flex-none text-faint transition-transform" style={{ transform: isOpen ? "rotate(90deg)" : undefined }} />
                           <Link href={`/domains?d=${g.domainId}&view=all`} className="strong hover:underline" onClick={(e) => e.stopPropagation()}>{g.domain}</Link>
-                          <span className="hidden xl:inline-flex"><StatusDot status={g.status} /></span>
                           {g.pending ? <span className="badge tone-info">{g.pending} pending</span> : null}
                         </span>
                       </td>
+                      {on("status") ? <td><StatusDot status={g.status} /></td> : null}
                       {on("client") ? <td><ClientCell name={g.clientName} hue={g.clientHue} /></td> : null}
                       {on("esp") ? <td>{g.esp ? <EspBadge type={g.esp} /> : <span className="zero">—</span>}</td> : null}
                       {on("tags") ? <td><Tags tags={g.tags} /></td> : null}
@@ -375,7 +382,7 @@ export function InboxesView({ inboxes, clients, plans, smartleadConnected, dryRu
                       {on("dns") ? <td><DnsCell dns={g.dns} /></td> : null}
                       {on("warmupState") ? <td><WarmupCell blocked={g.blocked} paused={g.paused} total={g.count} /></td> : null}
                       {on("blacklist") ? <td><BlacklistCell count={g.bl} listings={g.blListings} /></td> : null}
-                      {on("connection") ? <td>{g.disconnected ? <span className="ns-status tone-danger">{g.disconnected} disconnected</span> : <span className="text-muted">{g.count}/{g.count}</span>}</td> : null}
+                      {on("connection") ? <td>{g.disconnected ? <span className="ns-status tone-danger">{g.disconnected} disconnected</span> : <Ok title={`All ${g.count} inboxes connected`}>{g.count}/{g.count}</Ok>}</td> : null}
                       {on("campaigns") ? <td className="is-num">{g.campaigns ? int(g.campaigns) : <span className="zero">0</span>}</td> : null}
                       {on("sent7") ? <td className="is-num">{g.sent7 ? int(g.sent7) : <span className="zero">0</span>}</td> : null}
                       {on("reply") ? <td className="is-num"><Metric value={rate(g.replies7, g.sent7)} digits={2} /></td> : null}
@@ -391,6 +398,7 @@ export function InboxesView({ inboxes, clients, plans, smartleadConnected, dryRu
                             <ChangeBadge change={i.change} />
                           </span>
                         </td>
+                        {on("status") ? <td /> : null}
                         {on("client") ? <td className="text-muted">{i.senderName ?? <span className="zero">—</span>}</td> : null}
                         {on("esp") ? <td>{i.providerType ? <EspBadge type={i.providerType} /> : <span className="zero">—</span>}</td> : null}
                         {on("tags") ? <td><Tags tags={i.smartleadTags} /></td> : null}
@@ -410,7 +418,7 @@ export function InboxesView({ inboxes, clients, plans, smartleadConnected, dryRu
                         {on("dns") ? <td /> : null}
                         {on("warmupState") ? <td><WarmupCell blocked={warmupOf(i) === "blocked" ? 1 : 0} paused={warmupOf(i) === "paused" ? 1 : 0} total={1} reason={i.warmupBlockedReason} /></td> : null}
                         {on("blacklist") ? <td /> : null}
-                        {on("connection") ? <td>{i.status === "disconnected" ? <span className="ns-status tone-danger" title={i.connectError ?? undefined}>{i.connectError ? i.connectError.slice(0, 32) : "Disconnected"}</span> : <span className="text-success-ink">Connected</span>}</td> : null}
+                        {on("connection") ? <td>{i.status === "disconnected" ? <span className="ns-status tone-danger" title={i.connectError ?? undefined}>{i.connectError ? i.connectError.slice(0, 32) : "Disconnected"}</span> : <Ok>Connected</Ok>}</td> : null}
                         {on("campaigns") ? <td className="is-num">{i.campaigns ? int(i.campaigns) : <span className="zero">0</span>}</td> : null}
                         {on("sent7") ? <td className="is-num">{i.sent7 ? int(i.sent7) : <span className="zero">0</span>}</td> : null}
                         {on("reply") ? <td className="is-num"><Metric value={rate(i.replies7, i.sent7)} digits={2} /></td> : null}

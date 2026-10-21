@@ -64,6 +64,22 @@ export async function changeStatus(input: z.input<typeof changeStatusInput>): Pr
   }
 }
 
+/** Old data: records domains as replaced (burned) without running a replacement. */
+export async function markReplaced(input: { ids: string[]; note?: string }): Promise<ActionResult<{ changed: number }>> {
+  try {
+    const actor = await requireActor();
+    const v = z.object({ ids, note: z.string().trim().max(300).optional() }).parse(input);
+    const reason = `Marked as replaced${v.note ? `: ${v.note}` : ""}`;
+    const rows = await sql.begin((tx) => tx<{ id: string }[]>`
+      select (transition_domain(id, 'burned', ${reason}, ${actor}, null, true)).id from domains
+      where id in ${sql(v.ids)} and status not in ('draining', 'burned', 'resting')`);
+    refresh();
+    return { ok: true, data: { changed: rows.length } };
+  } catch (e) {
+    return fail(e);
+  }
+}
+
 const assignClientInput = z.object({ ids, clientId: z.uuid().nullable() });
 
 export async function assignClient(input: z.input<typeof assignClientInput>): Promise<ActionResult<{ changed: number }>> {

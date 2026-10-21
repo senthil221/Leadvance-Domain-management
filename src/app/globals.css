@@ -475,15 +475,15 @@ a.stat:hover { background: var(--surface-2); }
 .toolbar .search-input { width: 240px; max-width: 100%; }
 .toolbar .spacer-auto { margin-left: auto; }
 /* Reputation cell: bar, score, low-inbox count, always the same widths. */
-.rep { display: inline-grid; grid-template-columns: 34px 34px; align-items: center; justify-content: end; gap: 8px; font-variant-numeric: tabular-nums; }
-.rep.has-low { grid-template-columns: 34px 34px 22px; }
-.rep-bar { height: 4px; border-radius: 2px; background: var(--surface-3); overflow: hidden; }
-.rep-bar > span { display: block; height: 100%; border-radius: 2px; background: var(--dot); opacity: .85; }
+.rep { display: inline-grid; grid-template-columns: 36px; align-items: center; justify-content: end; gap: 8px; font-variant-numeric: tabular-nums; }
+.rep.has-low { grid-template-columns: 36px 46px; }
 .rep-val { text-align: right; color: var(--ink-soft); }
 .rep-val.is-warning { color: var(--warning-ink); font-weight: 500; }
 .rep-val.is-danger { color: var(--danger-ink); font-weight: 500; }
-.rep-low { justify-self: start; min-width: 22px; height: 16px; padding: 0 4px; border-radius: 4px; font-size: 11px; line-height: 16px; text-align: center; color: var(--danger-ink); background: var(--danger-soft-2); }
+.rep-low { justify-self: start; height: 16px; padding: 0 5px; border-radius: 4px; font-size: 11px; line-height: 16px; text-align: center; color: var(--danger-ink); background: var(--danger-soft-2); }
 .rep-low:empty { background: none; }
+.ok-cell { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); }
+.ok-cell::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: var(--success-solid); opacity: .8; }
 
 /* DNS record chips: SPF DKIM DMARC MX. */
 .dns { display: inline-flex; gap: 3px; }

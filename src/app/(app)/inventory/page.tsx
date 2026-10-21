@@ -40,7 +40,8 @@ async function InventoryContent() {
   await getCurrentUser();
   const [{ registrars, renewals, totals }, domains, clients, ht] = await Promise.all([getInventory(), listDomains(), listClients(), getHypertideSummary()]);
   const money = (c: number) => `${(c / 100).toLocaleString("en-US", { maximumFractionDigits: 0 })}`;
-  const life = { free: 0, setup: 0, active: 0, replaced: 0, retired: 0 };
+  const life = { active: 0, free: 0, replaced: 0 };
+  const setup = domains.filter((d) => d.status === "provisioning" || d.status === "warming").length;
   for (const d of domains) life[lifeOf(d)]++;
   const activeCapacity = domains.filter((d) => d.status === "active").reduce((a, d) => a + d.capacity, 0);
   const activeInboxes = domains.filter((d) => d.status === "active").reduce((a, d) => a + d.inboxCount, 0);
@@ -50,31 +51,26 @@ async function InventoryContent() {
 
   return (
     <>
-      <section className="stats is-5" aria-label="Inventory numbers">
+      <section className="stats" aria-label="Inventory numbers">
+        <Link href="/inventory" className="stat">
+          <span className="stat-label"><Dot tone="success" />Active</span>
+          <span className="stat-value">{int(life.active)}</span>
+          <span className="stat-foot">{int(activeInboxes)} inboxes · {int(activeCapacity)} emails / day{setup ? ` · ${setup} setting up` : ""}</span>
+        </Link>
         <Link href="/inventory?view=free" className="stat">
           <span className="stat-label"><Dot tone="faint" />Free</span>
           <span className="stat-value">{int(life.free)}</span>
           <span className="stat-foot">{weeksLeft == null ? "no replacements in 4 weeks" : `≈ ${Math.floor(weeksLeft)} weeks at ${weekly.toFixed(1)} a week`}</span>
         </Link>
-        <Link href="/inventory?view=setup" className="stat">
-          <span className="stat-label"><Dot tone="info" />Setting up</span>
-          <span className="stat-value">{int(life.setup)}</span>
-          <span className="stat-foot">{ht.inSetup ? `${ht.inSetup} paid on Hypertide, in setup` : "provisioning and warming"}</span>
-        </Link>
-        <Link href="/inventory?view=active" className="stat">
-          <span className="stat-label"><Dot tone="success" />Active</span>
-          <span className="stat-value">{int(life.active)}</span>
-          <span className="stat-foot">{int(activeInboxes)} inboxes · {int(activeCapacity)} emails / day</span>
-        </Link>
         <Link href="/inventory?view=replaced" className="stat">
           <span className="stat-label"><Dot tone="warning" />Replaced</span>
           <span className="stat-value">{int(life.replaced)}</span>
-          <span className="stat-foot">{int(ht.replacedLast28)} in the last 4 weeks · {int(life.retired)} other retired</span>
+          <span className="stat-foot">{int(ht.replacedLast28)} in the last 4 weeks</span>
         </Link>
         <div className="stat">
           <span className="stat-label">Owned · yearly cost</span>
           <span className="stat-value">{int(totals.owned)}</span>
-          <span className="stat-foot">{totals.annualCents ? `${money(totals.annualCents)} a year, excluding retired` : `across ${registrars.length} registrar${registrars.length === 1 ? "" : "s"}`}</span>
+          <span className="stat-foot">{totals.annualCents ? `${money(totals.annualCents)} a year, excluding replaced` : `across ${registrars.length} registrar${registrars.length === 1 ? "" : "s"}`}</span>
         </div>
       </section>
 

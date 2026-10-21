@@ -30,10 +30,9 @@ export async function supabaseServer() {
 // The signed-in user, or a redirect to /login. Reads the request, so callers
 // must sit inside a Suspense boundary.
 export async function getCurrentUser(): Promise<User> {
-  if (devEmail) {
-    await connection();
-    return { id: "dev", email: devEmail };
-  }
+  // Supabase reads the clock while loading the session, which prerendering forbids.
+  await connection();
+  if (devEmail) return { id: "dev", email: devEmail };
   const supabase = await supabaseServer();
   const { data } = await supabase.auth.getUser();
   if (!data.user?.email) redirect("/login");
