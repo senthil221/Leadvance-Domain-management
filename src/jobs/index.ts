@@ -2,6 +2,8 @@ import type postgres from "postgres";
 import { createHypertide, type Hypertide, type SmartleadCredentials } from "../integrations/hypertide";
 import { createPorkbun, type Porkbun } from "../integrations/porkbun";
 import { createSmartlead, type Smartlead } from "../integrations/smartlead";
+import { createSmartleadApp, type SmartleadApp } from "../integrations/smartlead-app";
+import { syncBlacklists } from "./blacklist";
 import { syncPorkbunDomains } from "./porkbun-sync";
 import { syncHypertideOrders } from "./hypertide-sync";
 import { processInboxChanges, runDuePlans } from "./inbox-settings";
@@ -15,6 +17,7 @@ import { syncAccounts, syncCampaigns, syncClients, syncDomainStats, dayIn } from
 export type JobContext = {
   sql: postgres.Sql;
   smartlead: Smartlead | null;
+  smartleadApp: SmartleadApp | null;
   porkbun: Porkbun | null;
   hypertide: Hypertide | null;
   hypertideCredentials: Partial<SmartleadCredentials>;
@@ -90,6 +93,12 @@ export const JOBS: Job[] = [
     run: needsSmartlead(({ sql, smartlead, timezone }) => syncDomainStats(sql, smartlead, timezone)),
   },
   {
+    name: "smartlead-blacklists",
+    label: "Smartlead blacklist scan",
+    everyMinutes: 360,
+    run: async ({ sql, smartleadApp }) => (smartleadApp ? syncBlacklists(sql, smartleadApp) : { skipped: "SMARTLEAD_JWT not set" }),
+  },
+  {
     name: "porkbun-domains",
     label: "Porkbun domains",
     everyMinutes: 360,
@@ -136,6 +145,7 @@ export async function jobContext(sql: postgres.Sql): Promise<JobContext> {
     porkbun: pbKey && pbSecret ? createPorkbun({ apiKey: pbKey, secretKey: pbSecret, sql, dryRun }) : null,
     timezone: (tz?.tz as string) || "UTC",
     smartlead: apiKey ? createSmartlead({ apiKey, sql, dryRun }) : null,
+    smartleadApp: process.env.SMARTLEAD_JWT ? createSmartleadApp({ jwt: process.env.SMARTLEAD_JWT.trim().replace(/^bearer\s+/i, ""), sql, dryRun }) : null,
   };
 }
 

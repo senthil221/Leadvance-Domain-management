@@ -92,46 +92,72 @@ export async function processNameserverRequests(sql: Sql, ctx: NsContext, limit 
   return { requests: claimed.length, ...tally };
 }
 
+export type Registry = { ns: string[]; registered: string | null };
+export type Records = { spf: boolean; dkim: boolean; dmarc: boolean; mx: boolean };
+
 /**
- * Current nameservers for every domain still in use, oldest check first.
- * Public DNS answers for healthy domains at any registrar. When it can't
- * (SERVFAIL: the registry points at nameservers that don't serve the zone),
- * the registry's own record (RDAP) says where the domain points, and the
- * domain is flagged as not answering. Porkbun's API is the last resort.
+ * Nameservers, DNS records and registration date for every domain still in
+ * use, oldest check first.
+ * - Public DNS answers for healthy domains at any registrar. When it can't
+ *   (SERVFAIL: the registry points at nameservers that don't serve the zone),
+ *   the registry's own record (RDAP) says where it points, and the domain is
+ *   flagged as not answering. Porkbun's API is the last resort.
+ * - Answering domains get their SPF, DKIM, DMARC and MX records checked.
+ * - Domains whose registrar gave no purchase date get one from RDAP (domain age).
  */
-export async function checkNameservers(sql: Sql, porkbun: Porkbun | null, batch = 150, lookup = dnsLookup, registry = rdapLookup) {
+export async function checkNameservers(
+  sql: Sql, porkbun: Porkbun | null, batch = 150,
+  lookup = dnsLookup, registry: (name: string) => Promise<Registry> = rdapLookup, records: (name: string, esps: string[]) => Promise<Records> = recordsLookup,
+) {
   const due = await sql`
-    select d.id, d.name, v.name as registrar, d.registrar_api_access as apiaccess
+    select d.id, d.name, v.name as registrar, d.registrar_api_access as apiaccess,
+      (d.purchased_at is null and d.registered_at is null) as needsage,
+      coalesce((select array_agg(distinct i.provider_type) from inboxes i where i.domain_id = d.id and i.provider_type is not null), '{}') as esps
     from domains d left join vendors v on v.id = d.registrar_id
     where d.status not in ('burned', 'resting')
     order by d.nameservers_checked_at nulls first, d.name
     limit ${batch}`;
-  let checked = 0, empty = 0, notAnswering = 0, failed = 0;
+  let checked = 0, notAnswering = 0, empty = 0, failed = 0, dnsMissing = 0;
   const queue = [...due];
   const worker = async () => {
     for (let d = queue.shift(); d; d = queue.shift()) {
       const name = d.name as string;
       let ns: string[] | null = null;
       let answering: boolean | null = null;
+      let reg: Registry | null = null;
       try {
         ns = await lookup(name);
         answering = ns.length > 0;
       } catch {
-        ns = await registry(name).catch(() => null);
+        reg = await registry(name).catch(() => null);
+        ns = reg?.ns ?? null;
         if (ns?.length) answering = false;
         else if (porkbun && d.registrar === "Porkbun" && d.apiaccess !== false) ns = await porkbun.getNs(name).catch(() => null);
       }
+      if (d.needsage && !reg) reg = await registry(name).catch(() => null);
+      const rec = answering ? await records(name, d.esps as string[]).catch(() => null) : null;
+
       if (ns === null) failed++;
       else if (answering === false) notAnswering++;
       else if (!ns.length) empty++;
       else checked++;
-      await sql`update domains set nameservers = coalesce(${ns}::text[], nameservers),
-          nameservers_answering = coalesce(${answering}::boolean, nameservers_answering), nameservers_checked_at = now()
+      if (rec && !(rec.spf && rec.dkim && rec.dmarc && rec.mx)) dnsMissing++;
+
+      await sql`update domains set
+          nameservers = coalesce(${ns}::text[], nameservers),
+          nameservers_answering = coalesce(${answering}::boolean, nameservers_answering),
+          nameservers_checked_at = now(),
+          registered_at = coalesce(${reg?.registered ?? null}::date, registered_at),
+          dns_spf = case when ${rec !== null} then ${rec?.spf ?? null}::boolean else dns_spf end,
+          dns_dkim = case when ${rec !== null} then ${rec?.dkim ?? null}::boolean else dns_dkim end,
+          dns_dmarc = case when ${rec !== null} then ${rec?.dmarc ?? null}::boolean else dns_dmarc end,
+          dns_mx = case when ${rec !== null} then ${rec?.mx ?? null}::boolean else dns_mx end,
+          dns_checked_at = case when ${rec !== null} then now() else dns_checked_at end
         where id = ${d.id}`;
     }
   };
   await Promise.all(Array.from({ length: 8 }, worker));
-  return { checked, notAnswering, empty, failed };
+  return { checked, notAnswering, empty, failed, dnsMissing };
 }
 
 const resolver = new Resolver({ timeout: 4000, tries: 2 });
@@ -148,6 +174,39 @@ async function dnsLookup(name: string): Promise<string[]> {
   }
 }
 
+const txt = (name: string) => resolver.resolveTxt(name).then((r) => r.map((parts) => parts.join("")), () => [] as string[]);
+
+// DKIM keys live under a selector the mail host picks: Microsoft 365 uses
+// selector1/selector2, Google "google"; the rest are common defaults.
+const SELECTORS: Record<string, string[]> = { OUTLOOK: ["selector1", "selector2"], GMAIL: ["google"], GOOGLE: ["google"] };
+const FALLBACK_SELECTORS = ["selector1", "selector2", "google", "default", "s1", "s2", "k1", "dkim", "mail"];
+
+async function hasDkim(name: string, esps: string[]) {
+  const selectors = [...new Set([...esps.flatMap((e) => SELECTORS[e] ?? []), ...FALLBACK_SELECTORS])];
+  for (const s of selectors) {
+    const host = `${s}._domainkey.${name}`;
+    if (await resolver.resolveCname(host).then((r) => r.length > 0, () => false)) return true;
+    if ((await txt(host)).some((t) => /p=/i.test(t))) return true;
+  }
+  return false;
+}
+
+/** Whether the records cold email needs are published. */
+export async function recordsLookup(name: string, esps: string[] = []): Promise<Records> {
+  const [root, dmarc, mx, dkim] = await Promise.all([
+    txt(name),
+    txt(`_dmarc.${name}`),
+    resolver.resolveMx(name).then((r) => r.length > 0, () => false),
+    hasDkim(name, esps),
+  ]);
+  return {
+    spf: root.some((t) => /^v=spf1\b/i.test(t.trim())),
+    dmarc: dmarc.some((t) => /^v=dmarc1\b/i.test(t.trim())),
+    mx,
+    dkim,
+  };
+}
+
 // IANA's list of RDAP servers per TLD, fetched once per process.
 let rdapServers: Promise<Map<string, string>> | null = null;
 function rdapBase(tld: string) {
@@ -162,12 +221,16 @@ function rdapBase(tld: string) {
   return rdapServers.then((m) => m.get(tld) ?? null);
 }
 
-/** The nameservers the registry delegates to, or [] if its RDAP lists none. */
-async function rdapLookup(name: string): Promise<string[]> {
+/** The registry's record: delegated nameservers and registration date. */
+async function rdapLookup(name: string): Promise<Registry> {
   const base = await rdapBase(name.slice(name.lastIndexOf(".") + 1));
   if (!base) throw new Error("no RDAP server for this TLD");
   const res = await fetch(`${base.replace(/\/?$/, "/")}domain/${name}`, { headers: { accept: "application/rdap+json" }, signal: AbortSignal.timeout(10_000) });
   if (!res.ok) throw new Error(`RDAP HTTP ${res.status}`);
-  const j = (await res.json()) as { nameservers?: { ldhName?: string }[] };
-  return (j.nameservers ?? []).map((n) => String(n.ldhName ?? "").toLowerCase().replace(/\.$/, "")).filter(Boolean).sort();
+  const j = (await res.json()) as { nameservers?: { ldhName?: string }[]; events?: { eventAction?: string; eventDate?: string }[] };
+  const reg = (j.events ?? []).find((e) => e.eventAction === "registration")?.eventDate;
+  return {
+    ns: (j.nameservers ?? []).map((n) => String(n.ldhName ?? "").toLowerCase().replace(/\.$/, "")).filter(Boolean).sort(),
+    registered: reg && !Number.isNaN(Date.parse(reg)) ? reg.slice(0, 10) : null,
+  };
 }

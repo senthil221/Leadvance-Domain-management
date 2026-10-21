@@ -485,6 +485,12 @@ a.stat:hover { background: var(--surface-2); }
 .rep-low { justify-self: start; min-width: 22px; height: 16px; padding: 0 4px; border-radius: 4px; font-size: 11px; line-height: 16px; text-align: center; color: var(--danger-ink); background: var(--danger-soft-2); }
 .rep-low:empty { background: none; }
 
+/* DNS record chips: SPF DKIM DMARC MX. */
+.dns { display: inline-flex; gap: 3px; }
+.dns-chip { height: 18px; padding: 0 5px; border-radius: 4px; font-size: 10.5px; line-height: 18px; font-weight: 500; letter-spacing: .02em; color: var(--faint); background: color-mix(in srgb, var(--ink) 5%, transparent); }
+.dns-chip.is-ok { color: var(--success-ink); background: var(--success-soft-2); }
+.dns-chip.is-bad { color: var(--danger-ink); background: var(--danger-soft-2); text-decoration: line-through; text-decoration-thickness: 1px; }
+
 /* Nameserver cell: host, then a quiet status word. */
 .ns-cell { display: inline-flex; align-items: center; gap: 7px; min-width: 0; }
 .ns-host { color: var(--ink-soft); }

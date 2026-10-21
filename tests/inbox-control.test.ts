@@ -8,6 +8,8 @@ import { processInboxChanges, runDuePlans, runPlan } from "../src/jobs/inbox-set
 import { checkNameservers } from "../src/jobs/nameservers";
 import { clientsFromTags } from "../src/jobs/smartlead-sync";
 import { distribute, seeded } from "../src/lib/distribute";
+import { jwtProblem, readBlacklist, type SmartleadApp } from "../src/integrations/smartlead-app";
+import { syncBlacklists } from "../src/jobs/blacklist";
 import { loadMigrations } from "../scripts/migrations";
 
 describe("distribute", () => {
@@ -148,17 +150,61 @@ describe("nameserver lookups", () => {
       if (name === "broken.com") throw new Error("SERVFAIL");
       return ["ada.ns.cloudflare.com", "bob.ns.cloudflare.com"];
     });
-    const r = await checkNameservers(sql, null, 10, lookup, async () => { throw new Error("no RDAP"); });
-    expect(r).toEqual({ checked: 1, notAnswering: 0, empty: 0, failed: 1 });
+    const allGood = async () => ({ spf: true, dkim: true, dmarc: true, mx: true });
+    const r = await checkNameservers(sql, null, 10, lookup, async () => { throw new Error("no RDAP"); }, allGood);
+    expect(r).toEqual({ checked: 1, notAnswering: 0, empty: 0, failed: 1, dnsMissing: 0 });
     expect((await sql`select nameservers from domains where name = 'send.com'`)[0].nameservers).toEqual(["ada.ns.cloudflare.com", "bob.ns.cloudflare.com"]);
     expect((await sql`select nameservers from domains where name = 'broken.com'`)[0].nameservers).toEqual(["old.ns.com"]);
   });
 
   it("asks the registry when DNS fails and flags the domain as not answering", async () => {
     const lookup = vi.fn(async () => { throw Object.assign(new Error("SERVFAIL"), { code: "ESERVFAIL" }); });
-    const r = await checkNameservers(sql, null, 10, lookup, async () => ["ns1.dnsimple.com", "ns2.dnsimple-edge.net"]);
+    const records = vi.fn(async () => ({ spf: true, dkim: true, dmarc: true, mx: true }));
+    const r = await checkNameservers(sql, null, 10, lookup, async () => ({ ns: ["ns1.dnsimple.com", "ns2.dnsimple-edge.net"], registered: null }), records);
+    expect(records).not.toHaveBeenCalled();
     expect(r).toMatchObject({ notAnswering: 1 });
     const [d] = await sql`select nameservers, nameservers_answering from domains where name = 'send.com'`;
     expect(d).toEqual({ nameservers: ["ns1.dnsimple.com", "ns2.dnsimple-edge.net"], nameservers_answering: false });
+  });
+
+  it("records missing DNS records and the registration date for domain age", async () => {
+    const lookup = vi.fn(async () => ["ada.ns.cloudflare.com", "bob.ns.cloudflare.com"]);
+    const registry = vi.fn(async () => ({ ns: [], registered: "2025-03-04" }));
+    const records = vi.fn(async () => ({ spf: true, dkim: false, dmarc: true, mx: true }));
+    const r = await checkNameservers(sql, null, 10, lookup, registry, records);
+    expect(r).toMatchObject({ checked: 1, dnsMissing: 1 });
+    const [d] = await sql`select dns_spf, dns_dkim, dns_dmarc, dns_mx, to_char(registered_at, 'YYYY-MM-DD') as reg from domains where name = 'send.com'`;
+    expect(d).toEqual({ dns_spf: true, dns_dkim: false, dns_dmarc: true, dns_mx: true, reg: "2025-03-04" });
+  });
+});
+
+describe("Smartlead token features", () => {
+  const token = (exp: number) => `h.${Buffer.from(JSON.stringify({ exp })).toString("base64url")}.s`;
+  it("explains a broken or expired token without showing it", () => {
+    expect(jwtProblem("abc")).toMatch(/incomplete/);
+    expect(jwtProblem(token(1_000), 2_000_000)).toMatch(/expired on 1970-01-01/);
+    expect(jwtProblem(token(Date.now() / 1000 + 3600))).toBeNull();
+  });
+
+  it("reads a campaign's blacklist scan", () => {
+    const r = readBlacklist([
+      { domain: { domain: "Send.com", blacklisted: [{ name: "Spamhaus DBL" }], summary: { totalTests: 90 } }, ip: { ip: "1.2.3.4", blacklisted: [] } },
+      { domain: { domain: "clean.com", blacklisted: [] }, ip: { blacklisted: [{ name: "Barracuda" }] } },
+    ]);
+    expect(r).toEqual([
+      { domain: "send.com", ip: "1.2.3.4", domainCount: 1, ipCount: 0, listings: [{ kind: "domain", list: "Spamhaus DBL" }] },
+      { domain: "clean.com", ip: null, domainCount: 0, ipCount: 1, listings: [{ kind: "ip", list: "Barracuda" }] },
+    ]);
+  });
+
+  it("stores blacklist status per domain from the campaigns still sending", async () => {
+    await sql`insert into campaigns (id, name, status) values (1, 'A', 'ACTIVE'), (2, 'B', 'COMPLETED')`;
+    const app = { dryRun: false, blacklist: vi.fn(async () => [{ domain: "send.com", ip: null, domainCount: 2, ipCount: 1, listings: [] }]) } as unknown as SmartleadApp;
+    const r = await syncBlacklists(sql, app);
+    expect(r).toEqual({ campaigns: 1, domains: 1, listed: 1, failed: 0 });
+    expect(app.blacklist).toHaveBeenCalledWith(1);
+    const [d] = await sql`select blacklist_domain_count as dc, blacklist_ip_count as ic from domains where name = 'send.com'`;
+    expect(d).toEqual({ dc: 2, ic: 1 });
+    await sql`truncate campaigns cascade`;
   });
 });

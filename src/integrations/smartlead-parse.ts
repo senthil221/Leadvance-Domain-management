@@ -41,6 +41,9 @@ export type SmartleadAccount = {
   warmupStatus: string | null;
   warmupMin: number | null;
   warmupReplyRate: number | null;
+  createdAt: string | null;
+  warmupBlockedReason: string | null;
+  connectError: string | null;
 };
 
 export function parseAccount(raw: unknown): SmartleadAccount | null {
@@ -81,6 +84,9 @@ export function parseAccount(raw: unknown): SmartleadAccount | null {
     warmupStatus: warmupStatus ?? null,
     warmupMin: num(w.warmup_min_count),
     warmupReplyRate: num(w.reply_rate, w.reply_rate_percentage),
+    createdAt: str(a.created_at) && !Number.isNaN(Date.parse(str(a.created_at)!)) ? str(a.created_at) : null,
+    warmupBlockedReason: str(w.blocked_reason),
+    connectError: !smtpOk || !imapOk ? (str(a.smtp_failure_error, a.imap_failure_error) ?? (smtpOk ? "IMAP login failed" : "SMTP login failed")).slice(0, 300) : null,
   };
 }
 

@@ -1,6 +1,9 @@
 "use client";
 
-import { ChevronRight, ChevronsDownUp, ChevronsUpDown, Inbox, Info, Search, Settings2, Shuffle, X } from "lucide-react";
+import { ChevronRight, ChevronsDownUp, ChevronsUpDown, Inbox, Info, PlugZap, Search, Settings2, ShieldCheck, Shuffle, X } from "lucide-react";
+import { useTransition } from "react";
+import { toast } from "sonner";
+import { reconnectInboxes, validateDns } from "@/app/actions";
 import Link from "next/link";
 import { Fragment, useMemo, useState } from "react";
 import { ColumnsMenu, useColumns, type ColumnDef } from "@/components/Columns";
@@ -28,6 +31,7 @@ type Group = {
   avgRep: number | null; minRep: number | null; lowRep: number; campaigns: number;
   sent7: number; replies7: number; human7: number; bounces7: number;
   sentToday: number; avgWait: number | null; pending: number; tags: string[]; esp: string | null;
+  ageDays: number | null; dns: Dns; bl: number | null; blListings: string[]; blocked: number; paused: number; disconnected: number;
 };
 
 const avg = (xs: number[]) => (xs.length ? xs.reduce((a, b) => a + b, 0) / xs.length : null);
@@ -59,17 +63,29 @@ function group(rows: InboxListRow[]): Group[] {
       avgWait: avg(list.filter((i) => i.minWaitMins != null).map((i) => i.minWaitMins!)),
       pending: list.filter((i) => i.change?.status === "pending" || i.change?.status === "running").length,
       tags: [...new Set(list.flatMap((i) => i.smartleadTags))],
+      ageDays: f.domainBornAt ? Math.floor((Date.now() - new Date(f.domainBornAt).getTime()) / 86_400_000) : null,
+      dns: dnsOf(f),
+      bl: f.blDomain == null && f.blIp == null ? null : (f.blDomain ?? 0) + (f.blIp ?? 0),
+      blListings: (f.blListings ?? []).map((l) => `${l.list}${l.kind === "ip" ? " (IP)" : ""}`),
+      blocked: list.filter((i) => warmupOf(i) === "blocked").length,
+      paused: list.filter((i) => warmupOf(i) === "paused").length,
+      disconnected: list.filter((i) => i.status === "disconnected").length,
       esp: (() => { const t = [...new Set(list.map((i) => i.providerType).filter(Boolean))]; return t.length === 1 ? t[0] : t.length ? "MIXED" : null; })(),
     };
   });
 }
 
-type SortKey = "domain" | "client" | "esp" | "tags" | "count" | "avgWarmup" | "avgLimit" | "capacity" | "sentToday" | "avgWait" | "avgRep" | "campaigns" | "sent7" | "replyRate" | "bounceRate";
+type SortKey = "domain" | "client" | "esp" | "tags" | "age" | "dnsMissing" | "warmupState" | "blacklist" | "connection" | "count" | "avgWarmup" | "avgLimit" | "capacity" | "sentToday" | "avgWait" | "avgRep" | "campaigns" | "sent7" | "replyRate" | "bounceRate";
 const sortValue = (g: Group, k: SortKey): string | number | null => {
   switch (k) {
     case "client": return g.clientName?.toLowerCase() ?? null;
     case "esp": return g.esp;
     case "tags": return g.tags.join(", ").toLowerCase() || null;
+    case "age": return g.ageDays;
+    case "dnsMissing": return g.dns.state === "unknown" ? null : g.dns.state === "nozone" ? 9 : g.dns.missing.length;
+    case "warmupState": return g.blocked * 100 + g.paused;
+    case "blacklist": return g.bl;
+    case "connection": return g.disconnected;
     case "replyRate": return rate(g.replies7, g.sent7);
     case "bounceRate": return rate(g.bounces7, g.sent7);
     default: return g[k];
@@ -80,10 +96,12 @@ const n0 = (v: number | null, digits = 0) => (v == null ? <span className="zero"
 
 const COLUMNS: ColumnDef[] = [
   { key: "client", label: "Client / sender" }, { key: "esp", label: "ESP" }, { key: "tags", label: "Smartlead tags" },
-  { key: "count", label: "Inboxes" }, { key: "warmup", label: "Warmup / day" }, { key: "limit", label: "Limit / inbox" },
+  { key: "count", label: "Inboxes" }, { key: "warmup", label: "Warmup / day" }, { key: "limit", label: "Limit / inbox", hidden: true },
   { key: "capacity", label: "Per day" }, { key: "today", label: "Sent today" }, { key: "gap", label: "Gap", hidden: true },
   { key: "rep", label: "Reputation" }, { key: "campaigns", label: "Campaigns", hidden: true }, { key: "sent7", label: "Sent 7d" },
   { key: "reply", label: "Reply rate" }, { key: "bounce", label: "Bounce rate" },
+  { key: "age", label: "Domain age" }, { key: "dns", label: "DNS" }, { key: "warmupState", label: "Warmup status" },
+  { key: "blacklist", label: "Blacklist" }, { key: "connection", label: "Connection" },
 ];
 
 const espLabel = (t: string) => (t === "OUTLOOK" ? "Outlook" : t === "GMAIL" || t === "GOOGLE" ? "Google" : t === "MIXED" ? "Mixed" : t === "SMTP" ? "SMTP" : t.charAt(0) + t.slice(1).toLowerCase());
@@ -96,6 +114,37 @@ function Tags({ tags }: { tags: string[] }) {
   return <span className="flex items-center gap-1">{tags.slice(0, 2).map((t) => <span key={t} className="badge">{t}</span>)}{tags.length > 2 ? <span className="badge" title={tags.join(", ")}>+{tags.length - 2}</span> : null}</span>;
 }
 
+type Dns = { state: "ok" | "missing" | "nozone" | "unknown"; missing: string[]; checks: [string, boolean | null][] };
+function dnsOf(i: InboxListRow): Dns {
+  if (i.nsAnswering === false) return { state: "nozone", missing: [], checks: [] };
+  const checks: [string, boolean | null][] = [["SPF", i.dnsSpf], ["DKIM", i.dnsDkim], ["DMARC", i.dnsDmarc], ["MX", i.dnsMx]];
+  if (checks.every(([, v]) => v == null)) return { state: "unknown", missing: [], checks };
+  const missing = checks.filter(([, v]) => v === false).map(([k]) => k);
+  return { state: missing.length ? "missing" : "ok", missing, checks };
+}
+const warmupOf = (i: InboxListRow) => (i.warmupBlockedReason || /BLOCK/i.test(i.warmupStatus ?? "") ? "blocked" : i.warmupEnabled === false || /INACTIVE|PAUSE/i.test(i.warmupStatus ?? "") ? "paused" : "active");
+const ageLabel = (days: number | null) => (days == null ? null : days < 60 ? `${days}d` : days < 730 ? `${Math.round(days / 30)}mo` : `${(days / 365).toFixed(1)}y`);
+
+function DnsCell({ dns }: { dns: Dns }) {
+  if (dns.state === "nozone") return <span className="ns-status tone-danger" title="The domain's nameservers have no zone for it: nothing resolves">No DNS zone</span>;
+  if (dns.state === "unknown") return <span className="zero" title="Not checked yet">—</span>;
+  return (
+    <span className="dns" title={dns.missing.length ? `Missing: ${dns.missing.join(", ")}` : "SPF, DKIM, DMARC and MX all published"}>
+      {dns.checks.map(([k, v]) => <span key={k} className={`dns-chip${v === true ? " is-ok" : v === false ? " is-bad" : ""}`}>{k}</span>)}
+    </span>
+  );
+}
+function WarmupCell({ blocked, paused, total, reason }: { blocked: number; paused: number; total: number; reason?: string | null }) {
+  if (blocked) return <span className="ns-status tone-danger" title={reason ?? "Smartlead blocked warmup"}>{total > 1 ? `${blocked} blocked` : "Blocked"}</span>;
+  if (paused) return <span className="ns-status tone-warning">{total > 1 ? `${paused} paused` : "Paused"}</span>;
+  return <span className="text-success-ink">Active</span>;
+}
+function BlacklistCell({ count, listings }: { count: number | null; listings: string[] }) {
+  if (count == null) return <span className="zero" title="Not scanned yet. The scan needs a Smartlead token (SMARTLEAD_JWT) and runs every 6 hours.">—</span>;
+  if (count === 0) return <span className="text-success-ink">Clean</span>;
+  return <span className="ns-status tone-danger" title={listings.join(", ") || undefined}>Listed on {count}</span>;
+}
+
 function ChangeBadge({ change }: { change: InboxListRow["change"] }) {
   if (!change) return null;
   const what = Object.entries(change.changes).map(([k, v]) => `${k.replace(/_/g, " ")} ${v}`).join(", ");
@@ -105,8 +154,10 @@ function ChangeBadge({ change }: { change: InboxListRow["change"] }) {
   return null;
 }
 
-export function InboxesView({ inboxes, clients, plans, smartleadConnected, dryRun, timezone }: {
+export function InboxesView({ inboxes, clients, plans, smartleadConnected, dryRun, timezone, appProblem }: {
   inboxes: InboxListRow[]; clients: ClientRow[]; plans: PlanRow[]; smartleadConnected: boolean; dryRun: boolean; timezone: string;
+  /** Why the Smartlead token can't be used, or null when it can. */
+  appProblem: string | null;
 }) {
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [editOpen, setEditOpen] = useState(false);
@@ -116,6 +167,10 @@ export function InboxesView({ inboxes, clients, plans, smartleadConnected, dryRu
   const [sort, setSort] = useState<{ key: SortKey; dir: 1 | -1 }>({ key: "domain", dir: 1 });
   const [open, setOpen] = useState<Set<string>>(new Set());
   const [esp, setEsp] = useState("");
+  const [issue, setIssue] = useState("");
+  const [acting, startAct] = useTransition();
+  const act = (fn: () => Promise<{ ok: true; data: { message: string } } | { ok: false; error: string }>) =>
+    startAct(async () => { const r = await fn(); if (r.ok) toast.success(r.data.message); else toast.error(r.error); });
   const cols = useColumns("inboxes", COLUMNS);
   const on = cols.on;
   const esps = useMemo(() => [...new Set(inboxes.map((i) => i.providerType).filter((x): x is string => Boolean(x)))].sort(), [inboxes]);
@@ -130,14 +185,20 @@ export function InboxesView({ inboxes, clients, plans, smartleadConnected, dryRu
     const match = TABS.find((t) => t.key === tab)!.match;
     const needle = q.trim().toLowerCase();
     const shown = base.filter((i) => match(i) && (!needle || i.email.includes(needle) || i.domain.includes(needle) || i.senderName?.toLowerCase().includes(needle) || i.smartleadTags.some((t) => t.toLowerCase().includes(needle))));
-    return group(shown).sort((a, b) => {
+    return group(shown).filter((g) =>
+      !issue ||
+      (issue === "dns" && (g.dns.state === "missing" || g.dns.state === "nozone")) ||
+      (issue === "blacklisted" && (g.bl ?? 0) > 0) ||
+      (issue === "blocked" && g.blocked + g.paused > 0) ||
+      (issue === "disconnected" && g.disconnected > 0) ||
+      (issue === "young" && g.ageDays != null && g.ageDays < 30)).sort((a, b) => {
       const x = sortValue(a, sort.key), y = sortValue(b, sort.key);
       if (x === y) return a.domain.localeCompare(b.domain);
       if (x === null) return 1;
       if (y === null) return -1;
       return (x < y ? -1 : 1) * sort.dir;
     });
-  }, [base, tab, q, sort]);
+  }, [base, tab, q, sort, issue]);
 
   const all = useMemo(() => groups.flatMap((g) => g.inboxes), [groups]);
   const totals = useMemo(() => {
@@ -216,6 +277,20 @@ export function InboxesView({ inboxes, clients, plans, smartleadConnected, dryRu
         <button type="button" className="btn btn-sm" aria-label={allOpen ? "Collapse all" : "Expand all"} title={allOpen ? "Collapse all" : "Expand all"} onClick={() => setOpen(allOpen ? new Set() : new Set(groups.map((g) => g.domainId)))}>
           {allOpen ? <ChevronsDownUp size={14} /> : <ChevronsUpDown size={14} />}
         </button>
+        <select className="select" style={{ width: 150 }} value={issue} onChange={(e) => setIssue(e.target.value)} aria-label="Filter by issue">
+          <option value="">All domains</option>
+          <option value="dns">DNS records missing</option>
+          <option value="blacklisted">Blacklisted</option>
+          <option value="blocked">Warmup blocked or paused</option>
+          <option value="disconnected">Disconnected inboxes</option>
+          <option value="young">Under 30 days old</option>
+        </select>
+        <button type="button" className="btn btn-sm" disabled={acting} title="Check SPF, DKIM, DMARC and MX now (selected domains, or all sending domains)" onClick={() => act(() => validateDns(selectedDomains))}>
+          <ShieldCheck size={14} /> Validate DNS{selectedDomains.length ? ` (${selectedDomains.length})` : ""}
+        </button>
+        <button type="button" className="btn btn-sm" disabled={acting || Boolean(appProblem)} title={appProblem ?? "Ask Smartlead to retry the login of every disconnected inbox"} onClick={() => act(reconnectInboxes)}>
+          <PlugZap size={14} /> Reconnect{inboxes.filter((i) => i.status === "disconnected").length ? ` (${inboxes.filter((i) => i.status === "disconnected").length})` : ""}
+        </button>
         <ColumnsMenu cols={cols} />
       </div>
 
@@ -240,6 +315,11 @@ export function InboxesView({ inboxes, clients, plans, smartleadConnected, dryRu
                 {on("today") ? <SortTh k="sentToday" sort={sort} onSort={sortBy} num title="Campaign emails sent today, as Smartlead counts them">Today</SortTh> : null}
                 {on("gap") ? <SortTh k="avgWait" sort={sort} onSort={sortBy} num title="Minimum minutes between campaign emails">Gap</SortTh> : null}
                 {on("rep") ? <SortTh k="avgRep" sort={sort} onSort={sortBy} num>Reputation</SortTh> : null}
+                {on("age") ? <SortTh k="age" sort={sort} onSort={sortBy} num>Age</SortTh> : null}
+                {on("dns") ? <SortTh k="dnsMissing" sort={sort} onSort={sortBy}>DNS</SortTh> : null}
+                {on("warmupState") ? <SortTh k="warmupState" sort={sort} onSort={sortBy}>Warmup</SortTh> : null}
+                {on("blacklist") ? <SortTh k="blacklist" sort={sort} onSort={sortBy}>Blacklist</SortTh> : null}
+                {on("connection") ? <SortTh k="connection" sort={sort} onSort={sortBy}>Connection</SortTh> : null}
                 {on("campaigns") ? <SortTh k="campaigns" sort={sort} onSort={sortBy} num>Campaigns</SortTh> : null}
                 {on("sent7") ? <SortTh k="sent7" sort={sort} onSort={sortBy} num>Sent 7d</SortTh> : null}
                 {on("reply") ? <SortTh k="replyRate" sort={sort} onSort={sortBy} num>Reply</SortTh> : null}
@@ -284,6 +364,11 @@ export function InboxesView({ inboxes, clients, plans, smartleadConnected, dryRu
                           <Rep value={g.avgRep} low={g.lowRep} />
                         </td>
                       ) : null}
+                      {on("age") ? <td className="is-num" title={g.ageDays != null ? `${g.ageDays} days since registration` : "Registration date not known yet"}>{ageLabel(g.ageDays) ?? <span className="zero">—</span>}</td> : null}
+                      {on("dns") ? <td><DnsCell dns={g.dns} /></td> : null}
+                      {on("warmupState") ? <td><WarmupCell blocked={g.blocked} paused={g.paused} total={g.count} /></td> : null}
+                      {on("blacklist") ? <td><BlacklistCell count={g.bl} listings={g.blListings} /></td> : null}
+                      {on("connection") ? <td>{g.disconnected ? <span className="ns-status tone-danger">{g.disconnected} disconnected</span> : <span className="text-muted">{g.count}/{g.count}</span>}</td> : null}
                       {on("campaigns") ? <td className="is-num">{g.campaigns ? int(g.campaigns) : <span className="zero">0</span>}</td> : null}
                       {on("sent7") ? <td className="is-num">{g.sent7 ? int(g.sent7) : <span className="zero">0</span>}</td> : null}
                       {on("reply") ? <td className="is-num"><Metric value={rate(g.replies7, g.sent7)} digits={2} /></td> : null}
@@ -314,6 +399,11 @@ export function InboxesView({ inboxes, clients, plans, smartleadConnected, dryRu
                         {on("today") ? <td className="is-num">{i.dailySent ? int(i.dailySent) : <span className="zero">0</span>}</td> : null}
                         {on("gap") ? <td className="is-num">{i.minWaitMins != null ? `${i.minWaitMins}m` : <span className="zero">—</span>}</td> : null}
                         {on("rep") ? <td className="is-num"><Rep value={i.warmupReputation} low={0} /></td> : null}
+                        {on("age") ? <td className="is-num text-muted" title="Inbox added to Smartlead">{i.smartleadCreatedAt ? ageLabel(Math.floor((Date.now() - new Date(i.smartleadCreatedAt).getTime()) / 86_400_000)) : <span className="zero">—</span>}</td> : null}
+                        {on("dns") ? <td /> : null}
+                        {on("warmupState") ? <td><WarmupCell blocked={warmupOf(i) === "blocked" ? 1 : 0} paused={warmupOf(i) === "paused" ? 1 : 0} total={1} reason={i.warmupBlockedReason} /></td> : null}
+                        {on("blacklist") ? <td /> : null}
+                        {on("connection") ? <td>{i.status === "disconnected" ? <span className="ns-status tone-danger" title={i.connectError ?? undefined}>{i.connectError ? i.connectError.slice(0, 32) : "Disconnected"}</span> : <span className="text-success-ink">Connected</span>}</td> : null}
                         {on("campaigns") ? <td className="is-num">{i.campaigns ? int(i.campaigns) : <span className="zero">0</span>}</td> : null}
                         {on("sent7") ? <td className="is-num">{i.sent7 ? int(i.sent7) : <span className="zero">0</span>}</td> : null}
                         {on("reply") ? <td className="is-num"><Metric value={rate(i.replies7, i.sent7)} digits={2} /></td> : null}
@@ -342,7 +432,7 @@ export function InboxesView({ inboxes, clients, plans, smartleadConnected, dryRu
       {selected.size > 0 ? (
         <div className="bulk-bar" role="toolbar" aria-label="Selected inboxes">
           <span className="bulk-count">{selected.size} inbox{selected.size === 1 ? "" : "es"} · {selectedDomains.length} domain{selectedDomains.length === 1 ? "" : "s"}</span>
-          <button type="button" className="btn btn-primary btn-sm" disabled={!smartleadConnected} onClick={() => setEditOpen(true)}><Settings2 size={14} /> Edit settings</button>
+          <button type="button" className="btn btn-primary btn-sm" disabled={!smartleadConnected} onClick={() => setEditOpen(true)}><Settings2 size={14} /> Configure settings</button>
           <button type="button" className="btn btn-sm" onClick={() => document.getElementById("plans-title")?.scrollIntoView({ behavior: "smooth" })}><Shuffle size={14} /> Daily plan</button>
           <span className="sep" />
           <button type="button" className="btn btn-sm" aria-label="Clear selection" onClick={() => setSelected(new Set())}><X size={14} /></button>

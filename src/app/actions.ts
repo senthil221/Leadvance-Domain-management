@@ -578,3 +578,58 @@ export async function loadStats(input: z.input<typeof statsRange>): Promise<Acti
     return fail(e);
   }
 }
+
+// ---------------------------------------------------------------------------
+// Domain checks: DNS validation and reconnecting inboxes
+// ---------------------------------------------------------------------------
+
+/**
+ * Re-checks DNS now: the app's own SPF/DKIM/DMARC/MX lookup for the given
+ * domains (or every sending domain), and, with a Smartlead token, Smartlead's
+ * own re-verification of every connected domain.
+ */
+export async function validateDns(domainIds: string[] = []): Promise<ActionResult<{ message: string }>> {
+  try {
+    await requireActor();
+    const list = z.array(z.uuid()).max(5000).parse(domainIds);
+    const due = list.length
+      ? await sql`update domains set nameservers_checked_at = null where id in ${sql(list)} returning id`
+      : await sql`update domains set nameservers_checked_at = null where status in ('provisioning', 'warming', 'active') returning id`;
+    kickJob("nameserver-check");
+    const { jobContext } = await import("@/jobs");
+    const ctx = await jobContext(sql);
+    let smartlead = "Add a Smartlead token (SMARTLEAD_JWT) to also have Smartlead re-verify its own DNS status.";
+    if (ctx.smartleadApp) {
+      await ctx.smartleadApp.verifyDomains();
+      smartlead = ctx.smartleadApp.dryRun ? "Dry run: Smartlead's re-verification wasn't sent." : "Smartlead is re-verifying every connected domain too.";
+    }
+    return { ok: true, data: { message: `Checking DNS on ${due.length} domain${due.length === 1 ? "" : "s"} now. ${smartlead}` } };
+  } catch (e) {
+    if (e instanceof Error && /Smartlead|token/.test(e.message)) return { ok: false, error: e.message };
+    return fail(e);
+  }
+}
+
+/** Asks Smartlead to retry the login of every inbox whose SMTP or IMAP failed, then re-syncs. */
+export async function reconnectInboxes(): Promise<ActionResult<{ message: string }>> {
+  try {
+    await requireActor();
+    const { jobContext } = await import("@/jobs");
+    const ctx = await jobContext(sql);
+    if (!ctx.smartleadApp) return { ok: false, error: "Reconnecting needs a Smartlead token: save SMARTLEAD_JWT on the server first." };
+    const [{ n }] = await sql<{ n: number }[]>`select count(*)::int as n from inboxes where status = 'disconnected'`;
+    await ctx.smartleadApp.reconnectFailed();
+    if (ctx.smartleadApp.dryRun) return { ok: true, data: { message: `Dry run: Smartlead wasn't asked to reconnect the ${n} disconnected inboxes.` } };
+    // Smartlead reconnects in the background; re-read the inboxes shortly after.
+    after(async () => {
+      await new Promise((r) => setTimeout(r, 45_000));
+      const { JOBS, runJob } = await import("@/jobs");
+      const job = JOBS.find((j) => j.name === "smartlead-accounts");
+      if (job) await runJob(sql, job);
+    });
+    return { ok: true, data: { message: `Smartlead is reconnecting ${n} disconnected inbox${n === 1 ? "" : "es"}. Statuses refresh in about a minute.` } };
+  } catch (e) {
+    if (e instanceof Error && /Smartlead|token/.test(e.message)) return { ok: false, error: e.message };
+    return fail(e);
+  }
+}
