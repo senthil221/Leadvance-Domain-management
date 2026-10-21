@@ -4,7 +4,7 @@ import { refresh } from "next/cache";
 import { after } from "next/server";
 import { z } from "zod";
 import { requireActor } from "@/lib/auth";
-import { sql } from "@/lib/db";
+import { jobSql, sql } from "@/lib/db";
 import { getDomainDetail, listStorageCandidates } from "@/lib/queries";
 import { DOMAIN_STATUSES, REPLACEMENT_REASONS } from "@/lib/status";
 
@@ -292,7 +292,7 @@ export async function runJobNow(name: string): Promise<ActionResult<Record<strin
     const { JOBS, runJob } = await import("@/jobs");
     const job = JOBS.find((j) => j.name === name);
     if (!job) return { ok: false, error: "Unknown job" };
-    const r = await runJob(sql, job);
+    const r = await runJob(jobSql, job);
     refresh();
     return r.ok ? { ok: true, data: r.detail } : { ok: false, error: r.error };
   } catch (e) {
@@ -312,7 +312,7 @@ export async function actOnReplacementStep(input: z.input<typeof stepInput>): Pr
     const { itemId, step, action } = stepInput.parse(input);
     const { jobContext } = await import("@/jobs");
     const { actOnStep } = await import("@/jobs/replacements");
-    const ctx = await jobContext(sql);
+    const ctx = await jobContext(jobSql);
     const r = await actOnStep(sql, { porkbun: ctx.porkbun, hypertide: ctx.hypertide, hypertideCredentials: ctx.hypertideCredentials }, itemId, step, action, actor);
     refresh();
     return { ok: true, data: r };
@@ -329,7 +329,7 @@ export async function approveHypertidePayment(itemIds: string[]): Promise<Action
     const ids = z.array(z.uuid()).min(1).max(100).parse(itemIds);
     const { jobContext } = await import("@/jobs");
     const { approveHypertidePayment: approve } = await import("@/jobs/replacements");
-    const ctx = await jobContext(sql);
+    const ctx = await jobContext(jobSql);
     if (!ctx.hypertide) return { ok: false, error: "Hypertide isn't connected" };
     const r = await approve(sql, { porkbun: ctx.porkbun, hypertide: ctx.hypertide, hypertideCredentials: ctx.hypertideCredentials }, ids, actor);
     refresh();
@@ -419,7 +419,7 @@ export async function setupDomains(input: z.input<typeof setupInput>): Promise<A
       after(async () => {
         const { JOBS, runJob } = await import("@/jobs");
         const job = JOBS.find((j) => j.name === "nameserver-requests");
-        if (job) await runJob(sql, job);
+        if (job) await runJob(jobSql, job);
       });
     }
     refresh();
@@ -464,7 +464,7 @@ function kickJob(name: string) {
   after(async () => {
     const { JOBS, runJob } = await import("@/jobs");
     const job = JOBS.find((j) => j.name === name);
-    if (job) await runJob(sql, job);
+    if (job) await runJob(jobSql, job);
   });
 }
 
@@ -574,9 +574,9 @@ export async function runSendingPlanNow(id: string): Promise<ActionResult<{ tota
   try {
     const actor = await requireActor();
     const { loadPlan, runPlan } = await import("@/jobs/inbox-settings");
-    const plan = await loadPlan(sql, z.uuid().parse(id));
+    const plan = await loadPlan(jobSql, z.uuid().parse(id));
     if (!plan) return { ok: false, error: "That plan no longer exists" };
-    const r = await runPlan(sql, plan, actor);
+    const r = await runPlan(jobSql, plan, actor);
     kickJob("inbox-settings");
     refresh();
     return { ok: true, data: r };
@@ -618,7 +618,7 @@ export async function validateDns(domainIds: string[] = []): Promise<ActionResul
       : await sql`update domains set nameservers_checked_at = null where status in ('provisioning', 'warming', 'active') returning id`;
     kickJob("nameserver-check");
     const { jobContext } = await import("@/jobs");
-    const ctx = await jobContext(sql);
+    const ctx = await jobContext(jobSql);
     let smartlead = "Add a Smartlead token (SMARTLEAD_JWT) to also have Smartlead re-verify its own DNS status.";
     if (ctx.smartleadApp) {
       await ctx.smartleadApp.verifyDomains();
@@ -636,7 +636,7 @@ class UserError extends Error {}
 
 async function smartleadAppOrError(what: string) {
   const { jobContext } = await import("@/jobs");
-  const app = (await jobContext(sql)).smartleadApp;
+  const app = (await jobContext(jobSql)).smartleadApp;
   if (!app) throw new UserError(`${what} needs a Smartlead token: save SMARTLEAD_JWT on the server first.`);
   return app;
 }
@@ -722,7 +722,7 @@ export async function updateWarmupConfig(input: z.input<typeof warmupConfigInput
     const rows = await linkedAccounts(v.inboxIds);
     const n = `${rows.length} inbox${rows.length === 1 ? "" : "es"}`;
     const { jobContext } = await import("@/jobs");
-    const app = (await jobContext(sql)).smartleadApp;
+    const app = (await jobContext(jobSql)).smartleadApp;
     if (app) {
       await app.bulkConfig(rows.map((r) => Number(r.account)), {
         isRampupEnabled: v.rampupEnabled, maxEmailPerDay: v.max, warmupMinCount: v.min, warmupMaxCount: v.max,
@@ -751,7 +751,7 @@ export async function reconnectInboxes(): Promise<ActionResult<{ message: string
   try {
     await requireActor();
     const { jobContext } = await import("@/jobs");
-    const ctx = await jobContext(sql);
+    const ctx = await jobContext(jobSql);
     if (!ctx.smartleadApp) return { ok: false, error: "Reconnecting needs a Smartlead token: save SMARTLEAD_JWT on the server first." };
     const [{ n }] = await sql<{ n: number }[]>`select count(*)::int as n from inboxes where status = 'disconnected'`;
     await ctx.smartleadApp.reconnectFailed();
@@ -761,7 +761,7 @@ export async function reconnectInboxes(): Promise<ActionResult<{ message: string
       await new Promise((r) => setTimeout(r, 45_000));
       const { JOBS, runJob } = await import("@/jobs");
       const job = JOBS.find((j) => j.name === "smartlead-accounts");
-      if (job) await runJob(sql, job);
+      if (job) await runJob(jobSql, job);
     });
     return { ok: true, data: { message: `Smartlead is reconnecting ${n} disconnected inbox${n === 1 ? "" : "es"}. Statuses refresh in about a minute.` } };
   } catch (e) {

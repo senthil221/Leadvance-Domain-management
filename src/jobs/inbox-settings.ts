@@ -19,6 +19,10 @@ export type InboxChanges = Partial<{
 }>;
 
 const SENDING = ["daily_limit", "min_wait_mins"] as const;
+
+/** daily_limit whether the row was read as daily_limit or (through a camel-case connection) dailyLimit. */
+const snakeKeys = (o: Record<string, unknown>) =>
+  Object.fromEntries(Object.entries(o ?? {}).map(([k, v]) => [k.replace(/[A-Z]/g, (m) => `_${m.toLowerCase()}`), v])) as InboxChanges;
 const WARMUP = ["warmup_enabled", "warmup_per_day", "warmup_rampup", "warmup_reply_rate"] as const;
 
 export async function processInboxChanges(sql: Sql, sl: Smartlead, limit = 400) {
@@ -32,7 +36,7 @@ export async function processInboxChanges(sql: Sql, sl: Smartlead, limit = 400) 
   for (const c of [...claimed].sort((a, b) => +new Date(a.at) - +new Date(b.at))) {
     const e = byInbox.get(c.inbox) ?? { ids: [], changes: {} };
     e.ids.push(c.id);
-    Object.assign(e.changes, c.changes);
+    Object.assign(e.changes, snakeKeys(c.changes));
     byInbox.set(c.inbox, e);
   }
   const inboxes = await sql`

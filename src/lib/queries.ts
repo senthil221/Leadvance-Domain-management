@@ -625,8 +625,10 @@ export async function listReplies(limit = 500) {
 // ---------------------------------------------------------------------------
 
 export async function getSettings() {
-  const rows = await sql<{ key: string; value: unknown }[]>`select key, value from settings`;
-  const map = Object.fromEntries(rows.map((r) => [r.key, r.value]));
+  // Read as text: the camel transform would rename keys inside the JSON
+  // (forwarding_domain → forwardingDomain) and the template would look empty.
+  const rows = await sql<{ key: string; value: string }[]>`select key, value::text as value from settings`;
+  const map = Object.fromEntries(rows.map((r) => [r.key, JSON.parse(r.value) as unknown]));
   return {
     drainDays: Number(map.drain_days ?? 7),
     storageLowThreshold: Number(map.storage_low_threshold ?? 20),

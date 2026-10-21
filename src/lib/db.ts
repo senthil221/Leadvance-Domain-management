@@ -20,3 +20,18 @@ export const sql =
   });
 
 if (process.env.NODE_ENV !== "production") globalForDb.sql = sql;
+
+// Job code (src/jobs) is shared with the worker and reads snake_case columns
+// and JSON keys. The camel transform above also renames keys inside json
+// values ({"daily_limit"} comes back as {dailyLimit}), so jobs started from
+// the app get a plain connection like the worker's.
+const globalForJobs = globalThis as unknown as { jobSql?: postgres.Sql };
+export const jobSql =
+  globalForJobs.jobSql ??
+  postgres(process.env.DATABASE_URL ?? "postgres://postgres:postgres@127.0.0.1:54322/postgres", {
+    max: Number(process.env.DATABASE_JOB_POOL_MAX ?? 3),
+    idle_timeout: 20,
+    onnotice: () => {},
+  });
+
+if (process.env.NODE_ENV !== "production") globalForJobs.jobSql = jobSql;

@@ -92,6 +92,14 @@ describe("inbox setting changes", () => {
     expect(after).toEqual({ daily_limit: 13, warmup_per_day: 5 });
   });
 
+  it("understands changes read back with camel-case keys", async () => {
+    const [ib] = await sql`select id from inboxes where email = 'u1@send.com'`;
+    await sql`insert into inbox_setting_changes (inbox_id, changes, actor) values (${ib.id}, '{"dailyLimit": 11, "minWaitMins": 40}', 'me')`;
+    const sl = fakeSmartlead();
+    expect(await processInboxChanges(sql, sl)).toMatchObject({ done: 1 });
+    expect(sl.updateSending).toHaveBeenCalledWith(101, { max_email_per_day: 11, time_to_wait_in_mins: 40 });
+  });
+
   it("leaves inboxes untouched in dry run", async () => {
     const [ib] = await sql`select id from inboxes where email = 'u1@send.com'`;
     await sql`insert into inbox_setting_changes (inbox_id, changes, actor) values (${ib.id}, '{"daily_limit": 3}', 'me')`;
