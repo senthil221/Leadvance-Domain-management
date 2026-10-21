@@ -240,3 +240,10 @@ describe("Smartlead tags and bulk config", () => {
     expect(fetchImpl).not.toHaveBeenCalled();
   });
 });
+
+describe("warmup never turned on", () => {
+  it("reads warmup_details: null as warmup off", () => {
+    expect(parseAccount({ id: 7, from_email: "a@b.com", warmup_details: null })?.warmupEnabled).toBe(false);
+    expect(parseAccount({ id: 7, from_email: "a@b.com" })?.warmupEnabled).toBeNull();
+  });
+});

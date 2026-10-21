@@ -63,7 +63,12 @@ function group(rows: InboxListRow[]): Group[] {
       avgWait: avg(list.filter((i) => i.minWaitMins != null).map((i) => i.minWaitMins!)),
       pending: list.filter((i) => i.change?.status === "pending" || i.change?.status === "running").length,
       tags: [...new Set(list.flatMap((i) => i.smartleadTags))],
-      ageDays: f.domainBornAt ? Math.floor((Date.now() - new Date(f.domainBornAt).getTime()) / 86_400_000) : null,
+      ageDays: (() => {
+        // Age counts from the first inbox added to Smartlead; registration only when no inbox has a date.
+        const t = list.map((i) => (i.smartleadCreatedAt ? new Date(i.smartleadCreatedAt).getTime() : NaN)).filter((x) => !Number.isNaN(x));
+        const born = t.length ? Math.min(...t) : f.domainBornAt ? new Date(f.domainBornAt).getTime() : null;
+        return born == null ? null : Math.floor((Date.now() - born) / 86_400_000);
+      })(),
       dns: dnsOf(f),
       bl: f.blDomain == null && f.blIp == null ? null : (f.blDomain ?? 0) + (f.blIp ?? 0),
       blListings: (f.blListings ?? []).map((l) => `${l.list}${l.kind === "ip" ? " (IP)" : ""}`),
@@ -122,7 +127,7 @@ function dnsOf(i: InboxListRow): Dns {
   const missing = checks.filter(([, v]) => v === false).map(([k]) => k);
   return { state: missing.length ? "missing" : "ok", missing, checks };
 }
-const warmupOf = (i: InboxListRow) => (i.warmupBlockedReason || /BLOCK/i.test(i.warmupStatus ?? "") ? "blocked" : i.warmupEnabled === false || /INACTIVE|PAUSE/i.test(i.warmupStatus ?? "") ? "paused" : "active");
+const warmupOf = (i: InboxListRow) => (i.warmupBlockedReason || /BLOCK/i.test(i.warmupStatus ?? "") ? "blocked" : i.warmupEnabled !== true || /INACTIVE|PAUSE/i.test(i.warmupStatus ?? "") ? "paused" : "active");
 const ageLabel = (days: number | null) => (days == null ? null : days < 60 ? `${days}d` : days < 730 ? `${Math.round(days / 30)}mo` : `${(days / 365).toFixed(1)}y`);
 
 function DnsCell({ dns }: { dns: Dns }) {
@@ -136,7 +141,7 @@ function DnsCell({ dns }: { dns: Dns }) {
 }
 function WarmupCell({ blocked, paused, total, reason }: { blocked: number; paused: number; total: number; reason?: string | null }) {
   if (blocked) return <span className="ns-status tone-danger" title={reason ?? "Smartlead blocked warmup"}>{total > 1 ? `${blocked} blocked` : "Blocked"}</span>;
-  if (paused) return <span className="ns-status tone-warning">{total > 1 ? `${paused} paused` : "Paused"}</span>;
+  if (paused) return <span className="ns-status tone-warning" title="Warmup is turned off in Smartlead">{paused === total ? "Off" : `${paused} off`}</span>;
   return <span className="text-success-ink">Active</span>;
 }
 function BlacklistCell({ count, listings }: { count: number | null; listings: string[] }) {
@@ -283,7 +288,7 @@ export function InboxesView({ inboxes, clients, plans, smartleadConnected, dryRu
           <option value="">All domains</option>
           <option value="dns">DNS records missing</option>
           <option value="blacklisted">Blacklisted</option>
-          <option value="blocked">Warmup blocked or paused</option>
+          <option value="blocked">Warmup blocked or off</option>
           <option value="disconnected">Disconnected inboxes</option>
           <option value="young">Under 30 days old</option>
         </select>
@@ -366,7 +371,7 @@ export function InboxesView({ inboxes, clients, plans, smartleadConnected, dryRu
                           <Rep value={g.avgRep} low={g.lowRep} />
                         </td>
                       ) : null}
-                      {on("age") ? <td className="is-num" title={g.ageDays != null ? `${g.ageDays} days since registration` : "Registration date not known yet"}>{ageLabel(g.ageDays) ?? <span className="zero">—</span>}</td> : null}
+                      {on("age") ? <td className="is-num" title={g.ageDays != null ? `${g.ageDays} days since the first inbox was added to Smartlead` : "Not known yet"}>{ageLabel(g.ageDays) ?? <span className="zero">—</span>}</td> : null}
                       {on("dns") ? <td><DnsCell dns={g.dns} /></td> : null}
                       {on("warmupState") ? <td><WarmupCell blocked={g.blocked} paused={g.paused} total={g.count} /></td> : null}
                       {on("blacklist") ? <td><BlacklistCell count={g.bl} listings={g.blListings} /></td> : null}

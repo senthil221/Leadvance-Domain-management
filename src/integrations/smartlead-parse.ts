@@ -56,7 +56,9 @@ export function parseAccount(raw: unknown): SmartleadAccount | null {
   const warmupStatus = str(w.status, a.warmup_status)?.toUpperCase();
   const warmupEnabled =
     typeof a.warmup_enabled === "boolean" ? a.warmup_enabled :
-    warmupStatus ? warmupStatus === "ACTIVE" || warmupStatus === "ENABLED" : null;
+    warmupStatus ? warmupStatus === "ACTIVE" || warmupStatus === "ENABLED" :
+    // Smartlead sends warmup_details: null for an inbox whose warmup was never turned on.
+    "warmup_details" in a ? false : null;
 
   const smtpOk = a.is_smtp_success !== false;
   const imapOk = a.is_imap_success !== false;
