@@ -129,9 +129,9 @@ function DnsCell({ dns }: { dns: Dns }) {
   if (dns.state === "nozone") return <span className="ns-status tone-danger" title="The domain's nameservers have no zone for it: nothing resolves">No DNS zone</span>;
   if (dns.state === "unknown") return <span className="zero" title="Not checked yet">—</span>;
   return (
-    <span className="dns" title={dns.missing.length ? `Missing: ${dns.missing.join(", ")}` : "SPF, DKIM, DMARC and MX all published"}>
-      {dns.checks.map(([k, v]) => <span key={k} className={`dns-chip${v === true ? " is-ok" : v === false ? " is-bad" : ""}`}>{k}</span>)}
-    </span>
+    dns.state === "ok"
+      ? <span className="text-success-ink" title="SPF, DKIM, DMARC and MX all published">Validated</span>
+      : <span className="dns" title={`Missing: ${dns.missing.join(", ")}`}>{dns.missing.map((k) => <span key={k} className="dns-chip is-bad">{k}</span>)}</span>
   );
 }
 function WarmupCell({ blocked, paused, total, reason }: { blocked: number; paused: number; total: number; reason?: string | null }) {
@@ -218,8 +218,10 @@ export function InboxesView({ inboxes, clients, plans, smartleadConnected, dryRu
   const selectedDomains = useMemo(() => [...new Set(selectedRows.map((i) => i.domainId))], [selectedRows]);
   const current = useMemo(() => {
     const m = (f: (i: InboxListRow) => number | null) => avg(selectedRows.map(f).filter((x): x is number => x != null));
-    return { dailyLimit: m((i) => i.dailyLimit), minWait: m((i) => i.minWaitMins), warmupPerDay: m((i) => i.warmupPerDay), warmupRampup: m((i) => i.warmupRampup), warmupReplyRate: m((i) => i.warmupReplyRate) };
+    return { dailyLimit: m((i) => i.dailyLimit), minWait: m((i) => i.minWaitMins), warmupMin: m((i) => i.warmupMin), warmupPerDay: m((i) => i.warmupPerDay), warmupRampup: m((i) => i.warmupRampup), warmupReplyRate: m((i) => i.warmupReplyRate) };
   }, [selectedRows]);
+  const selectedTags = useMemo(() => (selectedRows.length ? selectedRows[0].smartleadTags.filter((t) => selectedRows.every((i) => i.smartleadTags.includes(t))) : []), [selectedRows]);
+  const knownTags = useMemo(() => [...new Set(inboxes.flatMap((i) => i.smartleadTags))].sort((a, b) => a.localeCompare(b)), [inboxes]);
   const toggleIds = (ids: string[]) => setSelected((s) => {
     const n = new Set(s);
     const on = ids.every((id) => n.has(id));
@@ -438,7 +440,7 @@ export function InboxesView({ inboxes, clients, plans, smartleadConnected, dryRu
           <button type="button" className="btn btn-sm" aria-label="Clear selection" onClick={() => setSelected(new Set())}><X size={14} /></button>
         </div>
       ) : null}
-      <InboxSettingsDialog open={editOpen} onOpenChange={setEditOpen} inboxIds={[...selected]} domains={selectedDomains.length} current={current} dryRun={dryRun} onDone={() => setSelected(new Set())} />
+      <InboxSettingsDialog open={editOpen} onOpenChange={setEditOpen} inboxIds={[...selected]} domains={selectedDomains.length} current={current} selectedTags={selectedTags} knownTags={knownTags} dryRun={dryRun} appProblem={appProblem} />
     </div>
   );
 }

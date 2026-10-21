@@ -8,7 +8,7 @@ import { processInboxChanges, runDuePlans, runPlan } from "../src/jobs/inbox-set
 import { checkNameservers } from "../src/jobs/nameservers";
 import { clientsFromTags } from "../src/jobs/smartlead-sync";
 import { distribute, seeded } from "../src/lib/distribute";
-import { jwtProblem, readBlacklist, type SmartleadApp } from "../src/integrations/smartlead-app";
+import { createSmartleadApp, jwtProblem, readBlacklist, readTags, type SmartleadApp } from "../src/integrations/smartlead-app";
 import { syncBlacklists } from "../src/jobs/blacklist";
 import { loadMigrations } from "../scripts/migrations";
 
@@ -206,5 +206,37 @@ describe("Smartlead token features", () => {
     const [d] = await sql`select blacklist_domain_count as dc, blacklist_ip_count as ic from domains where name = 'send.com'`;
     expect(d).toEqual({ dc: 2, ic: 1 });
     await sql`truncate campaigns cascade`;
+  });
+});
+
+describe("Smartlead tags and bulk config", () => {
+  const payload = Buffer.from(JSON.stringify({ exp: Math.floor(Date.now() / 1000) + 3600 })).toString("base64url");
+  const jwt = `x.${payload}.y`;
+
+  it("reads the workspace tag list and drops duplicates and blanks", () => {
+    expect(readTags({ data: [{ id: 3, name: " Kapable ", color: "#FCE1B1" }, { id: 3, name: "Kapable" }, { id: 0, name: "x" }, { id: 4, name: "" }, { id: 5, name: "warmup" }] }))
+      .toEqual([{ id: 3, name: "Kapable", color: "#FCE1B1" }, { id: 5, name: "warmup", color: "#B1FCFA" }]);
+  });
+
+  it("sends bulk config in chunks of 250 with Smartlead's own payload shape", async () => {
+    const bodies: { url: string; body: { emailAccountIds: number[]; updateData: Record<string, unknown> } }[] = [];
+    const fetchImpl = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
+      bodies.push({ url: String(url), body: JSON.parse(String(init?.body)) });
+      return new Response(JSON.stringify({ success: true }), { status: 200 });
+    }) as unknown as typeof fetch;
+    const app = createSmartleadApp({ jwt, dryRun: false, fetchImpl });
+    const ids = Array.from({ length: 260 }, (_, i) => i + 1);
+    expect(await app.bulkConfig(ids, { tags: [3, 5] })).toBe(260);
+    expect(bodies.map((b) => b.body.emailAccountIds.length)).toEqual([250, 10]);
+    expect(bodies[0].url).toBe("https://server.smartlead.ai/api/email-account/bulk-update-email-account-config");
+    expect(bodies[0].body.updateData).toEqual({ dailyReplyLimit: null, tags: [3, 5] });
+  });
+
+  it("writes nothing in dry run", async () => {
+    const fetchImpl = vi.fn() as unknown as typeof fetch;
+    const app = createSmartleadApp({ jwt, dryRun: true, fetchImpl });
+    await app.bulkConfig([1, 2], { status: "ACTIVE" });
+    expect(await app.createTag("New")).toBeNull();
+    expect(fetchImpl).not.toHaveBeenCalled();
   });
 });

@@ -489,7 +489,7 @@ a.stat:hover { background: var(--surface-2); }
 .dns { display: inline-flex; gap: 3px; }
 .dns-chip { height: 18px; padding: 0 5px; border-radius: 4px; font-size: 10.5px; line-height: 18px; font-weight: 500; letter-spacing: .02em; color: var(--faint); background: color-mix(in srgb, var(--ink) 5%, transparent); }
 .dns-chip.is-ok { color: var(--success-ink); background: var(--success-soft-2); }
-.dns-chip.is-bad { color: var(--danger-ink); background: var(--danger-soft-2); text-decoration: line-through; text-decoration-thickness: 1px; }
+.dns-chip.is-bad { color: var(--danger-ink); background: var(--danger-soft-2); }
 
 /* Nameserver cell: host, then a quiet status word. */
 .ns-cell { display: inline-flex; align-items: center; gap: 7px; min-width: 0; }
@@ -591,6 +591,34 @@ a.stat:hover { background: var(--surface-2); }
   border-radius: 12px; background: var(--surface); box-shadow: 0 0 0 1px var(--line), var(--shadow-md); overflow: hidden;
 }
 .dialog.is-wide { width: min(760px, calc(100vw - 32px)); }
+.dialog.is-xl { width: min(1180px, calc(100vw - 32px)); top: 6vh; max-height: 88vh; }
+
+/* Configure settings: three cards side by side */
+.cfg-top { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; padding-bottom: 12px; border-bottom: 1px solid var(--line); }
+.cfg-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; align-items: stretch; }
+@media (max-width: 960px) { .cfg-grid { grid-template-columns: 1fr; } }
+.cfg-card { display: flex; flex-direction: column; min-width: 0; border: 1px solid var(--line); border-radius: 12px; background: var(--surface-2); }
+.cfg-head { display: flex; align-items: center; gap: 8px; height: 42px; padding: 0 16px; border-bottom: 1px solid var(--line); font-weight: 600; color: var(--ink); }
+.cfg-head::before { content: ""; width: 3px; height: 14px; border-radius: 2px; background: var(--brand-solid); }
+.cfg-body { flex: 1; display: flex; flex-direction: column; gap: 12px; padding: 14px 16px; }
+.cfg-foot { padding: 0 16px 16px; }
+.cfg-label { font-size: 10.5px; font-weight: 500; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); }
+.cfg-two { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.cfg-note { font-size: 12px; line-height: 18px; color: var(--muted); }
+.cfg-note b { color: var(--ink-soft); font-weight: 600; }
+.cfg-note.is-warn { color: var(--warning-ink); }
+.cfg-check { display: flex; align-items: center; justify-content: space-between; height: 36px; padding: 0 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); color: var(--ink-soft); cursor: pointer; }
+.cfg-seg { align-self: flex-start; }
+.btn.btn-icon { width: 28px; padding: 0; justify-content: center; }
+.cfg-apply { width: 100%; height: 34px; justify-content: center; }
+.cfg-on, .cfg-off { justify-content: center; }
+.cfg-on:not(:disabled) { color: var(--success-ink); border-color: var(--success-line); background: var(--success-soft); }
+.cfg-off:not(:disabled) { color: var(--danger-ink); border-color: var(--danger-line); background: var(--danger-soft); }
+.cfg-chips { display: flex; flex-wrap: wrap; align-content: flex-start; gap: 6px; max-height: 112px; overflow-y: auto; padding: 8px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); }
+.cfg-chip { display: inline-flex; align-items: center; gap: 6px; max-width: 140px; height: 24px; padding: 0 8px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface-2); color: var(--ink-soft); font-size: 12px; cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; transition: border-color 120ms var(--t-ease), background 120ms var(--t-ease); }
+.cfg-chip i { flex: none; width: 8px; height: 8px; border-radius: 50%; background: var(--faint); }
+.cfg-chip:hover { border-color: var(--line-strong); }
+.cfg-chip[aria-pressed="true"] { border-color: var(--brand-line); background: var(--brand-soft); color: var(--brand-ink); }
 .dialog[data-state="open"] { animation: dialog-in 200ms var(--t-ease); }
 .dialog-head { padding: 16px 18px 4px; }
 .dialog-title { font-size: 15px; font-weight: 600; color: var(--ink); }

@@ -610,6 +610,121 @@ export async function validateDns(domainIds: string[] = []): Promise<ActionResul
   }
 }
 
+/** A refusal worded for people, shown as is. */
+class UserError extends Error {}
+
+async function smartleadAppOrError(what: string) {
+  const { jobContext } = await import("@/jobs");
+  const app = (await jobContext(sql)).smartleadApp;
+  if (!app) throw new UserError(`${what} needs a Smartlead token: save SMARTLEAD_JWT on the server first.`);
+  return app;
+}
+
+async function linkedAccounts(inboxIds: string[]) {
+  const rows = await sql<{ id: string; account: string }[]>`
+    select id, smartlead_account_id as account from inboxes
+    where id in ${sql(inboxIds)} and smartlead_account_id is not null and status <> 'removed'`;
+  if (!rows.length) throw new UserError("None of these inboxes are linked to Smartlead");
+  return rows;
+}
+
+const appError = (e: unknown) => (e instanceof UserError || (e instanceof Error && /Smartlead|token/.test(e.message)) ? { ok: false as const, error: (e as Error).message } : fail(e));
+
+/** The workspace's Smartlead tags, for the tag picker. */
+export async function loadSmartleadTags(): Promise<ActionResult<{ tags: { id: number; name: string; color: string }[] }>> {
+  try {
+    await requireActor();
+    const app = await smartleadAppOrError("Loading tags");
+    return { ok: true, data: { tags: await app.tags() } };
+  } catch (e) {
+    return appError(e);
+  }
+}
+
+export async function createSmartleadTag(name: string): Promise<ActionResult<{ message: string; tag: { id: number; name: string; color: string } | null }>> {
+  try {
+    await requireActor();
+    const n = z.string().trim().min(1, "Give the tag a name").max(100).parse(name);
+    const app = await smartleadAppOrError("Creating a tag");
+    const tag = await app.createTag(n);
+    return { ok: true, data: { tag, message: tag ? `Created the tag "${tag.name}" in Smartlead` : `Dry run: the tag "${n}" wasn't created in Smartlead` } };
+  } catch (e) {
+    return appError(e);
+  }
+}
+
+/** Replaces the Smartlead tags of the chosen inboxes. Unknown names are refused before anything is written. */
+export async function updateInboxTags(input: { inboxIds: string[]; tags: string[] }): Promise<ActionResult<{ message: string }>> {
+  try {
+    await requireActor();
+    const v = z.object({
+      inboxIds: z.array(z.uuid()).min(1, "Select at least one inbox").max(5000),
+      tags: z.array(z.string().trim().min(1)).min(1, "Enter at least one tag").max(50),
+    }).parse(input);
+    const names = [...new Map(v.tags.map((t) => [t.toLowerCase(), t])).values()];
+    const app = await smartleadAppOrError("Updating tags");
+    const rows = await linkedAccounts(v.inboxIds);
+    const known = new Map((await app.tags()).map((t) => [t.name.toLowerCase(), t]));
+    const missing = names.filter((n) => !known.has(n.toLowerCase()));
+    if (missing.length) return { ok: false, error: `No Smartlead tag named ${missing.slice(0, 3).map((n) => `"${n}"`).join(", ")}. Create it first, then apply it.` };
+    const tags = names.map((n) => known.get(n.toLowerCase())!);
+    await app.bulkConfig(rows.map((r) => Number(r.account)), { tags: tags.map((t) => t.id) });
+    if (app.dryRun) return { ok: true, data: { message: `Dry run: ${rows.length} inbox${rows.length === 1 ? "" : "es"} weren't retagged in Smartlead` } };
+    await sql`update inboxes set smartlead_tags = ${tags.map((t) => t.name)}::text[] where id in ${sql(rows.map((r) => r.id))}`;
+    refresh();
+    return { ok: true, data: { message: `Tagged ${rows.length} inbox${rows.length === 1 ? "" : "es"} ${tags.map((t) => t.name).join(", ")}` } };
+  } catch (e) {
+    return appError(e);
+  }
+}
+
+const warmupConfigInput = z.object({
+  inboxIds: z.array(z.uuid()).min(1, "Select at least one inbox").max(5000),
+  min: count(1000),
+  max: count(1000),
+  rampup: count(1000),
+  replyRate: count(100),
+  tag: z.string().trim().max(100),
+  rampupEnabled: z.boolean(),
+}).refine((v) => v.min <= v.max, "Min warmup per day can't be above Max")
+  .refine((v) => v.max > 0, "Max warmup per day must be above 0");
+
+/**
+ * Writes the whole warmup block and turns warmup on. With a Smartlead token it
+ * goes in one bulk call, Min and the warmup tag included; without one it is
+ * queued through the public API, which has no Min or tag.
+ */
+export async function updateWarmupConfig(input: z.input<typeof warmupConfigInput>): Promise<ActionResult<{ message: string }>> {
+  try {
+    const actor = await requireActor();
+    const v = warmupConfigInput.parse(input);
+    const rows = await linkedAccounts(v.inboxIds);
+    const n = `${rows.length} inbox${rows.length === 1 ? "" : "es"}`;
+    const { jobContext } = await import("@/jobs");
+    const app = (await jobContext(sql)).smartleadApp;
+    if (app) {
+      await app.bulkConfig(rows.map((r) => Number(r.account)), {
+        isRampupEnabled: v.rampupEnabled, maxEmailPerDay: v.max, warmupMinCount: v.min, warmupMaxCount: v.max,
+        rampupValue: v.rampup, replyRate: v.replyRate, status: "ACTIVE", warmupTagIdentifier: v.tag,
+      });
+      if (app.dryRun) return { ok: true, data: { message: `Dry run: warmup on ${n} wasn't changed in Smartlead` } };
+      await sql`update inboxes set warmup_enabled = true, warmup_min = ${v.min}, warmup_per_day = ${v.max},
+        warmup_rampup = ${v.rampup}, warmup_reply_rate = ${v.replyRate} where id in ${sql(rows.map((r) => r.id))}`;
+      refresh();
+      return { ok: true, data: { message: `Warmup updated on ${n}: ${v.min}–${v.max} a day, ${v.replyRate}% reply rate` } };
+    }
+    const changes = { warmup_enabled: true, warmup_per_day: v.max, warmup_reply_rate: v.replyRate, ...(v.rampupEnabled ? { warmup_rampup: v.rampup } : {}) };
+    await sql`
+      insert into inbox_setting_changes (inbox_id, changes, actor)
+      select id, ${sql.json(changes)}, ${actor} from unnest(${rows.map((r) => r.id)}::uuid[]) as id`;
+    kickJob("inbox-settings");
+    refresh();
+    return { ok: true, data: { message: `Warmup queued for ${n}. Min and the warmup tag were skipped: they need a Smartlead token (SMARTLEAD_JWT).` } };
+  } catch (e) {
+    return appError(e);
+  }
+}
+
 /** Asks Smartlead to retry the login of every inbox whose SMTP or IMAP failed, then re-syncs. */
 export async function reconnectInboxes(): Promise<ActionResult<{ message: string }>> {
   try {
