@@ -39,7 +39,7 @@ export async function syncAccounts(sql: Sql, sl: Smartlead) {
     daily_limit: a.dailyLimit, warmup_enabled: a.warmupEnabled, warmup_per_day: a.warmupPerDay,
     warmup_rampup: a.warmupRampup, warmup_reputation: a.warmupReputation, connected: a.connected,
     tags: a.tags, provider_type: a.providerType, min_wait_mins: a.minWaitMins, daily_sent: a.dailySent,
-    campaign_count: a.campaignCount, warmup_status: a.warmupStatus, warmup_min: a.warmupMin, warmup_reply_rate: a.warmupReplyRate,
+    campaign_count: a.campaignCount, warmup_status: a.warmupStatus, warmup_min: a.warmupMin, warmup_reply_rate: a.warmupReplyRate, warmup_tag: a.warmupTag,
     created: a.createdAt, blocked: a.warmupBlockedReason, connect_error: a.connectError,
   }));
   const ids = accounts.map((a) => a.id);
@@ -48,7 +48,7 @@ export async function syncAccounts(sql: Sql, sl: Smartlead) {
   const recordset = (q: postgres.Sql | postgres.TransactionSql) => q`jsonb_to_recordset(${q.json(rows)}) as r(
     id bigint, email text, domain text, sender_name text, client_id bigint, daily_limit int, warmup_enabled boolean,
     warmup_per_day int, warmup_rampup int, warmup_reputation numeric, connected boolean, tags text[], provider_type text,
-    min_wait_mins int, daily_sent int, campaign_count int, warmup_status text, warmup_min int, warmup_reply_rate int,
+    min_wait_mins int, daily_sent int, campaign_count int, warmup_status text, warmup_min int, warmup_reply_rate int, warmup_tag text,
     created timestamptz, blocked text, connect_error text)`;
 
   return sql.begin(async (tx) => {
@@ -73,11 +73,11 @@ export async function syncAccounts(sql: Sql, sl: Smartlead) {
     const upserted = await tx`
       insert into inboxes (domain_id, email, sender_name, smartlead_account_id, warmup_enabled, warmup_per_day, warmup_rampup,
         daily_limit, warmup_reputation, status, last_synced_at, pending_changes, smartlead_tags, provider_type, min_wait_mins,
-        daily_sent, campaign_count, warmup_status, warmup_min, warmup_reply_rate, smartlead_created_at, warmup_blocked_reason, connect_error)
+        daily_sent, campaign_count, warmup_status, warmup_min, warmup_reply_rate, smartlead_created_at, warmup_blocked_reason, connect_error, warmup_tag)
       select d.id, r.email, r.sender_name, r.id, r.warmup_enabled, r.warmup_per_day, r.warmup_rampup,
         r.daily_limit, r.warmup_reputation, case when r.connected then 'connected' else 'disconnected' end, now(), null,
         coalesce(r.tags, '{}'), r.provider_type, r.min_wait_mins, r.daily_sent, r.campaign_count, r.warmup_status, r.warmup_min, r.warmup_reply_rate,
-        r.created, r.blocked, r.connect_error
+        r.created, r.blocked, r.connect_error, r.warmup_tag
       from ${recordset(tx)} join domains d on d.name = r.domain
       on conflict (email) do update set
         domain_id            = excluded.domain_id,
@@ -99,6 +99,7 @@ export async function syncAccounts(sql: Sql, sl: Smartlead) {
         warmup_status        = coalesce(excluded.warmup_status, inboxes.warmup_status),
         warmup_min           = coalesce(excluded.warmup_min, inboxes.warmup_min),
         warmup_reply_rate    = coalesce(excluded.warmup_reply_rate, inboxes.warmup_reply_rate),
+        warmup_tag           = coalesce(excluded.warmup_tag, inboxes.warmup_tag),
         smartlead_created_at = coalesce(excluded.smartlead_created_at, inboxes.smartlead_created_at),
         warmup_blocked_reason = excluded.warmup_blocked_reason,
         connect_error        = excluded.connect_error

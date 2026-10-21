@@ -500,6 +500,7 @@ export type InboxListRow = InboxRow & {
   sent7: number; replies7: number; human7: number; bounces7: number; campaigns: number;
   smartleadTags: string[]; providerType: string | null; minWaitMins: number | null; dailySent: number | null;
   warmupMin: number | null; warmupReplyRate: number | null; warmupStatus: string | null;
+  warmupTag: string | null; warmupRampupOn: boolean | null;
   change: { status: string; error: string | null; changes: Record<string, unknown> } | null;
   domainBornAt: Date | null; smartleadCreatedAt: Date | null; warmupBlockedReason: string | null; connectError: string | null;
   dnsSpf: boolean | null; dnsDkim: boolean | null; dnsDmarc: boolean | null; dnsMx: boolean | null; dnsCheckedAt: Date | null; nsAnswering: boolean | null;
@@ -525,6 +526,7 @@ export async function listInboxes() {
       coalesce(ev.sent7, 0) as sent7, coalesce(ev.replies7, 0) as replies7, coalesce(ev.human7, 0) as human7,
       coalesce(ev.bounces7, 0) as bounces7, coalesce(camp.n, i.campaign_count, 0) as campaigns,
       i.smartlead_tags, i.provider_type, i.min_wait_mins, i.daily_sent, i.warmup_min, i.warmup_reply_rate, i.warmup_status,
+      i.warmup_tag, i.warmup_rampup_on,
       ch.change,
       coalesce(d.purchased_at, d.registered_at)::timestamptz as domain_born_at, i.smartlead_created_at, i.warmup_blocked_reason, i.connect_error,
       d.dns_spf, d.dns_dkim, d.dns_dmarc, d.dns_mx, d.dns_checked_at, d.nameservers_answering as ns_answering,

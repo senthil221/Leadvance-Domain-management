@@ -258,7 +258,15 @@ export function InboxesView({ inboxes, clients, plans, smartleadConnected, dryRu
   const selectedDomains = useMemo(() => [...new Set(selectedRows.map((i) => i.domainId))], [selectedRows]);
   const current = useMemo(() => {
     const m = (f: (i: InboxListRow) => number | null) => avg(selectedRows.map(f).filter((x): x is number => x != null));
-    return { dailyLimit: m((i) => i.dailyLimit), minWait: m((i) => i.minWaitMins), warmupMin: m((i) => i.warmupMin), warmupPerDay: m((i) => i.warmupPerDay), warmupRampup: m((i) => i.warmupRampup), warmupReplyRate: m((i) => i.warmupReplyRate) };
+    // One value when every selected inbox has the same, else null.
+    const same = <T,>(f: (i: InboxListRow) => T | null) => { const v = selectedRows.map(f); return v.length && v[0] != null && v.every((x) => x === v[0]) ? v[0] : null; };
+    return {
+      dailyLimit: m((i) => i.dailyLimit), minWait: m((i) => i.minWaitMins), warmupMin: m((i) => i.warmupMin), warmupPerDay: m((i) => i.warmupPerDay),
+      // Smartlead doesn't report ramp-up; only what the app last wrote is known.
+      warmupRampup: m((i) => (i.warmupRampupOn == null ? null : i.warmupRampup)), warmupRampupOn: same((i) => i.warmupRampupOn),
+      warmupReplyRate: m((i) => i.warmupReplyRate),
+      warmupTag: same((i) => i.warmupTag), tagsMixed: new Set(selectedRows.map((i) => i.warmupTag)).size > 1,
+    };
   }, [selectedRows]);
   const selectedTags = useMemo(() => (selectedRows.length ? selectedRows[0].smartleadTags.filter((t) => selectedRows.every((i) => i.smartleadTags.includes(t))) : []), [selectedRows]);
   const knownTags = useMemo(() => [...new Set(inboxes.flatMap((i) => i.smartleadTags))].sort((a, b) => a.localeCompare(b)), [inboxes]);

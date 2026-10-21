@@ -8,7 +8,13 @@ import { createSmartleadTag, loadSmartleadTags, updateInboxSettings, updateInbox
 import { int } from "@/lib/format";
 
 type LimitMode = "set" | "random" | "split";
-type Current = { dailyLimit: number | null; minWait: number | null; warmupMin: number | null; warmupPerDay: number | null; warmupRampup: number | null; warmupReplyRate: number | null };
+type Current = {
+  dailyLimit: number | null; minWait: number | null; warmupMin: number | null; warmupPerDay: number | null;
+  /** Null when unknown: Smartlead's API doesn't report ramp-up. */
+  warmupRampup: number | null; warmupRampupOn: boolean | null; warmupReplyRate: number | null;
+  /** The selection's warmup tag when they all share one. */
+  warmupTag: string | null; tagsMixed: boolean;
+};
 type Tag = { id: number; name: string; color: string };
 type Result = { ok: true; data: unknown } | { ok: false; error: string };
 
@@ -76,7 +82,7 @@ export function InboxSettingsDialog({ open, onOpenChange, inboxIds, domains, cur
   const [wMax, setWMax] = useState("");
   const [rampup, setRampup] = useState("");
   const [reply, setReply] = useState("");
-  const [wTag, setWTag] = useState("hey-there");
+  const [wTag, setWTag] = useState("");
   const [rampOn, setRampOn] = useState(false);
   const [error, setError] = useState<{ card: string; text: string } | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
@@ -91,8 +97,8 @@ export function InboxSettingsDialog({ open, onOpenChange, inboxIds, domains, cur
       setTags(selectedTags.join(", ")); setNewTag("");
       setMode("set"); setMax(r(current.dailyLimit, 15)); setWait(r(current.minWait, 15)); setKeepMax(false);
       setLo(""); setHi(""); setTotal(current.dailyLimit != null ? String(Math.round(current.dailyLimit * count)) : "");
-      setWMin(r(current.warmupMin, 4)); setWMax(r(current.warmupPerDay, 9)); setRampup(r(current.warmupRampup, 1)); setReply(r(current.warmupReplyRate, 60));
-      setRampOn(false); setError(null);
+      setWMin(r(current.warmupMin, 4)); setWMax(r(current.warmupPerDay, 9)); setRampup(current.warmupRampup == null ? "" : String(Math.round(current.warmupRampup))); setReply(r(current.warmupReplyRate, 60));
+      setRampOn(current.warmupRampupOn ?? false); setWTag(current.warmupTag ?? ""); setError(null);
     }
   }
 
@@ -153,7 +159,8 @@ export function InboxSettingsDialog({ open, onOpenChange, inboxIds, domains, cur
   };
 
   const applyWarmup = () => {
-    if (blank(wMin, wMax, rampup, reply)) return fail("warmup", "Fill in every warmup field");
+    if (blank(wMin, wMax, reply)) return fail("warmup", "Fill in Min, Max and Reply rate");
+    if (rampOn && blank(rampup)) return fail("warmup", "Enter the ramp-up value, or turn ramp-up off");
     run("warmup", () => updateWarmupConfig({ inboxIds, min: n(wMin), max: n(wMax), rampup: n(rampup), replyRate: n(reply), tag: wTag, rampupEnabled: rampOn }),
       (d: { message: string }) => d.message);
   };
@@ -257,10 +264,12 @@ export function InboxSettingsDialog({ open, onOpenChange, inboxIds, domains, cur
                 </div>
                 <label className="field" htmlFor="cfg-wtag">
                   <span className="cfg-label">Warmup tag identifier</span>
-                  <input id="cfg-wtag" className="input" value={wTag} onChange={(e) => setWTag(e.target.value)} />
+                  <input id="cfg-wtag" className="input" value={wTag} onChange={(e) => setWTag(e.target.value)}
+                    placeholder={current.tagsMixed ? "Mixed: blank keeps each inbox's own tag" : "Blank keeps each inbox's own tag"} />
                 </label>
                 <p className="cfg-note">Smartlead picks a random warmup count between Min and Max each day. Its own default floor is 4, so raising Min keeps warmup close to campaign volume on quiet days.</p>
                 <Check label="Enable ramp-up" checked={rampOn} set={setRampOn} />
+                {current.warmupRampupOn == null ? <p className="cfg-note is-warn">Smartlead&apos;s API doesn&apos;t report ramp-up, so the current setting can&apos;t be shown here. What you set replaces it.</p> : null}
                 <div className="cfg-two">
                   <button type="button" className="btn cfg-on" disabled={busy !== null} onClick={() => toggleWarmup(true)}>{busy === "warm-on" ? "…" : "Enable warmup"}</button>
                   <button type="button" className="btn cfg-off" disabled={busy !== null} onClick={() => toggleWarmup(false)}>{busy === "warm-off" ? "…" : "Disable warmup"}</button>

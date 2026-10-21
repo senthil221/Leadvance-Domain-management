@@ -40,6 +40,8 @@ export type SmartleadAccount = {
   campaignCount: number | null;
   warmupStatus: string | null;
   warmupMin: number | null;
+  /** The warmup identifier tag (warmup_key_id), e.g. "along-stood". */
+  warmupTag: string | null;
   warmupReplyRate: number | null;
   createdAt: string | null;
   warmupBlockedReason: string | null;
@@ -85,6 +87,7 @@ export function parseAccount(raw: unknown): SmartleadAccount | null {
     campaignCount: num(a.campaign_count),
     warmupStatus: warmupStatus ?? null,
     warmupMin: num(w.warmup_min_count),
+    warmupTag: str(w.warmup_key_id),
     warmupReplyRate: num(w.reply_rate, w.reply_rate_percentage),
     createdAt: str(a.created_at) && !Number.isNaN(Date.parse(str(a.created_at)!)) ? str(a.created_at) : null,
     warmupBlockedReason: str(w.blocked_reason),

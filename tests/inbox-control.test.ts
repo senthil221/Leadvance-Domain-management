@@ -255,3 +255,9 @@ describe("warmup never turned on", () => {
     expect(parseAccount({ id: 7, from_email: "a@b.com" })?.warmupEnabled).toBeNull();
   });
 });
+
+describe("warmup tag", () => {
+  it("reads Smartlead's warmup_key_id", () => {
+    expect(parseAccount({ id: 7, from_email: "a@b.com", warmup_details: { status: "ACTIVE", warmup_key_id: "along-stood" } })?.warmupTag).toBe("along-stood");
+  });
+});

@@ -712,8 +712,9 @@ const warmupConfigInput = z.object({
 
 /**
  * Writes the whole warmup block and turns warmup on. With a Smartlead token it
- * goes in one bulk call, Min and the warmup tag included; without one it is
- * queued through the public API, which has no Min or tag.
+ * goes in bulk calls, Min and the warmup tag included; a blank tag keeps each
+ * inbox's own (one call per tag). Without a token it is queued through the
+ * public API, which has no Min or tag.
  */
 export async function updateWarmupConfig(input: z.input<typeof warmupConfigInput>): Promise<ActionResult<{ message: string }>> {
   try {
@@ -724,13 +725,28 @@ export async function updateWarmupConfig(input: z.input<typeof warmupConfigInput
     const { jobContext } = await import("@/jobs");
     const app = (await jobContext(jobSql)).smartleadApp;
     if (app) {
-      await app.bulkConfig(rows.map((r) => Number(r.account)), {
-        isRampupEnabled: v.rampupEnabled, maxEmailPerDay: v.max, warmupMinCount: v.min, warmupMaxCount: v.max,
-        rampupValue: v.rampup, replyRate: v.replyRate, status: "ACTIVE", warmupTagIdentifier: v.tag,
-      });
+      // Smartlead replaces the whole block, tag included, so a blank tag must
+      // never be sent: each inbox gets its own back instead.
+      const byTag = new Map<string, number[]>();
+      if (v.tag) byTag.set(v.tag, rows.map((r) => Number(r.account)));
+      else {
+        const tags = await sql<{ id: string; tag: string | null }[]>`select id, warmup_tag as tag from inboxes where id in ${sql(rows.map((r) => r.id))}`;
+        const tagOf = new Map(tags.map((t) => [t.id, t.tag]));
+        const missing = rows.filter((r) => !tagOf.get(r.id)).length;
+        if (missing) return { ok: false, error: `${missing} of these inboxes have no warmup tag on record yet. Enter one, or wait for the next Smartlead sync.` };
+        for (const r of rows) byTag.set(tagOf.get(r.id)!, [...(byTag.get(tagOf.get(r.id)!) ?? []), Number(r.account)]);
+      }
+      for (const [tag, accounts] of byTag) {
+        await app.bulkConfig(accounts, {
+          isRampupEnabled: v.rampupEnabled, maxEmailPerDay: v.max, warmupMinCount: v.min, warmupMaxCount: v.max,
+          rampupValue: v.rampup, replyRate: v.replyRate, status: "ACTIVE", warmupTagIdentifier: tag,
+        });
+      }
       if (app.dryRun) return { ok: true, data: { message: `Dry run: warmup on ${n} wasn't changed in Smartlead` } };
       await sql`update inboxes set warmup_enabled = true, warmup_min = ${v.min}, warmup_per_day = ${v.max},
-        warmup_rampup = ${v.rampup}, warmup_reply_rate = ${v.replyRate} where id in ${sql(rows.map((r) => r.id))}`;
+        warmup_rampup = ${v.rampup}, warmup_rampup_on = ${v.rampupEnabled}, warmup_reply_rate = ${v.replyRate},
+        warmup_tag = coalesce(${v.tag || null}, warmup_tag)
+        where id in ${sql(rows.map((r) => r.id))}`;
       refresh();
       return { ok: true, data: { message: `Warmup updated on ${n}: ${v.min}–${v.max} a day, ${v.replyRate}% reply rate` } };
     }
