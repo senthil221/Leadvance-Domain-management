@@ -16,6 +16,7 @@ const OOO = [
   /\b(?:returning|return|back in the office|back in office) (?:on|monday|tuesday|wednesday|thursday|friday|next week)\b/,
   /\blimited (?:access to|ability to check) (?:my )?e-?mail\b/,
   /\b(?:i am|i'm) (?:currently )?travell?ing\b/,
+  /\bon (?:planned |annual |sick |medical |a )?(?:leave|vacation|holiday)\b/,
   /\bresponses? (?:will|may) be delayed\b/,
 ];
 
@@ -31,7 +32,9 @@ const AUTO = [
   /\bhas left the (?:company|organi[sz]ation)\b/,
   /\b(?:this )?mailbox is (?:not|no longer) (?:monitored|active)\b/,
   /\baddress (?:is )?no longer (?:in use|active|valid)\b/,
-  /\b(?:e-?mail|mail) ?(?:id|address)? (?:has )?(?:been )?changed\b/,
+  /\b(?:e-?mail|mail) ?(?:id|address)? (?:has )?(?:been )?(?:permanently )?(?:changed|updated)\b/,
+  /\b(?:shifted|moved) to a new (?:domain|e-?mail|mail)\b/,
+  /\bmail delivery (?:software|subsystem|system)\b|\bcould not be delivered to one or more\b/,
   /\bfor any (?:query|queries|questions?|support)\b.*\b(?:reach out|write|contact|e-?mail)\b/,
 ];
 
@@ -46,7 +49,8 @@ const UNSUBSCRIBE = [
 ];
 
 const REFERRAL = [
-  /\bloop(?:ing|ed)? (?:in|you in)\b/,
+  /\bloop(?:ing|ed)? (?:in|you in|our|my)\b/,
+  /\b(?:have |i've |i have )?added (?:my|our) (?:colleague|team|hr|manager|head)\b/,
   /\b(?:i am|i'm|i have|i've) (?:cc'?d|copied|copying|adding|forwarded|forwarding)\b/,
   /\b(?:cc'?ing|copying|adding) (?:my|our|in)\b/,
   /\bforward(?:ed|ing)? (?:this|your (?:e-?mail|message|note)) to\b/,
@@ -70,6 +74,11 @@ const NEGATIVE = [
   /^\s*(?:nope|nah)\b/,
   /\bnot (?:looking|required|needed|a priority|at this (?:time|point))\b/,
   /\b(?:no|don't have (?:a|any)) (?:need|requirement|budget)\b/,
+  /\b(?:do not|don't|does not|doesn't) (?:require|need)\b/,
+  /\bwe (?:do not|don't) (?:source|use|work with|hire|engage)\b/,
+  /\b(?:we )?have our own (?:system|team|solution|platform|vendor|software)\b/,
+  /\bwill not (?:move|switch|change)\b/,
+  /\bnot related to us\b/,
   /\bno,? thanks?\b|\bno thank you\b/,
   /\bnot a (?:good )?fit\b/,
   /\b(?:i am|i'm|we are|we're|all) set\s*(?:[.!,]|$)/,
@@ -85,7 +94,7 @@ export function newText(raw: string) {
     .replace(/<[^>]+>/g, " ")
     .replace(/&nbsp;/g, " ")
     .replace(/&amp;/g, "&")
-    .replace(/&#39;|&rsquo;/g, "'")
+    .replace(/&#39;|&rsquo;|&lsquo;|[‘’ʼ]/g, "'")
     .replace(/P \{margin-top:0;margin-bottom:0;\}/gi, " ");
   // Cut at the start of the quoted thread.
   const cut = t.search(/\n\s*(?:on .{4,80} wrote:|-{2,}\s*original message|from:\s.+\n\s*sent:|>)/i);
