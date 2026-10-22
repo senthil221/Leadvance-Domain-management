@@ -1,282 +1,389 @@
 "use client";
 
-import { DropdownMenu } from "radix-ui";
-import { Check, ChevronDown, ChevronRight, ChevronsDownUp, ChevronsUpDown, ExternalLink, MailX, MessageSquareText, Search } from "lucide-react";
+import { Dialog, DropdownMenu } from "radix-ui";
+import { Check, ChevronDown, ChevronRight, Copy, ExternalLink, Filter, MailX, MessageSquareText, Search, X } from "lucide-react";
 import Link from "next/link";
-import { Fragment, useMemo, useOptimistic, useState, useTransition } from "react";
+import { useEffect, useMemo, useOptimistic, useState, useTransition } from "react";
 import { toast } from "sonner";
-import { loadEvents, reclassifyReply } from "@/app/actions";
+import { loadEventDetail, loadEvents, reclassifyReply } from "@/app/actions";
 import { RangePicker } from "@/components/RangePicker";
-import { ClientCell, Empty } from "@/components/ui";
+import { ClientCell, Empty, Skeleton } from "@/components/ui";
 import { BOUNCE_META, BOUNCE_ORDER, bounceLine, bounceReason, type BounceReason } from "@/lib/bounces";
-import { ago, int } from "@/lib/format";
-import type { EventRow, EventsData } from "@/lib/queries";
+import type { ReplyClass } from "@/lib/classify";
+import { int } from "@/lib/format";
+import type { EventDetail, EventRow, EventsData } from "@/lib/queries";
 import { REPLY_CLASS_META } from "@/lib/status";
 
-// Replies or bounces for a date range, grouped client → domain, each level
-// collapsible, with counts and rates against what the domain sent.
+// Replies or bounces for a date range: a few numbers, a client → domain rail
+// to narrow down, a day-by-day list and a side panel with the full message.
+// Types are tags; the filter picks which ones show.
 
-type Cls = keyof typeof REPLY_CLASS_META;
 type Kind = "reply" | "bounce";
-type Row = EventRow & { cat: string };
+type Row = EventRow & { tag: string };
+type Meta = { label: string; tone: string };
 
-const REPLY_ORDER: Cls[] = ["human", "negative", "ooo", "auto"];
-const catOf = (kind: Kind, e: EventRow) => (kind === "reply" ? e.replyClass ?? "unclassified" : bounceReason(`${e.bounceRemote ?? ""} ${e.bounceText ?? ""}`));
-const catMeta = (kind: Kind, c: string) =>
-  kind === "reply" ? (REPLY_CLASS_META as Record<string, { label: string; tone: string }>)[c] ?? { label: "Unclassified", tone: "faint" } : BOUNCE_META[c as BounceReason];
-/** The category the headline column counts: human replies, or bounces to addresses that don't exist. */
-const KEY_CAT: Record<Kind, string> = { reply: "human", bounce: "missing" };
+const REPLY_TAGS = Object.keys(REPLY_CLASS_META) as ReplyClass[];
+const POSITIVE = new Set(["human", "referral"]);
+const NOT_A_FIT = new Set(["negative", "wrong_person", "unsubscribe"]);
 
-type Domain = { key: string; domainId: string | null; domain: string; rows: Row[]; sent: number; last: Date };
-type Client = { key: string; name: string | null; hue: number | null; domains: Domain[]; count: number; keyCount: number; sent: number; last: Date };
+const tagOf = (kind: Kind, e: EventRow) => (kind === "reply" ? e.replyClass ?? "human" : bounceReason(`${e.bounceRemote ?? ""} ${e.bounceText ?? ""}`));
+const metaOf = (kind: Kind, t: string): Meta => (kind === "reply" ? (REPLY_CLASS_META as Record<string, Meta>)[t] : BOUNCE_META[t as BounceReason]) ?? { label: t, tone: "faint" };
+const pct = (n: number, d: number) => (d > 0 ? `${((100 * n) / d).toFixed((100 * n) / d < 1 ? 2 : 1)}%` : "—");
+const companyOf = (email: string | null) => email?.split("@")[1]?.replace(/^mail\./, "") ?? null;
+const initialsOf = (name: string | null, email: string | null) => {
+  const s = (name ?? email ?? "?").trim();
+  const parts = s.split(/[\s._@-]+/).filter(Boolean);
+  return ((parts[0]?.[0] ?? "?") + (parts[1]?.[0] ?? "")).toUpperCase();
+};
 
 // Fixed locale and zone, so the server and the browser render the same text.
+const dayKey = (d: Date) => d.toISOString().slice(0, 10);
+const dayLabel = new Intl.DateTimeFormat("en-GB", { weekday: "short", day: "numeric", month: "short", timeZone: "UTC" });
+const timeLabel = new Intl.DateTimeFormat("en-GB", { hour: "2-digit", minute: "2-digit", timeZone: "UTC" });
 const stamp = new Intl.DateTimeFormat("en-GB", { dateStyle: "medium", timeStyle: "short", timeZone: "UTC" });
 
-const rate = (n: number, d: number) => (d > 0 ? `${((100 * n) / d).toFixed(n && (100 * n) / d < 1 ? 2 : 1)}%` : "—");
+const PAGE = 200;
 
-function group(rows: Row[], sent: Record<string, number>, kind: Kind): Client[] {
-  const clients = new Map<string, Client>();
+type DomainNode = { key: string; name: string; count: number; sent: number };
+type ClientNode = { key: string; name: string; hue: number | null; count: number; sent: number; domains: DomainNode[] };
+
+function tree(rows: Row[], sent: Record<string, number>): ClientNode[] {
+  const clients = new Map<string, ClientNode>();
   for (const r of rows) {
     const ck = r.clientId ?? "none";
-    const c = clients.get(ck) ?? { key: ck, name: r.clientName, hue: r.clientHue, domains: [], count: 0, keyCount: 0, sent: 0, last: new Date(0) };
-    let d = c.domains.find((x) => x.key === (r.domainId ?? r.domain ?? "?"));
+    const c = clients.get(ck) ?? { key: ck, name: r.clientName ?? "No client", hue: r.clientHue, count: 0, sent: 0, domains: [] };
+    const dk = r.domainId ?? r.domain ?? "?";
+    let d = c.domains.find((x) => x.key === dk);
     if (!d) {
-      d = { key: r.domainId ?? r.domain ?? "?", domainId: r.domainId, domain: r.domain ?? "Unknown domain", rows: [], sent: r.domainId ? sent[r.domainId] ?? 0 : 0, last: new Date(0) };
+      d = { key: dk, name: r.domain ?? "Unknown domain", count: 0, sent: r.domainId ? sent[r.domainId] ?? 0 : 0 };
       c.domains.push(d);
       c.sent += d.sent;
     }
-    d.rows.push(r);
-    const at = new Date(r.occurredAt);
-    if (at > d.last) d.last = at;
-    if (at > c.last) c.last = at;
+    d.count++;
     c.count++;
-    if (r.cat === KEY_CAT[kind]) c.keyCount++;
     clients.set(ck, c);
   }
   const list = [...clients.values()];
-  for (const c of list) c.domains.sort((a, b) => b.rows.length - a.rows.length || a.domain.localeCompare(b.domain));
-  return list.sort((a, b) => b.count - a.count || (a.name ?? "~").localeCompare(b.name ?? "~"));
-}
-
-function Mix({ rows, kind }: { rows: Row[]; kind: Kind }) {
-  const counts = new Map<string, number>();
-  for (const r of rows) counts.set(r.cat, (counts.get(r.cat) ?? 0) + 1);
-  const order = kind === "reply" ? [...REPLY_ORDER, "unclassified"] : BOUNCE_ORDER;
-  return (
-    <span className="ev-mix">
-      {order.filter((k) => counts.get(k)).map((k) => {
-        const m = catMeta(kind, k);
-        return <span key={k} className="ev-mix-item" title={m.label}><i className={`dot tone-${m.tone}`} />{counts.get(k)} {m.label.toLowerCase()}</span>;
-      })}
-    </span>
-  );
+  for (const c of list) c.domains.sort((a, b) => b.count - a.count || a.name.localeCompare(b.name));
+  return list.sort((a, b) => b.count - a.count || a.name.localeCompare(b.name));
 }
 
 export function EventsView({ kind, initial }: { kind: Kind; initial: EventsData }) {
   const [data, setData] = useState(initial);
-  const [cat, setCat] = useState<string>("all");
-  const [clientKey, setClientKey] = useState("");
+  const [tags, setTags] = useState<Set<string>>(new Set());
+  const [scope, setScope] = useState<{ client?: string; domain?: string }>({});
+  const [openClients, setOpenClients] = useState<Set<string>>(new Set());
   const [q, setQ] = useState("");
-  const [closed, setClosed] = useState<Set<string>>(new Set());
-  const [openDomains, setOpenDomains] = useState<Set<string> | "all">(initial.events.length <= 40 ? "all" : new Set());
+  const [limit, setLimit] = useState(PAGE);
+  const [selected, setSelected] = useState<number | null>(null);
   const [loading, start] = useTransition();
   const [, startReclass] = useTransition();
-  const [overrides, setOverride] = useOptimistic(new Map<number, Cls>(), (m, [id, c]: [number, Cls]) => new Map(m).set(id, c));
+  const [overrides, setOverride] = useOptimistic(new Map<number, ReplyClass>(), (m, [id, c]: [number, ReplyClass]) => new Map(m).set(id, c));
 
   const load = (from: string, to: string) => start(async () => {
     const r = await loadEvents(kind, { from, to });
-    if (r.ok) setData(r.data); else toast.error(r.error);
+    if (r.ok) { setData(r.data); setLimit(PAGE); } else toast.error(r.error);
   });
 
   const rows: Row[] = useMemo(() => data.events.map((e) => {
     const x = { ...e, replyClass: overrides.get(e.id) ?? e.replyClass };
-    return { ...x, cat: catOf(kind, x) };
+    return { ...x, tag: tagOf(kind, x) };
   }), [data.events, overrides, kind]);
-  const clientsAll = useMemo(() => group(rows, data.sent, kind), [rows, data.sent, kind]);
 
-  const counts = useMemo(() => {
-    const c: Record<string, number> = { all: rows.length };
-    for (const r of rows) c[r.cat] = (c[r.cat] ?? 0) + 1;
+  // The rail and the numbers follow the type filter and search, not the rail's own selection.
+  const needle = q.trim().toLowerCase();
+  const matching = useMemo(() => rows.filter((r) =>
+    (tags.size === 0 || tags.has(r.tag)) &&
+    (!needle || [r.preview, r.leadEmail, r.leadName, r.domain, r.campaignName, r.bounceText, r.bounceRemote, r.clientName].some((v) => v?.toLowerCase().includes(needle)))), [rows, tags, needle]);
+  const clients = useMemo(() => tree(matching, data.sent), [matching, data.sent]);
+  const shown = useMemo(() => matching.filter((r) =>
+    (!scope.client || (r.clientId ?? "none") === scope.client) && (!scope.domain || (r.domainId ?? r.domain ?? "?") === scope.domain)), [matching, scope]);
+
+  const tagCounts = useMemo(() => {
+    const c = new Map<string, number>();
+    for (const r of rows) c.set(r.tag, (c.get(r.tag) ?? 0) + 1);
     return c;
   }, [rows]);
-  const tabs = kind === "reply"
-    ? [...REPLY_ORDER.map((k) => ({ key: k, label: REPLY_CLASS_META[k].label })), { key: "all", label: "All" }]
-    : [...BOUNCE_ORDER.map((k) => ({ key: k, label: BOUNCE_META[k].label })), { key: "all", label: "All" }];
+  const order = kind === "reply" ? REPLY_TAGS : BOUNCE_ORDER;
 
-  const needle = q.trim().toLowerCase();
-  const clients = useMemo(() => {
-    const shown = rows.filter((r) =>
-      (cat === "all" || r.cat === cat) && (!clientKey || (r.clientId ?? "none") === clientKey) &&
-      (!needle || [r.preview, r.leadEmail, r.leadName, r.domain, r.campaignName, r.inboxEmail, r.bounceText, r.clientName].some((v) => v?.toLowerCase().includes(needle))));
-    return group(shown, data.sent, kind);
-  }, [rows, cat, clientKey, needle, data.sent, kind]);
-  const shownCount = clients.reduce((a, c) => a + c.count, 0);
-  const domainCount = clients.reduce((a, c) => a + c.domains.length, 0);
-  const totalSent = Object.values(data.sent).reduce((a, b) => a + b, 0);
+  // Sent in scope, for rates.
+  const sentInScope = scope.domain
+    ? clients.flatMap((c) => c.domains).find((d) => d.key === scope.domain)?.sent ?? 0
+    : scope.client ? clients.find((c) => c.key === scope.client)?.sent ?? 0
+    : Object.values(data.sent).reduce((a, b) => a + b, 0);
 
-  const isDomainOpen = (k: string) => openDomains === "all" || openDomains.has(k);
-  const toggleDomain = (k: string) => setOpenDomains((s) => {
-    const n = new Set(s === "all" ? clients.flatMap((c) => c.domains.map((d) => d.key)) : s);
-    if (n.has(k)) n.delete(k); else n.add(k);
-    return n;
+  const days = useMemo(() => {
+    const out: { key: string; label: string; rows: Row[] }[] = [];
+    for (const r of shown.slice(0, limit)) {
+      const at = new Date(r.occurredAt);
+      const k = dayKey(at);
+      let g = out[out.length - 1];
+      if (!g || g.key !== k) {
+        const diff = Math.round((Date.parse(data.today) - Date.parse(k)) / 86_400_000);
+        g = { key: k, label: diff === 0 ? "Today" : diff === 1 ? "Yesterday" : dayLabel.format(at), rows: [] };
+        out.push(g);
+      }
+      g.rows.push(r);
+    }
+    return out;
+  }, [shown, limit, data.today]);
+
+  const toggleTag = (t: string) => setTags((s) => { const n = new Set(s); if (n.has(t)) n.delete(t); else n.add(t); return n; });
+  const pickClient = (k: string) => {
+    setScope((s) => (s.client === k && !s.domain ? {} : { client: k }));
+    setOpenClients((s) => new Set(s).add(k));
+  };
+  const toggleOpen = (k: string) => setOpenClients((s) => { const n = new Set(s); if (n.has(k)) n.delete(k); else n.add(k); return n; });
+
+  const reclassify = (id: number, c: ReplyClass) => startReclass(async () => {
+    setOverride([id, c]);
+    const res = await reclassifyReply(id, c);
+    if (!res.ok) toast.error(res.error); else toast(`Tagged ${REPLY_CLASS_META[c].label}`);
   });
-  const toggleClient = (k: string) => setClosed((s) => { const n = new Set(s); if (n.has(k)) n.delete(k); else n.add(k); return n; });
-  const allOpen = closed.size === 0 && openDomains === "all";
 
-  const reclassify = (r: Row, c: Cls) => startReclass(async () => {
-    setOverride([r.id, c]);
-    const res = await reclassifyReply(r.id, c);
-    if (!res.ok) toast.error(res.error); else toast(`Marked as ${REPLY_CLASS_META[c].label.toLowerCase()}`);
-  });
+  const count = (set: Set<string>) => shown.filter((r) => set.has(r.tag)).length;
+  const cards = kind === "reply"
+    ? [
+        { label: "Replies", value: shown.length, foot: `${pct(shown.length, sentInScope)} of ${int(sentInScope)} sent`, set: null },
+        { label: "Positive", value: count(POSITIVE), foot: `${pct(count(POSITIVE), sentInScope)} · interested and referrals`, set: POSITIVE, tone: "success" },
+        { label: "Not a fit", value: count(NOT_A_FIT), foot: "not interested, wrong person, unsubscribe", set: NOT_A_FIT, tone: "warning" },
+        { label: "Automatic", value: count(new Set(["ooo", "auto"])), foot: "out of office and auto-replies", set: new Set(["ooo", "auto"]) },
+      ]
+    : [
+        { label: "Bounces", value: shown.length, foot: `${pct(shown.length, sentInScope)} of ${int(sentInScope)} sent`, set: null },
+        { label: "Blocked", value: count(new Set(["blocked"])), foot: "spam, policy or sender block lists", set: new Set(["blocked"]), tone: "warning" },
+        { label: "No such address", value: count(new Set(["missing"])), foot: "lead list quality", set: new Set(["missing"]) },
+        { label: "Recipient side", value: count(new Set(["restricted", "full", "temporary", "other"])), foot: "rules, full mailboxes, delays", set: new Set(["restricted", "full", "temporary", "other"]) },
+      ];
+  const sameSet = (a: Set<string> | null) => (a === null ? tags.size === 0 : a.size === tags.size && [...a].every((x) => tags.has(x)));
 
-  const plural = (n: number) => (kind === "reply" ? (n === 1 ? "reply" : "replies") : n === 1 ? "bounce" : "bounces");
-  const keyLabel = kind === "reply" ? "Human" : "No address";
-  const rateLabel = kind === "reply" ? "Human rate" : "Bounce rate";
-  const rateOf = (keyCount: number, count: number, sent: number) => (kind === "reply" ? rate(keyCount, sent) : rate(count, sent));
+  const current = selected != null ? rows.find((r) => r.id === selected) ?? null : null;
+  const word = kind === "reply" ? "replies" : "bounces";
 
   return (
     <div className="flex flex-col gap-3">
       <div className="table-bar">
-        <div className="view-tabs" role="tablist" aria-label={kind === "reply" ? "Reply type" : "Bounce reason"}>
-          {tabs.map((t) => (
-            <button key={t.key} type="button" role="tab" aria-selected={cat === t.key} className={cat === t.key ? "is-on" : undefined} onClick={() => setCat(t.key)}>
-              {t.label} <span>{int(counts[t.key] ?? 0)}</span>
-            </button>
-          ))}
-        </div>
+        <TagFilter kind={kind} order={order} counts={tagCounts} tags={tags} onToggle={toggleTag} onClear={() => setTags(new Set())} />
         <RangePicker from={data.from} to={data.to} today={data.today} loading={loading} onChange={load} />
-        {clientsAll.length > 1 ? (
-          <select className="select" style={{ width: 150 }} value={clientKey} onChange={(e) => setClientKey(e.target.value)} aria-label="Filter by client">
-            <option value="">All clients</option>
-            {clientsAll.map((c) => <option key={c.key} value={c.key}>{c.name ?? "No client"}</option>)}
-          </select>
-        ) : null}
         <span className="spacer-auto" />
-        <button type="button" className="btn btn-sm" onClick={() => { if (allOpen) { setClosed(new Set(clients.map((c) => c.key))); setOpenDomains(new Set()); } else { setClosed(new Set()); setOpenDomains("all"); } }}>
-          {allOpen ? <ChevronsDownUp size={14} /> : <ChevronsUpDown size={14} />} {allOpen ? "Collapse all" : "Expand all"}
-        </button>
         <label className="search-input">
           <Search size={14} strokeWidth={1.5} />
-          <input className="input" value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search" aria-label={`Search ${kind === "reply" ? "replies" : "bounces"}`} />
+          <input className="input" value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search" aria-label={`Search ${word}`} />
         </label>
       </div>
 
-      <div className="ev-summary">
-        <span><b>{int(shownCount)}</b> {plural(shownCount)}</span>
-        <span><b>{int(clients.reduce((a, c) => a + c.keyCount, 0))}</b> {kind === "reply" ? "human" : "to addresses that don't exist"}</span>
-        <span><b>{int(domainCount)}</b> domain{domainCount === 1 ? "" : "s"} · <b>{int(clients.length)}</b> client{clients.length === 1 ? "" : "s"}</span>
-        <span title="Campaign emails sent by all domains in this range">{kind === "reply" ? "human rate" : "bounce rate"} <b>{rateOf(clients.reduce((a, c) => a + c.keyCount, 0), shownCount, totalSent)}</b> of {int(totalSent)} sent</span>
+      <section className="ev-cards" aria-label="Numbers">
+        {cards.map((c) => (
+          <button key={c.label} type="button" className="ev-card" aria-pressed={sameSet(c.set)} onClick={() => setTags(new Set(c.set ?? []))}>
+            <span className="ev-card-label">{c.tone ? <i className={`dot tone-${c.tone}`} /> : null}{c.label}</span>
+            <span className="ev-card-value">{int(c.value)}</span>
+            <span className="ev-card-foot">{c.foot}</span>
+          </button>
+        ))}
+      </section>
+
+      <div className="ev-layout">
+        <nav className="ev-rail" aria-label="Clients and domains">
+          <button type="button" className="ev-rail-row is-all" aria-current={!scope.client || undefined} onClick={() => setScope({})}>
+            <span className="truncate">All clients</span><span className="ev-rail-n">{int(matching.length)}</span>
+          </button>
+          {clients.map((c) => {
+            const open = openClients.has(c.key) || scope.client === c.key;
+            return (
+              <div key={c.key}>
+                <div className="ev-rail-client">
+                  <button type="button" className="ev-rail-chev" aria-label={open ? `Hide ${c.name}'s domains` : `Show ${c.name}'s domains`} aria-expanded={open} onClick={() => toggleOpen(c.key)}>
+                    <ChevronRight size={13} style={{ transform: open ? "rotate(90deg)" : undefined }} />
+                  </button>
+                  <button type="button" className="ev-rail-row" aria-current={(scope.client === c.key && !scope.domain) || undefined} onClick={() => pickClient(c.key)}>
+                    <ClientCell name={c.name} hue={c.hue} />
+                    <span className="ev-rail-n">{int(c.count)}</span>
+                  </button>
+                </div>
+                {open ? c.domains.map((d) => (
+                  <button key={d.key} type="button" className="ev-rail-row is-domain" aria-current={scope.domain === d.key || undefined}
+                    onClick={() => setScope((s) => (s.domain === d.key ? { client: c.key } : { client: c.key, domain: d.key }))}
+                    title={`${d.count} of ${int(d.sent)} sent (${pct(d.count, d.sent)})`}>
+                    <span className="truncate">{d.name}</span>
+                    <span className="ev-rail-rate">{pct(d.count, d.sent)}</span>
+                    <span className="ev-rail-n">{int(d.count)}</span>
+                  </button>
+                )) : null}
+              </div>
+            );
+          })}
+        </nav>
+
+        <div className="ev-feed">
+          {days.length === 0 ? (
+            <Empty icon={kind === "reply" ? MessageSquareText : MailX} title={`No ${word} here`}>
+              {tags.size || needle || scope.client ? "Nothing matches these filters." : `${kind === "reply" ? "Replies" : "Bounces"} arrive from the Smartlead webhook. Try a longer range.`}
+            </Empty>
+          ) : days.map((g) => (
+            <section key={g.key} aria-label={g.label}>
+              <h3 className="ev-day"><span>{g.label}</span><span>{g.rows.length}</span></h3>
+              {g.rows.map((r) => {
+                const m = metaOf(kind, r.tag);
+                const text = kind === "reply" ? r.preview : bounceLine(r.bounceText, r.bounceRemote);
+                return (
+                  <button key={r.id} type="button" className="ev-item" aria-current={selected === r.id || undefined} onClick={() => setSelected(r.id)}>
+                    <span className="ev-avatar" aria-hidden="true">{initialsOf(r.leadName, r.leadEmail)}</span>
+                    <span className="ev-item-main">
+                      <span className="ev-item-top">
+                        <span className="ev-who">{r.leadName ?? r.leadEmail ?? "Unknown lead"}</span>
+                        <span className="ev-company">{companyOf(r.leadEmail)}</span>
+                      </span>
+                      <span className="ev-snippet">{text ?? "No preview"}</span>
+                    </span>
+                    <span className="ev-item-side">
+                      <span className={`badge tone-${m.tone}`}>{m.label}</span>
+                      <span className="ev-item-meta">{r.domain ?? ""} · {timeLabel.format(new Date(r.occurredAt))}</span>
+                    </span>
+                  </button>
+                );
+              })}
+            </section>
+          ))}
+          {shown.length > limit ? (
+            <button type="button" className="btn btn-sm ev-more" onClick={() => setLimit((l) => l + PAGE)}>Show {int(Math.min(PAGE, shown.length - limit))} more of {int(shown.length - limit)}</button>
+          ) : null}
+        </div>
       </div>
 
-      <div className="ev-list">
-        {clients.length === 0 ? (
-          <Empty icon={kind === "reply" ? MessageSquareText : MailX} title={`No ${kind === "reply" ? "replies" : "bounces"} in this range`}>
-            {kind === "reply" ? "Replies" : "Bounces"} arrive from the Smartlead webhook as they happen. Try a longer range.
-          </Empty>
-        ) : (
-          <>
-            <div className="ev-head" aria-hidden="true">
-              <span>Client / domain</span>
-              <span className="ev-num">{kind === "reply" ? "Replies" : "Bounces"}</span>
-              <span className="ev-num">{keyLabel}</span>
-              <span className="ev-num">Sent</span>
-              <span className="ev-num">{rateLabel}</span>
-              <span className="ev-num">Latest</span>
-            </div>
-            {clients.map((c) => {
-              const cOpen = !closed.has(c.key);
-              return (
-                <Fragment key={c.key}>
-                  <button type="button" className="ev-client" aria-expanded={cOpen} onClick={() => toggleClient(c.key)}>
-                    <span className="ev-name">
-                      <ChevronRight size={14} className="ev-chev" style={{ transform: cOpen ? "rotate(90deg)" : undefined }} />
-                      <ClientCell name={c.name ?? "No client"} hue={c.hue} />
-                      <span className="ev-sub">{c.domains.length} domain{c.domains.length === 1 ? "" : "s"}</span>
-                    </span>
-                    <span className="ev-num strong">{int(c.count)}</span>
-                    <span className="ev-num">{c.keyCount ? int(c.keyCount) : <span className="zero">0</span>}</span>
-                    <span className="ev-num text-muted">{c.sent ? int(c.sent) : <span className="zero">—</span>}</span>
-                    <span className="ev-num">{rateOf(c.keyCount, c.count, c.sent)}</span>
-                    <span className="ev-num text-muted">{ago(c.last)}</span>
-                  </button>
-                  {cOpen ? c.domains.map((d) => {
-                    const dOpen = isDomainOpen(d.key);
-                    const keyCount = d.rows.filter((r) => r.cat === KEY_CAT[kind]).length;
-                    return (
-                      <Fragment key={d.key}>
-                        <button type="button" className="ev-domain" aria-expanded={dOpen} onClick={() => toggleDomain(d.key)}>
-                          <span className="ev-name">
-                            <ChevronRight size={13} className="ev-chev" style={{ transform: dOpen ? "rotate(90deg)" : undefined }} />
-                            <span className="strong truncate">{d.domain}</span>
-                            <Mix rows={d.rows} kind={kind} />
-                          </span>
-                          <span className="ev-num">{int(d.rows.length)}</span>
-                          <span className="ev-num">{keyCount ? int(keyCount) : <span className="zero">0</span>}</span>
-                          <span className="ev-num text-muted">{d.sent ? int(d.sent) : <span className="zero">—</span>}</span>
-                          <span className="ev-num">{rateOf(keyCount, d.rows.length, d.sent)}</span>
-                          <span className="ev-num text-muted">{ago(d.last)}</span>
-                        </button>
-                        {dOpen ? d.rows.map((r) => <EventLine key={r.id} r={r} kind={kind} onReclassify={reclassify} />) : null}
-                      </Fragment>
-                    );
-                  }) : null}
-                </Fragment>
-              );
-            })}
-          </>
-        )}
-      </div>
-      <p className="text-[12px] text-faint">
-        Sent counts come from the daily Smartlead stats for the same days. {kind === "reply" ? "Change a reply's type from its badge; it also teaches the classifier." : "Reasons are read from each bounce notice."}
-      </p>
+      <EventPanel kind={kind} row={current} onClose={() => setSelected(null)} onReclassify={reclassify} />
     </div>
   );
 }
 
-function EventLine({ r, kind, onReclassify }: { r: Row; kind: Kind; onReclassify: (r: Row, c: Cls) => void }) {
-  const at = new Date(r.occurredAt);
-  const meta = catMeta(kind, r.cat);
-  const who = r.leadName ? `${r.leadName} · ${r.leadEmail ?? ""}` : r.leadEmail ?? "Unknown lead";
-  const text = kind === "reply" ? r.preview : bounceLine(r.bounceText, r.bounceRemote);
+function TagFilter({ kind, order, counts, tags, onToggle, onClear }: {
+  kind: Kind; order: readonly string[]; counts: Map<string, number>; tags: Set<string>; onToggle: (t: string) => void; onClear: () => void;
+}) {
+  const label = tags.size === 0 ? "All types" : tags.size === 1 ? metaOf(kind, [...tags][0]).label : `${tags.size} types`;
   return (
-    <div className="ev-row">
-      <span className="ev-time" title={stamp.format(at) + " UTC"}>{ago(at)}</span>
-      <span className="ev-lead truncate" title={who}>{who}</span>
-      <span className="ev-text truncate" title={kind === "reply" ? r.preview ?? undefined : [r.bounceRemote, r.bounceText].filter(Boolean).join(" — ") || undefined}>{text ?? <span className="zero">No preview</span>}</span>
-      <span className="ev-ctx truncate" title={[r.campaignName, r.sequence ? `email ${r.sequence}` : null, r.inboxEmail ? `from ${r.inboxEmail}` : null].filter(Boolean).join(" · ")}>
-        {r.campaignName ?? "—"}{r.sequence ? <span className="text-faint"> · #{r.sequence}</span> : null}
-      </span>
-      <span className="ev-badge">
-        {kind === "reply" ? (
-          <DropdownMenu.Root>
-            <DropdownMenu.Trigger asChild>
-              <button type="button" className={`badge tone-${meta.tone} cursor-pointer`} aria-label="Change reply type">
-                {meta.label} <ChevronDown size={11} />
-              </button>
-            </DropdownMenu.Trigger>
-            <DropdownMenu.Portal>
-              <DropdownMenu.Content className="menu" align="end" sideOffset={6}>
-                <DropdownMenu.Label className="menu-label">Classify as</DropdownMenu.Label>
-                {(Object.keys(REPLY_CLASS_META) as Cls[]).map((c) => (
-                  <DropdownMenu.Item key={c} className="menu-item" onSelect={() => onReclassify(r, c)}>
-                    <span className={`dot tone-${REPLY_CLASS_META[c].tone}`} />
-                    {REPLY_CLASS_META[c].label}
-                    {r.replyClass === c ? <Check size={13} className="menu-hint" /> : null}
-                  </DropdownMenu.Item>
-                ))}
-              </DropdownMenu.Content>
-            </DropdownMenu.Portal>
-          </DropdownMenu.Root>
-        ) : (
-          <span className={`badge tone-${meta.tone}`} title={BOUNCE_META[r.cat as BounceReason].hint}>{meta.label}</span>
-        )}
-      </span>
-      {r.link ? (
-        <a className="ev-open" href={r.link} target="_blank" rel="noreferrer" title="Open in Smartlead" aria-label="Open in Smartlead"><ExternalLink size={13} /></a>
-      ) : r.domainId ? (
-        <Link className="ev-open" href={`/domains?d=${r.domainId}`} title="Open the domain" aria-label="Open the domain"><ExternalLink size={13} /></Link>
-      ) : <span />}
-    </div>
+    <span className="flex items-center gap-1">
+      <DropdownMenu.Root>
+        <DropdownMenu.Trigger asChild>
+          <button type="button" className={`btn btn-sm${tags.size ? " is-on" : ""}`} aria-label="Filter by type">
+            <Filter size={13} /> {label} <ChevronDown size={12} className="text-faint" />
+          </button>
+        </DropdownMenu.Trigger>
+        <DropdownMenu.Portal>
+          <DropdownMenu.Content className="menu" align="start" sideOffset={6} style={{ minWidth: 220 }}>
+            <DropdownMenu.Label className="menu-label">{kind === "reply" ? "Reply type" : "Bounce reason"}</DropdownMenu.Label>
+            {order.map((t) => {
+              const m = metaOf(kind, t);
+              return (
+                <DropdownMenu.CheckboxItem key={t} className="menu-item" checked={tags.has(t)} onSelect={(e) => e.preventDefault()} onCheckedChange={() => onToggle(t)}>
+                  <span className={`dot tone-${m.tone}`} />
+                  <span className="flex-1">{m.label}</span>
+                  <span className="text-faint num">{int(counts.get(t) ?? 0)}</span>
+                  <span className="w-4">{tags.has(t) ? <Check size={13} /> : null}</span>
+                </DropdownMenu.CheckboxItem>
+              );
+            })}
+            {tags.size ? (
+              <>
+                <DropdownMenu.Separator className="menu-sep" />
+                <DropdownMenu.Item className="menu-item" onSelect={onClear}>Show all types</DropdownMenu.Item>
+              </>
+            ) : null}
+          </DropdownMenu.Content>
+        </DropdownMenu.Portal>
+      </DropdownMenu.Root>
+      {tags.size ? <button type="button" className="btn btn-sm btn-icon" aria-label="Clear the type filter" onClick={onClear}><X size={13} /></button> : null}
+    </span>
+  );
+}
+
+function EventPanel({ kind, row, onClose, onReclassify }: { kind: Kind; row: Row | null; onClose: () => void; onReclassify: (id: number, c: ReplyClass) => void }) {
+  const [detail, setDetail] = useState<{ id: number; d: EventDetail } | null>(null);
+  const id = row?.id ?? null;
+  useEffect(() => {
+    if (id == null) return;
+    let live = true;
+    loadEventDetail(id).then((r) => {
+      if (!live) return;
+      if (r.ok) setDetail({ id, d: r.data }); else toast.error(r.error);
+    });
+    return () => { live = false; };
+  }, [id]);
+  const d = detail && row && detail.id === row.id ? detail.d : null;
+  const copy = (s: string) => navigator.clipboard.writeText(s).then(() => toast("Copied"), () => toast.error("Couldn't copy"));
+
+  return (
+    // Not modal: the list stays usable, so the next reply is one click away.
+    <Dialog.Root open={row !== null} onOpenChange={(o) => !o && onClose()} modal={false}>
+      <Dialog.Portal>
+        <Dialog.Content className="sheet" aria-describedby={undefined}
+          onInteractOutside={(e) => { if ((e.target as Element | null)?.closest?.(".ev-item, .ev-rail, .ev-cards, .table-bar")) e.preventDefault(); }}
+          onOpenAutoFocus={(e) => e.preventDefault()}>
+          {row ? (
+            <>
+              <div className="sheet-head">
+                <span className="ev-avatar is-lg" aria-hidden="true">{initialsOf(row.leadName, row.leadEmail)}</span>
+                <div className="min-w-0 flex-1">
+                  <Dialog.Title className="sheet-title truncate">{row.leadName ?? row.leadEmail ?? "Unknown lead"}</Dialog.Title>
+                  <p className="truncate text-[12.5px] text-muted">{row.leadEmail}{companyOf(row.leadEmail) ? ` · ${companyOf(row.leadEmail)}` : ""}</p>
+                </div>
+                <Dialog.Close asChild><button type="button" className="btn btn-sm btn-icon" aria-label="Close"><X size={15} /></button></Dialog.Close>
+              </div>
+              <div className="sheet-body">
+                {kind === "reply" ? (
+                  <div className="ev-tagset" role="group" aria-label="Reply type">
+                    {REPLY_TAGS.map((t) => (
+                      <button key={t} type="button" className={`ev-tagbtn tone-${REPLY_CLASS_META[t].tone}`} aria-pressed={row.tag === t} onClick={() => row.tag !== t && onReclassify(row.id, t)}>
+                        {REPLY_CLASS_META[t].label}
+                      </button>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="flex items-center gap-2">
+                    <span className={`badge tone-${BOUNCE_META[row.tag as BounceReason].tone}`}>{BOUNCE_META[row.tag as BounceReason].label}</span>
+                    <span className="text-[12.5px] text-muted">{BOUNCE_META[row.tag as BounceReason].hint}</span>
+                  </div>
+                )}
+
+                <dl className="ev-facts">
+                  <dt>Domain</dt><dd>{row.domainId ? <Link className="hover:underline" href={`/domains?d=${row.domainId}`}>{row.domain}</Link> : row.domain ?? "—"}</dd>
+                  <dt>Client</dt><dd><ClientCell name={row.clientName} hue={row.clientHue} /></dd>
+                  <dt>Inbox</dt><dd className="truncate">{row.inboxEmail ?? "—"}</dd>
+                  <dt>Campaign</dt><dd className="truncate">{row.campaignName ?? "—"}{row.sequence ? ` · email ${row.sequence}` : ""}</dd>
+                  <dt>{kind === "reply" ? "Replied" : "Bounced"}</dt><dd>{stamp.format(new Date(row.occurredAt))} UTC</dd>
+                  {d?.ccs.length ? <><dt>Cc</dt><dd className="truncate">{d.ccs.join(", ")}</dd></> : null}
+                </dl>
+
+                {kind === "reply" ? (
+                  <section>
+                    <h4 className="ev-h">Their reply</h4>
+                    {d ? <p className="ev-body">{d.body ?? row.preview ?? "No text"}</p> : <Skeleton w="100%" h={60} />}
+                  </section>
+                ) : (
+                  <section>
+                    <h4 className="ev-h">What the server said</h4>
+                    {d ? (
+                      <>
+                        {d.remote ? <p className="ev-body is-code">{d.remote}</p> : null}
+                        <p className="ev-body">{d.notice ?? row.bounceText ?? "No notice text"}</p>
+                      </>
+                    ) : <Skeleton w="100%" h={60} />}
+                  </section>
+                )}
+
+                {d?.sent ? (
+                  <details className="ev-sent">
+                    <summary>Your email{d.sentSubject ? `: ${d.sentSubject}` : ""}</summary>
+                    <p className="ev-body">{d.sent}</p>
+                  </details>
+                ) : null}
+              </div>
+              <div className="sheet-foot">
+                {row.leadEmail ? <button type="button" className="btn" onClick={() => copy(row.leadEmail!)}><Copy size={14} /> Copy email</button> : null}
+                {row.link ? <a className="btn btn-primary" href={row.link} target="_blank" rel="noreferrer"><ExternalLink size={14} /> Open in Smartlead</a> : null}
+              </div>
+            </>
+          ) : null}
+        </Dialog.Content>
+      </Dialog.Portal>
+    </Dialog.Root>
   );
 }

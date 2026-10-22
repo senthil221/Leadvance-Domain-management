@@ -250,11 +250,12 @@ export async function runHealthCheck(): Promise<ActionResult<{ opened: number; r
   }
 }
 
-export async function reclassifyReply(id: number, cls: "human" | "ooo" | "auto" | "negative"): Promise<ActionResult> {
+export async function reclassifyReply(id: number, cls: import("@/lib/classify").ReplyClass): Promise<ActionResult> {
   try {
     await requireActor();
-    const c = z.enum(["human", "ooo", "auto", "negative"]).parse(cls);
-    await sql`update email_events set reply_class = ${c}::reply_class, class_overridden = true where id = ${z.number().int().parse(id)} and kind = 'reply'`;
+    const { REPLY_CLASSES } = await import("@/lib/classify");
+    const c = z.enum(REPLY_CLASSES).parse(cls);
+    await sql`update email_events set reply_class = ${c}::reply_class, class_overridden = true where id = ${z.coerce.number().int().positive().parse(id)} and kind = 'reply'`;
     refresh();
     return { ok: true, data: undefined };
   } catch (e) {
@@ -595,6 +596,18 @@ export async function loadStats(input: z.input<typeof statsRange>): Promise<Acti
     const { from, to } = statsRange.parse(input);
     const { getStats } = await import("@/lib/queries");
     return { ok: true, data: await getStats(from, to) };
+  } catch (e) {
+    return fail(e);
+  }
+}
+
+/** A reply or bounce in full, loaded when its panel opens. */
+export async function loadEventDetail(id: number): Promise<ActionResult<import("@/lib/queries").EventDetail>> {
+  try {
+    await requireActor();
+    const { getEventDetail } = await import("@/lib/queries");
+    const d = await getEventDetail(z.coerce.number().int().positive().parse(id));
+    return d ? { ok: true, data: d } : { ok: false, error: "This event no longer exists" };
   } catch (e) {
     return fail(e);
   }

@@ -1,8 +1,11 @@
-// Sorts a reply into human, out of office, auto-reply or not interested.
-// Rules run on the new text only (quoted history removed), in that order of
-// priority: an out-of-office that also says "automatic reply" is out of office.
+// Sorts a reply into a type. Rules run on the new text only (quoted history
+// removed), in order of priority: out of office, auto-reply, unsubscribe,
+// referral, wrong person, not interested; anything else is a human reply
+// (shown as Interested). An out-of-office that also says "automatic reply"
+// is out of office; "I don't handle HR, please contact Priya" is a referral.
 
-export type ReplyClass = "human" | "ooo" | "auto" | "negative";
+export const REPLY_CLASSES = ["human", "referral", "negative", "wrong_person", "unsubscribe", "ooo", "auto"] as const;
+export type ReplyClass = (typeof REPLY_CLASSES)[number];
 
 const OOO = [
   /\bout of (?:the )?office\b/,
@@ -12,6 +15,7 @@ const OOO = [
   /\b(?:i am|i'm|i will be|i'll be) (?:currently )?(?:away|travell?ing|out)\b.*\b(?:until|through|returning|back)\b/,
   /\b(?:returning|return|back in the office|back in office) (?:on|monday|tuesday|wednesday|thursday|friday|next week)\b/,
   /\blimited (?:access to|ability to check) (?:my )?e-?mail\b/,
+  /\b(?:i am|i'm) (?:currently )?travell?ing\b/,
   /\bresponses? (?:will|may) be delayed\b/,
 ];
 
@@ -27,18 +31,46 @@ const AUTO = [
   /\bhas left the (?:company|organi[sz]ation)\b/,
   /\b(?:this )?mailbox is (?:not|no longer) (?:monitored|active)\b/,
   /\baddress (?:is )?no longer (?:in use|active|valid)\b/,
+  /\b(?:e-?mail|mail) ?(?:id|address)? (?:has )?(?:been )?changed\b/,
+  /\bfor any (?:query|queries|questions?|support)\b.*\b(?:reach out|write|contact|e-?mail)\b/,
 ];
 
-const NEGATIVE = [
+const UNSUBSCRIBE = [
   /\bunsubscribe\b/,
   /\bopt(?:ed)?[- ]?out\b/,
   /\b(?:please )?remove (?:me|us|my (?:e-?mail|address)|this (?:e-?mail|address))\b/,
   /\btake (?:me|us) off\b/,
   /\bstop (?:e-?mailing|contacting|sending|messaging)\b/,
   /^\s*stop\b/,
-  /\bnot interested\b/,
-  /\bno,? thanks?\b|\bno thank you\b/,
   /\b(?:do not|don't|never) (?:contact|e-?mail|reach out)\b/,
+];
+
+const REFERRAL = [
+  /\bloop(?:ing|ed)? (?:in|you in)\b/,
+  /\b(?:i am|i'm|i have|i've) (?:cc'?d|copied|copying|adding|forwarded|forwarding)\b/,
+  /\b(?:cc'?ing|copying|adding) (?:my|our|in)\b/,
+  /\bforward(?:ed|ing)? (?:this|your (?:e-?mail|message|note)) to\b/,
+  /\b(?:please |kindly |you (?:can|could|may) )?(?:reach out|get in touch|connect|speak|talk|write|contact) (?:to |with )?(?:my colleague|our (?:hr|team|head|manager|ceo|founder)|the (?:hr|right) (?:team|person)|@)/,
+  /\bthe right person (?:is|would be|to (?:speak|talk|contact))\b/,
+  /\b(?:he|she|they) (?:is|are|will be) (?:the )?(?:right|best|better) (?:person|contact)\b/,
+];
+
+const WRONG_PERSON = [
+  /\b(?:i|we) (?:do not|don't|dont|no longer) (?:handle|deal with|manage|look after|take care of|work (?:in|on))\b/,
+  /\b(?:i am|i'm|im) not (?:an? |the |in )?(?:hr|right person|correct person|person|decision ?maker|responsible|involved|handling)\b/,
+  /\bnot (?:the )?(?:right|correct|relevant) (?:person|contact)\b/,
+  /\bwrong (?:person|contact|e-?mail|address)\b/,
+  /\bnot (?:my|in my) (?:area|department|role|domain|scope)\b/,
+  /\bnot (?:handling|in charge of|responsible for)\b/,
+];
+
+const NEGATIVE = [
+  /\bnot interested\b/,
+  /^\s*(?:nope|no|nah)\s*[.!,]*\s*$/,
+  /^\s*(?:nope|nah)\b/,
+  /\bnot (?:looking|required|needed|a priority|at this (?:time|point))\b/,
+  /\b(?:no|don't have (?:a|any)) (?:need|requirement|budget)\b/,
+  /\bno,? thanks?\b|\bno thank you\b/,
   /\bnot a (?:good )?fit\b/,
   /\b(?:i am|i'm|we are|we're|all) set\s*(?:[.!,]|$)/,
   /\bwe(?: are|'re) (?:good|covered|all set)\b/,
@@ -67,6 +99,9 @@ export function classifyReply(body: string | null | undefined, subject?: string 
   const both = `${subj} ${text}`;
   if (OOO.some((r) => r.test(both))) return "ooo";
   if (AUTO.some((r) => r.test(both))) return "auto";
+  if (UNSUBSCRIBE.some((r) => r.test(text))) return "unsubscribe";
+  if (REFERRAL.some((r) => r.test(text))) return "referral";
+  if (WRONG_PERSON.some((r) => r.test(text))) return "wrong_person";
   if (NEGATIVE.some((r) => r.test(text))) return "negative";
   return "human";
 }

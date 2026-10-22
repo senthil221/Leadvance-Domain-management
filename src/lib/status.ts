@@ -52,9 +52,14 @@ export const STEP_LABELS = {
 export type StepKey = keyof typeof STEP_LABELS;
 export type StepStatus = "pending" | "running" | "done" | "failed" | "skipped" | "manual";
 
+// Reply types, in the order the filter lists them. "human" is a person
+// replying with interest or a question, shown as Interested.
 export const REPLY_CLASS_META = {
-  human: { label: "Human", tone: "success" },
+  human: { label: "Interested", tone: "success" },
+  referral: { label: "Referral", tone: "info" },
+  negative: { label: "Not interested", tone: "warning" },
+  wrong_person: { label: "Wrong person", tone: "violet" },
+  unsubscribe: { label: "Unsubscribe", tone: "danger" },
   ooo: { label: "Out of office", tone: "faint" },
   auto: { label: "Auto-reply", tone: "faint" },
-  negative: { label: "Not interested", tone: "warning" },
-} as const satisfies Record<string, { label: string; tone: Tone }>;
+} as const satisfies Record<import("./classify").ReplyClass, { label: string; tone: Tone }>;

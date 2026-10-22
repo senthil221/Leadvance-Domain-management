@@ -513,7 +513,7 @@ export async function listInboxes() {
       select inbox_id,
         count(*) filter (where kind = 'sent')::int as sent7,
         count(*) filter (where kind = 'reply')::int as replies7,
-        count(*) filter (where kind = 'reply' and reply_class = 'human')::int as human7,
+        count(*) filter (where kind = 'reply' and reply_class::text in ('human', 'referral'))::int as human7,
         count(*) filter (where kind = 'bounce')::int as bounces7
       from email_events where occurred_at > now() - interval '7 days' and inbox_id is not null
       group by inbox_id
@@ -608,10 +608,39 @@ export async function getStats(from: string, to: string): Promise<StatsData> {
 }
 
 export type ReplyRow = {
-  id: number; occurredAt: Date; replyClass: "human" | "ooo" | "auto" | "negative" | null; classOverridden: boolean;
+  id: number; occurredAt: Date; replyClass: import("./classify").ReplyClass | null; classOverridden: boolean;
   preview: string | null; leadEmail: string | null; inboxEmail: string | null; domainId: string | null; domain: string | null;
   campaignName: string | null; clientName: string | null; clientHue: number | null; recipientEsp: string | null;
 };
+
+/** One reply or bounce in full, for the detail panel: what they wrote and what was sent. */
+export type EventDetail = { body: string | null; sent: string | null; sentSubject: string | null; notice: string | null; remote: string | null; ccs: string[] };
+
+export async function getEventDetail(id: number): Promise<EventDetail | null> {
+  const [r] = await sql<{ body: string | null; sent: string | null; sentSubject: string | null; notice: string | null; ccs: string | null; html: string | null }[]>`
+    select coalesce(payload->>'reply_body', payload->'reply_message'->>'html', payload->'reply_message'->>'text') as body,
+      coalesce(payload->'sent_message'->>'text', payload->>'sent_message_body') as sent,
+      coalesce(payload->>'custom_subject', payload->>'subject', subject) as sent_subject,
+      payload->'bounce_message'->>'text' as notice,
+      payload->'bounce_message'->>'html' as html,
+      (payload->'cc_emails')::text as ccs
+    from email_events where id = ${id} and kind in ('reply', 'bounce')`;
+  if (!r) return null;
+  const { newText } = await import("./classify");
+  // The receiving server's own error sits only in the HTML of Office 365 notices.
+  const plain = r.html ? newText(r.html.replace(/&gt;/g, ">")) : "";
+  const remote = plain.match(/Remote server returned an error.{0,300}?(?= Message rejected by| Notification Details|$)/i)?.[0] ?? null;
+  let ccs: string[] = [];
+  try { const v = JSON.parse(r.ccs ?? "null"); if (Array.isArray(v)) ccs = v.map(String); } catch { /* not a list */ }
+  return {
+    body: r.body ? newText(r.body) : null,
+    sent: r.sent ? r.sent.replace(/\r/g, "").trim() : null,
+    sentSubject: r.sentSubject,
+    notice: r.notice ? r.notice.replace(/\r/g, "").trim() : null,
+    remote,
+    ccs,
+  };
+}
 
 /** The last n days in the stats timezone, today included. */
 export async function lastDays(n: number) {

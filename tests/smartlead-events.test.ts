@@ -52,7 +52,7 @@ describe("parseSmartleadEvent", () => {
     expect(e.inboxEmail).toBeNull();
     expect(e.smartleadAccountId).toBe(456);
     expect(e.leadEmail).toBe("lead@example.com");
-    expect(e.replyClass).toBe("negative");
+    expect(e.replyClass).toBe("unsubscribe");
     expect(e.dedupeKey).toBe("reply:reply-abc123");
   });
 

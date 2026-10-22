@@ -6,14 +6,27 @@ const cases: [string, ReturnType<typeof classifyReply>][] = [
   ["Ms. Lark, what's your phone number so I can call to discuss. John N", "human"],
   ["Let me know more about what sort of funding you offer Chris Barnhill LinkedIn | Book", "human"],
   ["What do you need to qualify? TT Best regards, Trung Thai CEO o: 415.645.2579", "human"],
-  ["Please stop emailing me Cindy Seitz President Duperon Education", "negative"],
+  ["Please stop emailing me Cindy Seitz President Duperon Education", "unsubscribe"],
   ["No Thanks - I am set.", "negative"],
-  ["Unsubscribe Trent Thompson PRESIDENT LAUTEN AUDIO www.LautenAudio.com", "negative"],
-  ["Please remove this email address, we're not a fit.", "negative"],
-  ["STOP ---", "negative"],
+  ["Unsubscribe Trent Thompson PRESIDENT LAUTEN AUDIO www.LautenAudio.com", "unsubscribe"],
+  ["Please remove this email address, we're not a fit.", "unsubscribe"],
+  ["STOP ---", "unsubscribe"],
   ["P {margin-top:0;margin-bottom:0;} Not interested. Thanks.", "negative"],
-  ["Hi Michael, Please remove me from your email list. Thank you, Kristina Boesch", "negative"],
-  ["P {margin-top:0;margin-bottom:0;} Stop Laura Hunter Recruitment Founder: Tax | Acco", "negative"],
+  ["Hi Michael, Please remove me from your email list. Thank you, Kristina Boesch", "unsubscribe"],
+  ["P {margin-top:0;margin-bottom:0;} Stop Laura Hunter Recruitment Founder: Tax | Acco", "unsubscribe"],
+  // Replies from the Kapable campaigns (October 2026).
+  ["nope", "negative"],
+  ["I don't handle HR", "wrong_person"],
+  ["I am not an HR, sorry", "wrong_person"],
+  ["I don't handle HR for Aspire For Her. Thanks.", "wrong_person"],
+  ["Hi, I am not handling the HR & currently we are not looking for this type coaching program.", "wrong_person"],
+  ["Dear Shema, Looping you in Please have a look Regards Gagan Khurana", "referral"],
+  ["Thanks Gagan, Looping in Priyanka from HR. @Priyanka if this is something you would be interested in", "referral"],
+  ["Hi Twinkle, Awaiting a response here, in case you are keen to explore the requirement.", "human"],
+  ["Thank you for your email. I am travelling. For any urgent matters you can reach out to my colleague: milan@cms.com", "ooo"],
+  ["Hello Twinkle, I am on maternity leave. You can reach out to me after one week please", "ooo"],
+  ["Name : Vikas Gupta Designation : Placement Manager Mail Id has been changed to vikas@vlcc.com", "auto"],
+  ["Thank you for reaching out to Prosperr.io. For any query related to any support, Please reach out to us at support@prosperr.io.", "auto"],
   ["Hello! I am out of the office today through Friday, returning Monday Oct 19th. For an", "ooo"],
   ["Please note I am out of the office until Tuesday 10/20 and my responses will be delayed", "ooo"],
   ["Thank you for your email - I am currently out of the office but anticipate returning by", "ooo"],
@@ -37,7 +50,7 @@ describe("classifyReply", () => {
 
   it("reads HTML bodies", () => {
     expect(newText("<div>Interested,<br>call me</div><style>p{}</style>")).toBe("Interested, call me");
-    expect(classifyReply("<p>Please <b>unsubscribe</b> me</p>")).toBe("negative");
+    expect(classifyReply("<p>Please <b>unsubscribe</b> me</p>")).toBe("unsubscribe");
   });
 
   it("treats an empty body as human so it is never hidden", () => {
