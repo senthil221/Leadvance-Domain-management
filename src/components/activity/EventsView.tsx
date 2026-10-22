@@ -21,7 +21,7 @@ type Kind = "reply" | "bounce";
 type Row = EventRow & { cat: string };
 
 const REPLY_ORDER: Cls[] = ["human", "negative", "ooo", "auto"];
-const catOf = (kind: Kind, e: EventRow) => (kind === "reply" ? e.replyClass ?? "unclassified" : bounceReason(e.bounceText));
+const catOf = (kind: Kind, e: EventRow) => (kind === "reply" ? e.replyClass ?? "unclassified" : bounceReason(`${e.bounceRemote ?? ""} ${e.bounceText ?? ""}`));
 const catMeta = (kind: Kind, c: string) =>
   kind === "reply" ? (REPLY_CLASS_META as Record<string, { label: string; tone: string }>)[c] ?? { label: "Unclassified", tone: "faint" } : BOUNCE_META[c as BounceReason];
 /** The category the headline column counts: human replies, or bounces to addresses that don't exist. */
@@ -238,12 +238,12 @@ function EventLine({ r, kind, onReclassify }: { r: Row; kind: Kind; onReclassify
   const at = new Date(r.occurredAt);
   const meta = catMeta(kind, r.cat);
   const who = r.leadName ? `${r.leadName} · ${r.leadEmail ?? ""}` : r.leadEmail ?? "Unknown lead";
-  const text = kind === "reply" ? r.preview : bounceLine(r.bounceText);
+  const text = kind === "reply" ? r.preview : bounceLine(r.bounceText, r.bounceRemote);
   return (
     <div className="ev-row">
       <span className="ev-time" title={stamp.format(at) + " UTC"}>{ago(at)}</span>
       <span className="ev-lead truncate" title={who}>{who}</span>
-      <span className="ev-text truncate" title={kind === "reply" ? r.preview ?? undefined : r.bounceText ?? undefined}>{text ?? <span className="zero">No preview</span>}</span>
+      <span className="ev-text truncate" title={kind === "reply" ? r.preview ?? undefined : [r.bounceRemote, r.bounceText].filter(Boolean).join(" — ") || undefined}>{text ?? <span className="zero">No preview</span>}</span>
       <span className="ev-ctx truncate" title={[r.campaignName, r.sequence ? `email ${r.sequence}` : null, r.inboxEmail ? `from ${r.inboxEmail}` : null].filter(Boolean).join(" · ")}>
         {r.campaignName ?? "—"}{r.sequence ? <span className="text-faint"> · #{r.sequence}</span> : null}
       </span>

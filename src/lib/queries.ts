@@ -631,6 +631,8 @@ export type EventRow = {
   link: string | null;
   /** The bounce notice's text (bounces only), shortened. */
   bounceText: string | null;
+  /** The receiving server's error quoted in the notice's HTML, e.g. "553 … badmailfrom list (#5.7.1)". */
+  bounceRemote: string | null;
 };
 export type EventsData = { from: string; to: string; today: string; events: EventRow[]; sent: Record<string, number> };
 
@@ -649,7 +651,10 @@ export async function getEvents(kind: "reply" | "bounce", from: string, to: stri
         e.domain_id, coalesce(d.name, e.domain_name) as domain, e.campaign_name, e.sequence_number as sequence,
         e.client_id, c.name as client_name, c.hue as client_hue, e.recipient_esp,
         coalesce(e.payload->>'ui_master_inbox_link', e.payload->>'app_url') as link,
-        case when e.kind = 'bounce' then left(coalesce(e.payload->'bounce_message'->>'text', e.payload->>'description'), 600) end as bounce_text
+        case when e.kind = 'bounce' then left(coalesce(e.payload->'bounce_message'->>'text', e.payload->>'description'), 600) end as bounce_text,
+        -- Office 365 quotes the receiving server's own error only in the HTML version.
+        case when e.kind = 'bounce' then left(replace(substring(regexp_replace(coalesce(e.payload->'bounce_message'->>'html', ''), '<[^>]+>', ' ', 'g')
+          from 'Remote server returned an error.{0,250}'), '&gt;', '>'), 300) end as bounce_remote
       from email_events e cross join tz
       left join domains d on d.id = e.domain_id left join clients c on c.id = e.client_id
       where e.kind = ${kind}::event_kind
