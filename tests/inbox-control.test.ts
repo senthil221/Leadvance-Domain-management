@@ -261,3 +261,17 @@ describe("warmup tag", () => {
     expect(parseAccount({ id: 7, from_email: "a@b.com", warmup_details: { status: "ACTIVE", warmup_key_id: "along-stood" } })?.warmupTag).toBe("along-stood");
   });
 });
+
+describe("bounce reasons", () => {
+  it("reads why from Office 365 and generic notices", async () => {
+    const { bounceReason, bounceLine } = await import("../src/lib/bounces");
+    const o365 = "Your message to akshat@ebizon.com couldn't be delivered.\nakshat wasn't found at ebizon.com.\ntwinklesingh_s  Office 365";
+    expect(bounceReason(o365)).toBe("missing");
+    expect(bounceLine(o365)).toBe("akshat wasn't found at ebizon.com.");
+    expect(bounceReason("550 5.7.1 Message rejected as spam by Content Filtering")).toBe("blocked");
+    expect(bounceReason("552 5.2.2 The email account that you tried to reach is over quota")).toBe("full");
+    expect(bounceReason("421 4.4.2 Connection timed out")).toBe("temporary");
+    expect(bounceReason("Something odd happened")).toBe("other");
+    expect(bounceReason(null)).toBe("other");
+  });
+});

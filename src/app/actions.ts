@@ -600,6 +600,18 @@ export async function loadStats(input: z.input<typeof statsRange>): Promise<Acti
   }
 }
 
+/** Replies or bounces for another date range. */
+export async function loadEvents(kind: "reply" | "bounce", input: z.input<typeof statsRange>): Promise<ActionResult<import("@/lib/queries").EventsData>> {
+  try {
+    await requireActor();
+    const { from, to } = statsRange.parse(input);
+    const { getEvents } = await import("@/lib/queries");
+    return { ok: true, data: await getEvents(z.enum(["reply", "bounce"]).parse(kind), from, to) };
+  } catch (e) {
+    return fail(e);
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Domain checks: DNS validation and reconnecting inboxes
 // ---------------------------------------------------------------------------

@@ -613,13 +613,54 @@ export type ReplyRow = {
   campaignName: string | null; clientName: string | null; clientHue: number | null; recipientEsp: string | null;
 };
 
-export async function listReplies(limit = 500) {
-  return sql<ReplyRow[]>`
-    select e.id, e.occurred_at, e.reply_class, e.class_overridden, e.preview, e.lead_email, e.inbox_email,
-      e.domain_id, coalesce(d.name, e.domain_name) as domain, e.campaign_name, c.name as client_name, c.hue as client_hue, e.recipient_esp
-    from email_events e left join domains d on d.id = e.domain_id left join clients c on c.id = e.client_id
-    where e.kind = 'reply'
-    order by e.occurred_at desc limit ${limit}`;
+/** The last n days in the stats timezone, today included. */
+export async function lastDays(n: number) {
+  const [r] = await sql<{ from: string; to: string }[]>`
+    with t as (select (now() at time zone coalesce((select value #>> '{}' from settings where key = 'stats_timezone'), 'UTC'))::date as d)
+    select to_char(d - ${n - 1}::int, 'YYYY-MM-DD') as from, to_char(d, 'YYYY-MM-DD') as to from t`;
+  return r;
+}
+
+/** A reply or bounce for the client → domain views. */
+export type EventRow = {
+  id: number; occurredAt: Date; replyClass: ReplyRow["replyClass"]; classOverridden: boolean;
+  preview: string | null; subject: string | null; leadEmail: string | null; leadName: string | null; inboxEmail: string | null;
+  domainId: string | null; domain: string | null; campaignName: string | null; sequence: number | null;
+  clientId: string | null; clientName: string | null; clientHue: number | null; recipientEsp: string | null;
+  /** Smartlead's master-inbox link for the lead. */
+  link: string | null;
+  /** The bounce notice's text (bounces only), shortened. */
+  bounceText: string | null;
+};
+export type EventsData = { from: string; to: string; today: string; events: EventRow[]; sent: Record<string, number> };
+
+/**
+ * Replies or bounces between two days (inclusive, in the stats timezone),
+ * with each domain's sent count for the same days so rates can be shown.
+ */
+export async function getEvents(kind: "reply" | "bounce", from: string, to: string): Promise<EventsData> {
+  const [[t], events, sent] = await Promise.all([
+    sql<{ today: string }[]>`
+      select to_char((now() at time zone coalesce((select value #>> '{}' from settings where key = 'stats_timezone'), 'UTC'))::date, 'YYYY-MM-DD') as today`,
+    sql<EventRow[]>`
+      with tz as (select coalesce((select value #>> '{}' from settings where key = 'stats_timezone'), 'UTC') as z)
+      select e.id, e.occurred_at, e.reply_class, e.class_overridden, e.preview, e.subject, e.lead_email,
+        nullif(trim(e.payload->>'to_name'), '') as lead_name, e.inbox_email,
+        e.domain_id, coalesce(d.name, e.domain_name) as domain, e.campaign_name, e.sequence_number as sequence,
+        e.client_id, c.name as client_name, c.hue as client_hue, e.recipient_esp,
+        coalesce(e.payload->>'ui_master_inbox_link', e.payload->>'app_url') as link,
+        case when e.kind = 'bounce' then left(coalesce(e.payload->'bounce_message'->>'text', e.payload->>'description'), 600) end as bounce_text
+      from email_events e cross join tz
+      left join domains d on d.id = e.domain_id left join clients c on c.id = e.client_id
+      where e.kind = ${kind}::event_kind
+        and (e.occurred_at at time zone tz.z)::date between ${from}::date and ${to}::date
+      order by e.occurred_at desc
+      limit 5000`,
+    sql<{ domainId: string; sent: number }[]>`
+      select domain_id, sum(sent)::int as sent from domain_daily_stats
+      where day between ${from}::date and ${to}::date group by domain_id`,
+  ]);
+  return { from, to, today: t.today, events, sent: Object.fromEntries(sent.map((s) => [s.domainId, s.sent])) };
 }
 
 // ---------------------------------------------------------------------------

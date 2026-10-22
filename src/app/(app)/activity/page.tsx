@@ -1,16 +1,16 @@
 import type { Metadata } from "next";
 import { Suspense } from "react";
-import { RepliesView } from "@/components/activity/RepliesView";
+import { EventsView } from "@/components/activity/EventsView";
 import { PageHead, TableSkeleton } from "@/components/ui";
 import { getCurrentUser } from "@/lib/auth";
-import { listReplies } from "@/lib/queries";
+import { getEvents, lastDays } from "@/lib/queries";
 
 export const metadata: Metadata = { title: "Replies" };
 
 export default function RepliesPage() {
   return (
     <>
-      <PageHead title="Performance" sub="Every reply from Smartlead, sorted into human, out of office and the rest" />
+      <PageHead title="Performance" sub="Replies by client and domain, sorted into human, out of office and the rest" />
       <div className="page-body">
         <Suspense fallback={<TableSkeleton rows={10} />}>
           <RepliesData />
@@ -22,5 +22,6 @@ export default function RepliesPage() {
 
 async function RepliesData() {
   await getCurrentUser();
-  return <RepliesView replies={await listReplies()} />;
+  const { from, to } = await lastDays(7);
+  return <EventsView kind="reply" initial={await getEvents("reply", from, to)} />;
 }

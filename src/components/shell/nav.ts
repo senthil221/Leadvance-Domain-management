@@ -1,4 +1,4 @@
-import { Activity, ArrowLeftRight, BarChart3, Boxes, Globe, Inbox, LayoutGrid, MessageSquareText, Settings2, type LucideIcon } from "lucide-react";
+import { Activity, ArrowLeftRight, BarChart3, Boxes, Globe, Inbox, LayoutGrid, MailX, MessageSquareText, Settings2, type LucideIcon } from "lucide-react";
 
 export type NavItem = { href: string; label: string; icon: LucideIcon; key: string };
 export type NavGroup = NavItem & { pages: NavItem[] };
@@ -13,6 +13,7 @@ export const PAGES = {
   inboxes: { href: "/inboxes", label: "Inboxes", icon: Inbox, key: "i" },
   stats: { href: "/stats", label: "Stats", icon: BarChart3, key: "t" },
   replies: { href: "/activity", label: "Replies", icon: MessageSquareText, key: "a" },
+  bounces: { href: "/bounces", label: "Bounces", icon: MailX, key: "b" },
   health: { href: "/health", label: "Health rules", icon: Activity, key: "h" },
   settings: { href: "/settings", label: "Settings", icon: Settings2, key: "s" },
 } satisfies Record<string, NavItem>;
@@ -28,7 +29,7 @@ export const NAV: { label: string; items: NavGroup[] }[] = [
       { ...P.overview, pages: [] },
       { ...P.domains, pages: [{ ...P.domains, label: "Performance" }, P.inventory, P.replacements] },
       { ...P.inboxes, pages: [] },
-      { ...P.stats, label: "Performance", pages: [P.stats, P.replies, P.health] },
+      { ...P.stats, label: "Performance", pages: [P.stats, P.replies, P.bounces, P.health] },
     ],
   },
   { label: "Manage", items: [{ ...P.settings, pages: [] }] },
