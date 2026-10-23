@@ -41,9 +41,17 @@ export async function loadSearchIndex() {
     order by (d.status = 'active') desc, d.name`;
 }
 
-export async function loadStorageCandidates() {
+/** Free domains to pick from, and which of these old domains Hypertide can replace (order Done). */
+export async function loadReplaceOptions(targetIds: string[]) {
   await requireActor();
-  return listStorageCandidates();
+  const ids = z.array(z.uuid()).max(2000).parse(targetIds);
+  const [candidates, done] = await Promise.all([
+    listStorageCandidates(),
+    sql<{ id: string }[]>`
+      select distinct o.domain_id as id from hypertide_orders o
+      where o.domain_id = any(${ids}::uuid[]) and o.gone_at is null and o.status = 'Done'`,
+  ]);
+  return { candidates, hypertideDone: done.map((d) => d.id) };
 }
 
 const changeStatusInput = z.object({

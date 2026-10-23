@@ -712,6 +712,8 @@ a.stat:hover { background: var(--surface-2); }
 .callout.tone-warning svg { color: var(--warning-ink); }
 .callout.tone-danger { background: var(--danger-soft); border-color: var(--danger-line); color: var(--danger-ink); }
 .callout.tone-danger svg { color: var(--danger-ink); }
+.callout.tone-success { background: var(--success-soft); border-color: var(--success-line); }
+.callout.tone-success svg { color: var(--success-ink); }
 .callout.tone-info { background: var(--info-soft); border-color: var(--info-line); }
 .callout.tone-info svg { color: var(--info-ink); }
 
@@ -905,3 +907,4 @@ a.stat:hover { background: var(--surface-2); }
 .data-table tbody tr.inb-client > td { background: color-mix(in srgb, var(--ink) 3%, var(--surface)); border-bottom-color: var(--line-strong); }
 .data-table tbody tr.inb-client:hover > td { background: var(--row-hover); }
 .data-table tbody tr.inb-client .client-cell { font-weight: 600; color: var(--ink); }
+.rpl-tag.is-ready { background: var(--success-soft-2); color: var(--success-ink); box-shadow: inset 0 0 0 1px var(--success-line); }

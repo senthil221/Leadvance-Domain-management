@@ -223,6 +223,11 @@ export function DomainsView({ domains, clients }: { domains: DomainRow[]; client
             </select>
           ) : null}
           {(q || clientId || tag) ? <button type="button" className="btn btn-ghost btn-sm" onClick={() => { setQ(""); setClientId(""); setTag(""); }}>Clear</button> : null}
+          {view === "flagged" && rows.some(replaceable) && !selected.size ? (
+            <button type="button" className="btn btn-primary btn-sm" onClick={() => startReplace(rows)} title="Pick a free domain for each flagged domain and replace them in one go">
+              <ArrowLeftRight size={14} /> Replace all {rows.filter(replaceable).length}
+            </button>
+          ) : null}
           <span className="spacer-auto" />
           <label className="search-input">
             <Search size={14} strokeWidth={1.5} />

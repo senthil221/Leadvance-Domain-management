@@ -1,6 +1,6 @@
 "use client";
 
-import { BarChart3, CalendarDays, Download, Loader, Search } from "lucide-react";
+import { BarChart3, CalendarDays, ChevronRight, Download, Loader, Search } from "lucide-react";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { type CSSProperties, Fragment, useMemo, useState, useTransition } from "react";
@@ -148,7 +148,10 @@ export function StatsView({ initial, clients }: { initial: StatsData; clients: C
   const params = useSearchParams();
   const [clientId, setClientId] = useState(() => params.get("client") ?? "");
   const [onlySending, setOnlySending] = useState(true);
-  const [byClient, setByClient] = useState(false);
+  // One line per client to start; open a client to see its domains.
+  const [byClient, setByClient] = useState(true);
+  const [openClients, setOpenClients] = useState<Set<string>>(new Set());
+  const toggleClient = (key: string) => setOpenClients((s0) => { const n = new Set(s0); if (n.has(key)) n.delete(key); else n.add(key); return n; });
   const [sort, setSort] = useState<{ key: SortKey; dir: 1 | -1 }>({ key: "sent", dir: -1 });
   const [daySort, setDaySort] = useState<{ key: DayKey; dir: 1 | -1 }>({ key: "day", dir: -1 });
   const [loading, start] = useTransition();
@@ -217,6 +220,7 @@ export function StatsView({ initial, clients }: { initial: StatsData; clients: C
 
   const t = total(rows);
   const maxSent = Math.max(0, ...rows.map((r) => r.sent));
+  const maxClientSent = Math.max(0, ...groups.map((g) => total(g.rows).sent));
   const maxDay = Math.max(1, ...days.map((d) => d.sent));
   const sortBy = (key: SortKey) => setSort((s) => flip(s, key, key === "name" || key === "client" || key === "status"));
   const sortDay = (key: DayKey) => setDaySort((s) => flip(s, key, false));
@@ -308,14 +312,20 @@ export function StatsView({ initial, clients }: { initial: StatsData; clients: C
                 {groups.map((g) => (
                   <Fragment key={g.key}>
                     {byClient ? (
-                      <tr style={{ background: "var(--surface-2)" }}>
-                        <td className="col-first" colSpan={1 + (on("status") ? 1 : 0) + (on("client") ? 1 : 0)}><span className="flex items-center gap-2"><ClientCell name={g.name ?? "No client"} hue={g.hue} /><span className="text-faint">{g.rows.length} domains</span></span></td>
-                        <Cells r={total(g.rows)} len={len} on={on} />
+                      <tr className="is-clickable inb-client" aria-expanded={openClients.has(g.key)} onClick={() => toggleClient(g.key)}>
+                        <td className="col-first" colSpan={1 + (on("status") ? 1 : 0) + (on("client") ? 1 : 0)}>
+                          <span className="flex items-center gap-2">
+                            <ChevronRight size={14} className="flex-none text-faint transition-transform" style={{ transform: openClients.has(g.key) ? "rotate(90deg)" : undefined }} />
+                            <ClientCell name={g.name ?? "No client"} hue={g.hue} />
+                            <span className="text-faint">{g.rows.length} domain{g.rows.length === 1 ? "" : "s"}</span>
+                          </span>
+                        </td>
+                        <Cells r={total(g.rows)} len={len} on={on} maxSent={maxClientSent} />
                       </tr>
                     ) : null}
-                    {g.rows.map((r) => (
+                    {(!byClient || openClients.has(g.key)) && g.rows.map((r) => (
                       <tr key={r.id}>
-                        <td className="col-first" style={byClient ? { paddingLeft: 28 } : undefined}><Link href={`/domains?d=${r.id}&view=all`} className="strong hover:underline">{r.name}</Link></td>
+                        <td className="col-first" style={byClient ? { paddingLeft: 40 } : undefined}><Link href={`/domains?d=${r.id}&view=all`} className="strong hover:underline">{r.name}</Link></td>
                         {on("status") ? <td><StatusDot status={r.status} /></td> : null}
                         {on("client") ? <td><ClientCell name={r.clientName} hue={r.clientHue} /></td> : null}
                         <Cells r={r} len={len} on={on} maxSent={maxSent} />

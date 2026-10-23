@@ -5,7 +5,7 @@ import { ArrowRight, Info, TriangleAlert } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useState, useTransition } from "react";
 import { toast } from "sonner";
-import { loadStorageCandidates, startReplacement } from "@/app/actions";
+import { loadReplaceOptions, startReplacement } from "@/app/actions";
 import { ClientCell, Skeleton } from "@/components/ui";
 import { hypertideAcceptsDomain } from "@/integrations/hypertide";
 import type { StorageCandidate } from "@/lib/queries";
@@ -71,6 +71,8 @@ export function ReplaceDialog({
 }) {
   const router = useRouter();
   const [candidates, setCandidates] = useState<StorageCandidate[] | null>(null);
+  // Old domains whose Hypertide order is Done: the only ones Hypertide replaces.
+  const [htDone, setHtDone] = useState<Set<string> | null>(null);
   const [assign, setAssign] = useState<Record<string, string>>({});
   const [reason, setReason] = useState<ReplacementReason>(defaultReason);
   const [note, setNote] = useState("");
@@ -102,31 +104,37 @@ export function ReplaceDialog({
   useEffect(() => {
     if (!open) return;
     let live = true;
-    loadStorageCandidates().then((c) => {
+    loadReplaceOptions(targets.map((t) => t.id)).then(({ candidates: c, hypertideDone }) => {
       if (!live) return;
+      const done = new Set(hypertideDone);
       setCandidates(c);
-      setAssign(autoAssign(targets, c));
+      setHtDone(done);
+      // Domains Hypertide can replace get first pick of the free domains.
+      setAssign(autoAssign([...targets].sort((a, b) => Number(done.has(b.id)) - Number(done.has(a.id))), c));
     });
     return () => { live = false; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, targetKey]);
 
   const used = useMemo(() => new Set(Object.values(assign)), [assign]);
-  const short = candidates ? Math.max(0, targets.length - candidates.length) : 0;
+  // In a Hypertide replacement, domains without a Done order are left out.
+  const skipped = useMemo(() => new Set(mode === "hypertide" && htDone ? targets.filter((t) => !htDone.has(t.id)).map((t) => t.id) : []), [mode, htDone, targets]);
+  const going = targets.filter((t) => !skipped.has(t.id));
+  const short = candidates ? Math.max(0, going.length - candidates.length) : 0;
   const names = useMemo(() => parseNames(namesText), [namesText]);
   const namesOk = !changeNames || (names.length >= 1 && names.length <= 25);
   const refused = mode === "hypertide" && candidates
-    ? targets.filter((t) => assign[t.id] && !hypertideAcceptsDomain(candidates.find((c) => c.id === assign[t.id])?.name ?? "")).length
+    ? going.filter((t) => assign[t.id] && !hypertideAcceptsDomain(candidates.find((c) => c.id === assign[t.id])?.name ?? "")).length
     : 0;
-  const ready = candidates !== null && short === 0 && targets.every((t) => assign[t.id]) && namesOk && refused === 0;
+  const ready = candidates !== null && going.length > 0 && short === 0 && going.every((t) => assign[t.id]) && namesOk && refused === 0;
 
   const submit = () => {
     setError(null);
     startTransition(async () => {
       const hypertide = mode === "hypertide";
       const res = await startReplacement({
-        oldIds: targets.map((t) => t.id),
-        newIds: targets.map((t) => assign[t.id]),
+        oldIds: going.map((t) => t.id),
+        newIds: going.map((t) => assign[t.id]),
         reason,
         note: note || undefined,
         manualInboxes: !hypertide,
@@ -143,8 +151,10 @@ export function ReplaceDialog({
       }
       onOpenChange(false);
       onDone?.();
-      toast.success(`Replacing ${targets.length} domain${targets.length === 1 ? "" : "s"}`, {
-        description: "Setup has started. You can follow each step in Replacements.",
+      toast.success(`Replacing ${going.length} domain${going.length === 1 ? "" : "s"}`, {
+        description: skipped.size
+          ? `${skipped.size} skipped: no finished Hypertide order. Follow the rest in Replacements.`
+          : "Setup has started. You can follow each step in Replacements.",
         action: { label: "View", onClick: () => router.push("/replacements") },
       });
     });
@@ -183,7 +193,7 @@ export function ReplaceDialog({
             <div className="card">
               <div className="card-head">
                 <span className="card-title">Replacements</span>
-                <span className="card-sub">{candidates ? `${candidates.length} in storage` : "Checking storage…"}</span>
+                <span className="card-sub">{candidates ? `${candidates.length} in storage${skipped.size ? ` · ${skipped.size} skipped` : ""}` : "Checking storage…"}</span>
               </div>
               <div className="card-body" style={{ paddingTop: 4, paddingBottom: 4, maxHeight: 300, overflowY: "auto" }}>
                 {targets.map((t) => (
@@ -195,6 +205,10 @@ export function ReplaceDialog({
                     <ArrowRight size={14} strokeWidth={1.5} />
                     {candidates === null ? (
                       <Skeleton h={30} />
+                    ) : skipped.has(t.id) ? (
+                      <span className="text-[12.5px] text-warning-ink" title="Hypertide only replaces domains whose order is Done. Replace this one by hand, or with I'll do it in Hypertide.">
+                        Skipped: Hypertide order isn&apos;t Done
+                      </span>
                     ) : (
                       <select
                         className="select"
@@ -282,7 +296,7 @@ export function ReplaceDialog({
               <button type="button" className="btn">Cancel</button>
             </Dialog.Close>
             <button type="button" className="btn btn-primary" disabled={!ready || pending} onClick={submit}>
-              {pending ? "Starting…" : `Replace ${targets.length} domain${targets.length === 1 ? "" : "s"}`}
+              {pending ? "Starting…" : `Replace ${going.length} domain${going.length === 1 ? "" : "s"}`}
             </button>
           </div>
         </Dialog.Content>

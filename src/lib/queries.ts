@@ -449,6 +449,11 @@ export type ReplacementRow = {
   htOrderId: string | null;
   htPaidAt: Date | null;
   campaignsAddedAt: Date | null;
+  /** Warmed up enough to join campaigns (see replacement_readiness). */
+  ready: boolean;
+  warmDays: number | null;
+  minDays: number;
+  minRep: number;
 };
 
 /** One row per replacement, newest first, with what the page shows about both domains. */
@@ -470,8 +475,9 @@ export async function listReplacements(limit = 200): Promise<{ rows: Replacement
       c.name as client_name, c.hue as client_hue,
       ri.step_nameservers, ri.step_inboxes, ri.step_smartlead, ri.step_campaigns, ri.note, ri.last_error,
       ri.ht_operation, ri.hypertide_ns as ht_nameservers, ri.hypertide_order_id as ht_order_id, ri.hypertide_paid_at as ht_paid_at,
-      ri.campaigns_added_at
+      ri.campaigns_added_at, coalesce(rr.ready, false) as ready, rr.warm_days, rr.min_days, rr.min_rep::float8 as min_rep
     from replacement_items ri
+    left join replacement_readiness rr on rr.item_id = ri.id
     join replacement_batches rb on rb.id = ri.batch_id
     join domains od on od.id = ri.old_domain_id
     join domains nd on nd.id = ri.new_domain_id
@@ -759,7 +765,7 @@ export async function listJobState() {
 
 export type Issues = {
   flagged: number; noZone: number; disconnected: number; lowRep: number; htUnpaid: number; htCancelledLive: number;
-  billedRetired: number; renew14: number; nsFailed: number; settingsFailed: number; stuckSetup: number; freeLow: boolean; free: number;
+  billedRetired: number; renew14: number; readyForCampaigns: number; nsFailed: number; settingsFailed: number; stuckSetup: number; freeLow: boolean; free: number;
 };
 export type ClientInsight = {
   id: string; name: string; hue: number; active: number; warming: number; inboxes: number; capacity: number;
@@ -783,6 +789,7 @@ export async function getInsights() {
         (select count(distinct o.domain_id)::int from hypertide_orders o join domains d on d.id = o.domain_id
           where o.gone_at is null and o.status = 'Done' and d.status in ('burned', 'resting')) as billed_retired,
         (select count(*)::int from domains where expires_at between current_date and current_date + 14 and status not in ('burned', 'resting')) as renew14,
+        (select count(*)::int from replacement_readiness where ready) as ready_for_campaigns,
         (select count(*)::int from nameserver_requests where status = 'failed' and created_at > now() - interval '7 days') as ns_failed,
         (select count(distinct inbox_id)::int from inbox_setting_changes where status = 'failed' and created_at > now() - interval '2 days') as settings_failed,
         (select count(*)::int from domains d where d.status = 'provisioning'

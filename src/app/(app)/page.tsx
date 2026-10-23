@@ -51,6 +51,7 @@ function actions(i: Issues, weeksLeft: number | null): { tone: Tone; n: number; 
     { tone: "warning", n: i.stuckSetup, text: "domains stuck in setup for over 10 days", href: "/inventory?view=all" },
     { tone: "warning", n: i.nsFailed, text: "nameserver changes failed this week", href: "/inventory" },
     { tone: "warning", n: i.settingsFailed, text: "inbox setting updates failed", href: "/inboxes" },
+    { tone: "success", n: i.readyForCampaigns, text: "new domains warmed up and ready for campaigns", href: "/replacements?view=ready" },
     { tone: "info", n: i.renew14, text: "domains renew in the next 14 days", href: "/inventory" },
   ];
   if (i.freeLow) out.push({ tone: "warning", n: i.free, text: `free domains left${weeksLeft != null ? `, about ${Math.max(0, Math.floor(weeksLeft))} weeks at the current pace` : ""}`, href: "/inventory?view=free" });

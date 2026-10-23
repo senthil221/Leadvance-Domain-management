@@ -8,8 +8,9 @@ import { addReplacementToCampaigns } from "@/app/actions";
 
 // Puts a replacement's warmed-up inboxes into the old domain's campaigns.
 // It changes live campaigns, so it confirms first and says if they look unready.
-export function AddToCampaigns({ itemId, domain, campaigns, inboxes, warmupOn, reputation }: {
+export function AddToCampaigns({ itemId, domain, campaigns, inboxes, warmupOn, reputation, ready = false, warmDays = null }: {
   itemId: string; domain: string; campaigns: string[]; inboxes: number; warmupOn: number; reputation: number | null;
+  ready?: boolean; warmDays?: number | null;
 }) {
   const [open, setOpen] = useState(false);
   const [pending, start] = useTransition();
@@ -29,7 +30,7 @@ export function AddToCampaigns({ itemId, domain, campaigns, inboxes, warmupOn, r
   return (
     <Dialog.Root open={open} onOpenChange={setOpen}>
       <Dialog.Trigger asChild>
-        <button type="button" className="btn btn-sm"><Megaphone size={12} /> Add to campaigns</button>
+        <button type="button" className={`btn btn-sm${ready ? " btn-primary" : ""}`}><Megaphone size={12} /> Add to campaigns</button>
       </Dialog.Trigger>
       <Dialog.Portal>
         <Dialog.Overlay className="overlay" />
@@ -44,7 +45,12 @@ export function AddToCampaigns({ itemId, domain, campaigns, inboxes, warmupOn, r
             <ul className="flex flex-col gap-1 text-[13px]">
               {campaigns.map((c) => <li key={c} className="truncate">{c}</li>)}
             </ul>
-            {concerns.length ? (
+            {ready ? (
+              <div className="callout tone-success">
+                <Megaphone size={15} strokeWidth={1.75} />
+                <span>Warmed up for {warmDays} days{reputation != null ? ` with ${reputation}% reputation` : ""}: ready to send.</span>
+              </div>
+            ) : concerns.length ? (
               <div className="callout tone-warning">
                 <TriangleAlert size={15} strokeWidth={1.75} />
                 <span>{concerns.join(" ")} New inboxes usually need about two weeks of warmup first.</span>

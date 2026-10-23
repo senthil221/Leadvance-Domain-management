@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { useSearchParams } from "next/navigation";
 import { Fragment, useMemo, useState } from "react";
 import { ArrowLeftRight, ChevronRight, CircleAlert, Search, TriangleAlert } from "lucide-react";
 import { AddToCampaigns } from "@/components/replacements/AddToCampaigns";
@@ -30,7 +31,11 @@ function statusText(r: ReplacementRow): { text: string; tone: "warning" | "dange
   const state = stateOf(r);
   const step = currentStep(r);
   if (state === "live") return { text: "In campaigns", tone: "success" };
-  if (state === "warming") return { text: "Warming up", tone: "violet" };
+  if (state === "warming") {
+    if (r.ready) return { text: "Ready for campaigns", tone: "success" };
+    const days = r.warmDays ?? 0;
+    return { text: days < r.minDays ? `Warming · day ${days} of ${r.minDays}` : `Warming · rep under ${r.minRep}%`, tone: "violet" };
+  }
   if (!step) return { text: "Finishing", tone: "info" };
   const s = r[STEP_COL[step]];
   if (s === "failed") return { text: `${stepName(r, step)} failed`, tone: "danger" };
@@ -40,9 +45,10 @@ function statusText(r: ReplacementRow): { text: string; tone: "warning" | "dange
   return { text: s === "running" ? `${stepName(r, step)}…` : `Waiting: ${stepName(r, step).toLowerCase()}`, tone: "info" };
 }
 
-type View = "open" | "warming" | "grace" | "live" | "all";
+type View = "open" | "ready" | "warming" | "grace" | "live" | "all";
 const VIEWS: { key: View; label: string; match: (r: ReplacementRow) => boolean }[] = [
   { key: "open", label: "In progress", match: (r) => !r.completedAt },
+  { key: "ready", label: "Ready", match: (r) => stateOf(r) === "warming" && r.ready },
   { key: "warming", label: "Warming", match: (r) => stateOf(r) === "warming" },
   { key: "grace", label: "Old in grace", match: (r) => r.graceEndsAt != null },
   { key: "live", label: "In campaigns", match: (r) => stateOf(r) === "live" },
@@ -59,20 +65,21 @@ function ago(d: Date | string, now: number) {
 const daysLeft = (d: Date | string, now: number) => Math.max(0, Math.ceil((+new Date(d) - now) / 86_400_000));
 
 export function ReplacementsView({ rows, now, smartleadLive, graceDays }: { rows: ReplacementRow[]; now: number; smartleadLive: boolean; graceDays: number }) {
-  const [view, setView] = useState<View | null>(null);
+  const params = useSearchParams();
+  const [view, setView] = useState<View | null>(() => (VIEWS.some((v) => v.key === params.get("view")) ? (params.get("view") as View) : null));
   const [q, setQ] = useState("");
   const [open, setOpen] = useState<Set<string>>(() => new Set());
 
   const counts = useMemo(() => Object.fromEntries(VIEWS.map((v) => [v.key, rows.filter(v.match).length])) as Record<View, number>, [rows]);
   const attention = useMemo(() => rows.filter((r) => stateOf(r) === "attention").length, [rows]);
-  const active = view ?? (counts.open ? "open" : counts.warming ? "warming" : "all");
+  const active = view ?? (counts.open ? "open" : counts.ready ? "ready" : counts.warming ? "warming" : "all");
 
   const shown = useMemo(() => {
     const needle = q.trim().toLowerCase();
     const match = VIEWS.find((v) => v.key === active)!.match;
     return rows
       .filter((r) => match(r) && (!needle || [r.oldDomain, r.newDomain, r.clientName ?? ""].some((v) => v.toLowerCase().includes(needle))))
-      .sort((a, b) => Number(stateOf(b) === "attention") - Number(stateOf(a) === "attention") || +new Date(b.createdAt) - +new Date(a.createdAt));
+      .sort((a, b) => Number(stateOf(b) === "attention") - Number(stateOf(a) === "attention") || Number(b.ready) - Number(a.ready) || +new Date(b.createdAt) - +new Date(a.createdAt));
   }, [rows, active, q]);
 
   if (!rows.length) {
@@ -156,7 +163,7 @@ function Row({ r, now, graceDays, smartleadLive, isOpen, onToggle }: {
           <span className="flex items-center gap-1.5">
             <ChevronRight size={13} className="flex-none text-faint transition-transform" style={{ transform: isOpen ? "rotate(90deg)" : undefined }} />
             <Link href={`/domains?d=${r.newDomainId}`} className="strong hover:underline" onClick={(e) => e.stopPropagation()}>{r.newDomain}</Link>
-            {state === "live" ? null : <span className="rpl-tag is-new">New</span>}
+            {state === "live" ? null : r.ready ? <span className="rpl-tag is-ready" title="Warmed up: ready to add to campaigns">Ready</span> : <span className="rpl-tag is-new">New</span>}
           </span>
         </td>
         <td>
@@ -196,7 +203,7 @@ function Row({ r, now, graceDays, smartleadLive, isOpen, onToggle }: {
         <td title={dayFmt.format(new Date(r.createdAt))}>{ago(r.createdAt, now)}</td>
         <td className="rpl-actions" onClick={(e) => e.stopPropagation()}>
           {state === "attention" && step && stepStatus ? <StepActions itemId={r.id} step={step} status={stepStatus} compact /> : null}
-          {canAdd ? <AddToCampaigns itemId={r.id} domain={r.newDomain} campaigns={r.oldCampaigns} inboxes={r.newInboxes} warmupOn={r.newWarmupOn} reputation={r.newReputation} /> : null}
+          {canAdd ? <AddToCampaigns itemId={r.id} domain={r.newDomain} campaigns={r.oldCampaigns} inboxes={r.newInboxes} warmupOn={r.newWarmupOn} reputation={r.newReputation} ready={r.ready} warmDays={r.warmDays} /> : null}
         </td>
       </tr>
       {isOpen ? (

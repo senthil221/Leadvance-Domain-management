@@ -357,3 +357,34 @@ describe("replacement through Hypertide's replace queue", () => {
     expect(s.last_error).toMatch(/expired/);
   });
 });
+
+describe("ready for campaigns", () => {
+  const ready = async () => (await sql`select ready, warm_days from replacement_readiness where item_id = ${itemId}`)[0];
+  beforeEach(async () => {
+    await sql`update replacement_items set step_nameservers = 'done', step_inboxes = 'done', step_smartlead = 'done',
+      step_campaigns = 'skipped', completed_at = now() where id = ${itemId}`;
+    await sql`select transition_domain(${newId}, 'warming', 'test', 'me')`;
+    await sql`insert into inboxes (domain_id, email, status, warmup_enabled, warmup_reputation, smartlead_created_at) values
+      (${newId}, 'a@freshsend.com', 'connected', true, 97, now() - interval '15 days'),
+      (${newId}, 'b@freshsend.com', 'connected', true, 96, now() - interval '15 days')`;
+  });
+
+  it("is ready after 14 days of warmup at 95% reputation or more", async () => {
+    expect(await ready()).toEqual({ ready: true, warm_days: 15 });
+  });
+
+  it("waits for the days, the reputation and warmup on every inbox", async () => {
+    await sql`update inboxes set smartlead_created_at = now() - interval '5 days' where domain_id = ${newId}`;
+    expect((await ready()).ready).toBe(false);
+    await sql`update inboxes set smartlead_created_at = now() - interval '20 days', warmup_reputation = 90 where domain_id = ${newId}`;
+    expect((await ready()).ready).toBe(false);
+    await sql`update inboxes set warmup_reputation = 99 where domain_id = ${newId}`;
+    await sql`update inboxes set warmup_enabled = false where email = 'a@freshsend.com'`;
+    expect((await ready()).ready).toBe(false);
+  });
+
+  it("is no longer listed once the inboxes are in campaigns", async () => {
+    await sql`update replacement_items set step_campaigns = 'done' where id = ${itemId}`;
+    expect((await ready()).ready).toBe(false);
+  });
+});
