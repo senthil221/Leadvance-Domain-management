@@ -423,6 +423,7 @@ export type BatchItem = {
   stepInboxes: StepStatus;
   stepSmartlead: StepStatus;
   stepCampaigns: StepStatus;
+  htOperation: string | null;
   lastError: string | null;
   note: string | null;
   completedAt: Date | null;
@@ -437,6 +438,7 @@ export type Batch = {
   note: string | null;
   actor: string;
   status: "running" | "completed" | "partial" | "cancelled";
+  hypertideReplace: boolean;
   createdAt: Date;
   completedAt: Date | null;
   items: BatchItem[];
@@ -444,14 +446,14 @@ export type Batch = {
 
 export async function listBatches(limit = 50): Promise<Batch[]> {
   const batches = await sql<Omit<Batch, "items">[]>`
-    select id, reason, note, actor, status, created_at, completed_at
+    select id, reason, note, actor, status, hypertide_replace, created_at, completed_at
     from replacement_batches order by created_at desc limit ${limit}`;
   if (batches.length === 0) return [];
   const items = await sql<(BatchItem & { batchId: string })[]>`
     select ri.id, ri.batch_id, ri.old_domain_id, od.name as old_domain, ri.new_domain_id, nd.name as new_domain,
       c.name as client_name, c.hue as client_hue,
       ri.step_nameservers, ri.step_inboxes, ri.step_smartlead, ri.step_campaigns, ri.last_error, ri.note, ri.completed_at,
-      ri.hypertide_order_id as ht_order_id, ri.hypertide_status as ht_status, ri.hypertide_paid_at as ht_paid_at
+      ri.hypertide_order_id as ht_order_id, ri.hypertide_status as ht_status, ri.hypertide_paid_at as ht_paid_at, ri.ht_operation
     from replacement_items ri
     join domains od on od.id = ri.old_domain_id
     join domains nd on nd.id = ri.new_domain_id

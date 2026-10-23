@@ -170,6 +170,31 @@ export function createHypertide({ baseUrl, apiKey, sql, dryRun = true, minSpacin
       return { dryRun: Boolean(r.dryRun), results };
     },
 
+    /**
+     * Queues one replacement of a domain we own. Hypertide answers 202 with
+     * the operation and the new domain's nameservers; identical submissions
+     * reuse the same operation. Test calls are refused by Hypertide, so in
+     * dry-run nothing is sent.
+     */
+    async submitReplacement(input: ReplacementInput) {
+      if (dryRun) return { dryRun: true as const, ...readReplacement({}, input.newDomain), raw: "" };
+      const body = {
+        originalDomain: input.originalDomain,
+        newDomain: input.newDomain,
+        replacementSource: "owned",
+        copyTagsAndWarmup: input.copyTagsAndWarmup,
+        ...(input.usernames?.length ? { updateUsernames: true, usernames: input.usernames } : {}),
+      };
+      const r = await call("POST", "/replacements", body);
+      return { dryRun: false as const, ...readReplacement(r, input.newDomain), raw: JSON.stringify(r).slice(0, 4000) };
+    },
+
+    /** Status of one replacement operation. */
+    async replacementStatus(operationId: string, newDomain: string) {
+      const r = await call("GET", `/replacements/${encodeURIComponent(operationId)}`);
+      return { ...readReplacement(r, newDomain), raw: JSON.stringify(r).slice(0, 4000) };
+    },
+
     /** Paid orders on the account. */
     activeOrders: async () => readOrders(await call("GET", "/orders/active")),
 
@@ -202,6 +227,69 @@ export function readOrders(json: unknown): OrderStatus[] {
 }
 
 export type Hypertide = ReturnType<typeof createHypertide>;
+
+export type ReplacementInput = {
+  originalDomain: string;
+  newDomain: string;
+  copyTagsAndWarmup: boolean;
+  usernames?: { firstName: string; lastName: string }[];
+};
+
+export type ReplacementState = {
+  operationId: string | null;
+  status: string | null;          // queued, pending, awaiting_payment, completed, expired, failed…
+  pending: boolean | null;
+  requiresPayment: boolean;
+  nameservers: string[];
+  error: string | null;
+};
+
+const NS_RE = /^[a-z0-9-]+(\.[a-z0-9-]+)+$/i;
+// A nameserver list in whichever shape Hypertide sends it: ["a","b"],
+// { ns: [...] }, { nameservers: [...] } or { assignment: { ns: [...] } }.
+function nsList(v: unknown): string[] {
+  if (Array.isArray(v)) {
+    const list = v.map((x) => (typeof x === "string" ? x.trim().toLowerCase().replace(/\.$/, "") : "")).filter((x) => NS_RE.test(x));
+    return list.length === v.length ? list : [];
+  }
+  if (!v || typeof v !== "object") return [];
+  const o = obj(v);
+  for (const k of ["ns", "nameservers", "assignment", "assignedNameservers"]) {
+    const found = nsList(o[k]);
+    if (found.length) return found;
+  }
+  return [];
+}
+
+const text = (v: unknown) => (typeof v === "string" && v.trim() ? v.trim() : null);
+
+/**
+ * Reads a /replacements answer (submit or progress). The fields are taken
+ * loosely, since only the request side is documented in detail: the
+ * operation can sit at the top, in data, or in data.results[] next to the
+ * entry for our new domain.
+ */
+export function readReplacement(json: unknown, newDomain: string): ReplacementState {
+  const root = obj(json);
+  const data = Array.isArray(root.data) ? obj(root.data[0]) : obj(root.data);
+  const results = [data.results, root.results].find(Array.isArray) as unknown[] | undefined;
+  const want = newDomain.toLowerCase();
+  const entries = (results ?? []).map(obj);
+  const mine = entries.find((e) => [e.newDomain, e.domain, e.new_domain].some((d) => typeof d === "string" && d.toLowerCase() === want)) ?? entries[0] ?? {};
+  const pick = <T>(f: (o: Json) => T | null) => f(mine) ?? f(data) ?? f(root);
+
+  const status = pick((o) => text(o.status) ?? text(o.state));
+  const pendingRaw = pick((o) => (typeof o.pending === "boolean" ? o.pending : null));
+  const err = pick((o) => text(o.error) ?? text(o.errorMessage) ?? text(o.reason) ?? (o.success === false ? text(o.message) : null));
+  return {
+    operationId: pick((o) => text(o.operationId) ?? text(o.operation_id)),
+    status: status ? status.toLowerCase() : null,
+    pending: pendingRaw,
+    requiresPayment: pick((o) => (o.requiresPayment === true ? true : null)) ?? false,
+    nameservers: [nsList(mine), nsList(data.nameservers), readNameservers(data).get(want) ?? []].find((l) => l.length) ?? [],
+    error: err,
+  };
+}
 
 /** Hypertide refuses customer-owned domains with hyphens or over 35 characters. */
 export function hypertideAcceptsDomain(name: string) {

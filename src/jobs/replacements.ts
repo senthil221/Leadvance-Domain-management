@@ -1,6 +1,7 @@
 import type postgres from "postgres";
 import { buildOrderPayload, type Hypertide, type OrderTemplate, type SmartleadCredentials } from "../integrations/hypertide";
 import { sameNameservers, type Porkbun } from "../integrations/porkbun";
+import type { Smartlead } from "../integrations/smartlead";
 
 // Moves each replacement pair through its steps:
 //   nameservers → inboxes → smartlead → campaigns (live)
@@ -8,6 +9,9 @@ import { sameNameservers, type Porkbun } from "../integrations/porkbun";
 // with a note saying exactly what to do, until someone marks them done.
 // Domain statuses follow: new provisioning → warming (inboxes in Smartlead)
 // → active, and the old domain → draining once the new one is live.
+// Batches marked hypertide_replace use Hypertide's replace-domain queue: the
+// nameserver step submits the replacement (which returns the nameservers),
+// and the inbox step follows that operation instead of placing an order.
 // Shared by the worker and the app, so queries only read single-word columns.
 
 type Sql = postgres.Sql | postgres.TransactionSql;
@@ -30,6 +34,9 @@ type Item = {
   client: string | null;
   htns: string[] | null; htorder: string | null; htstatus: string | null; htpaid: Date | null; htverified: Date | null;
   manual: boolean;
+  htreplace: boolean; copytw: boolean; usernames: { firstName: string; lastName: string }[] | null;
+  stopold: boolean; addcampaigns: boolean;
+  htop: string | null; htchecked: Date | null; oldstopped: Date | null;
 };
 
 async function loadItem(sql: Sql, id: string): Promise<Item | undefined> {
@@ -39,7 +46,10 @@ async function loadItem(sql: Sql, id: string): Promise<Item | undefined> {
       nd.id as newid, nd.name as newname, nd.status as newstatus, v.name as registrar, nd.registrar_api_access as apiaccess,
       od.id as oldid, od.name as oldname, od.status as oldstatus, c.name as client,
       ri.hypertide_ns as htns, ri.hypertide_order_id as htorder, ri.hypertide_status as htstatus,
-      ri.hypertide_paid_at as htpaid, ri.hypertide_ns_verified_at as htverified, rb.manual_inboxes as manual
+      ri.hypertide_paid_at as htpaid, ri.hypertide_ns_verified_at as htverified, rb.manual_inboxes as manual,
+      rb.hypertide_replace as htreplace, rb.copy_tags_and_warmup as copytw, rb.usernames::text as usernames,
+      rb.stop_old_sending as stopold, rb.add_to_campaigns as addcampaigns,
+      ri.ht_operation_id as htop, ri.ht_checked_at as htchecked, ri.old_stopped_at as oldstopped
     from replacement_items ri
     join replacement_batches rb on rb.id = ri.batch_id
     join domains nd on nd.id = ri.new_domain_id
@@ -47,7 +57,10 @@ async function loadItem(sql: Sql, id: string): Promise<Item | undefined> {
     left join vendors v on v.id = nd.registrar_id
     left join clients c on c.id = nd.client_id
     where ri.id = ${id}`;
-  return row as Item | undefined;
+  if (!row) return undefined;
+  // Read as text so the app's camelCase client can't rename the keys inside.
+  const usernames = row.usernames ? (JSON.parse(row.usernames as string) as Item["usernames"]) : null;
+  return { ...row, usernames } as Item;
 }
 
 async function setStep(sql: Sql, id: string, step: StepName, status: string, note: string | null, error: string | null = null) {
@@ -80,6 +93,15 @@ async function syncStatuses(sql: Sql, item: Item, actor: string) {
     if (item.oldstatus === "active" || item.oldstatus === "warming") {
       await sql`select transition_domain(${item.oldid}, 'draining', ${"replaced by " + item.newname}, ${actor})`;
     }
+    // Hypertide keeps the old inboxes up for the grace period so replies
+    // still land; they just stop sending.
+    if (item.stopold && !item.oldstopped) {
+      await sql`
+        insert into inbox_setting_changes (inbox_id, changes, source, actor)
+        select id, ${sql.json({ daily_limit: 0 })}, 'replacement', ${actor}
+        from inboxes where domain_id = ${item.oldid} and status <> 'removed' and smartlead_account_id is not null`;
+      await sql`update replacement_items set old_stopped_at = now() where id = ${item.id}`;
+    }
     await sql`update replacement_items set completed_at = now(), note = null, last_error = null where id = ${item.id}`;
   }
 }
@@ -88,6 +110,7 @@ export type StepContext = {
   porkbun: Porkbun | null;
   hypertide?: Hypertide | null;
   hypertideCredentials?: Partial<SmartleadCredentials>;
+  smartlead?: Smartlead | null;
 };
 
 async function orderTemplate(sql: Sql): Promise<OrderTemplate> {
@@ -115,6 +138,15 @@ export async function advanceItem(sql: Sql, ctx: StepContext, id: string, actor 
     if (step === "nameservers") {
       // Hypertide reserves a pair per domain; ask once and keep it.
       let ns = item.htns?.length ? item.htns : [];
+      if (item.htreplace && !item.htop) {
+        const got = await submitHypertideReplacement(sql, ctx, item);
+        if (!got) return;
+        ns = got;
+      }
+      if (item.htreplace && !ns.length) {
+        await setStep(sql, id, step, "manual", `Hypertide queued the replacement but sent no nameservers for ${item.newname}. Copy them from Hypertide, set them at ${item.registrar ?? "the registrar"}, then mark this done.`);
+        return;
+      }
       if (!ns.length && ctx.hypertide) {
         try {
           ns = (await ctx.hypertide.previewNameservers([item.newname])).get(item.newname) ?? [];
@@ -159,6 +191,11 @@ export async function advanceItem(sql: Sql, ctx: StepContext, id: string, actor 
       continue;
     }
 
+    if (step === "inboxes" && item.htreplace) {
+      if (await hypertideReplaceStep(sql, ctx.hypertide ?? null, item, state)) continue;
+      return;
+    }
+
     if (step === "inboxes" && ctx.hypertide && !item.manual) {
       if (await hypertideInboxStep(sql, ctx.hypertide, ctx.hypertideCredentials ?? {}, item, state)) continue;
       return;
@@ -179,24 +216,63 @@ export async function advanceItem(sql: Sql, ctx: StepContext, id: string, actor 
     }
 
     if (step === "smartlead") {
-      const [{ n }] = await sql`select count(*)::int as n from inboxes where domain_id = ${item.newid} and status = 'connected'`;
-      if (Number(n) > 0) {
+      // Inboxes arrive over a sync or two; wait until as many as the old
+      // domain had are in, or an hour after the first one.
+      const [c] = await sql`
+        select count(*) filter (where status = 'connected')::int as n,
+          (min(created_at) filter (where status = 'connected') < now() - interval '1 hour') as settled,
+          (select count(*)::int from inboxes where domain_id = ${item.oldid} and status <> 'removed') as expected
+        from inboxes where domain_id = ${item.newid}`;
+      const n = Number(c.n), expected = Number(c.expected);
+      if (n > 0 && (n >= expected || c.settled)) {
+        await copySendingSettings(sql, item, actor);
         await setStep(sql, id, step, "done", null);
         continue;
       }
-      await setStep(sql, id, step, "running", "Waiting for the new inboxes to show up in the Smartlead sync (every 30 min). Mark this done to skip the check.");
+      await setStep(sql, id, step, "running", n
+        ? `${n} of ${expected} new inboxes are in Smartlead so far. Waiting for the rest (synced every 30 min). Mark this done to go on with these.`
+        : "Waiting for the new inboxes to show up in the Smartlead sync (every 30 min). Mark this done to skip the check.");
       return;
     }
 
     if (step === "campaigns") {
       const campaigns = await sql`
-        select distinct c.name from campaign_inboxes ci join inboxes i on i.id = ci.inbox_id join campaigns c on c.id = ci.campaign_id
+        select distinct c.id, c.name from campaign_inboxes ci join inboxes i on i.id = ci.inbox_id join campaigns c on c.id = ci.campaign_id
         where i.domain_id = ${item.oldid} order by c.name`;
       const list = campaigns.map((c) => c.name as string);
-      await setStep(sql, id, step, "manual", list.length
-        ? `Add the new inboxes to ${list.length === 1 ? "this campaign" : `these ${list.length} campaigns`}: ${list.join("; ")}. Then mark this done; ${item.oldname} will start draining.`
-        : `Add the new inboxes to ${item.oldname}'s campaigns, then mark this done; ${item.oldname} will start draining.`);
-      return;
+      if (item.addcampaigns && !list.length) {
+        await setStep(sql, id, step, "done", null);
+        continue;
+      }
+      const sl = ctx.smartlead;
+      // Left to a person when asked to, or when the app can't write to Smartlead.
+      if (!item.addcampaigns || !sl || sl.dryRun) {
+        const dry = item.addcampaigns && sl?.dryRun ? " (dry run is on, so the app didn't)" : "";
+        await setStep(sql, id, step, "manual", list.length
+          ? `Add the new inboxes to ${list.length === 1 ? "this campaign" : `these ${list.length} campaigns`}: ${list.join("; ")}${dry}. Then mark this done; ${item.oldname} will start draining.`
+          : `Add the new inboxes to ${item.oldname}'s campaigns, then mark this done; ${item.oldname} will start draining.`);
+        return;
+      }
+      const accounts = await sql`
+        select id, smartlead_account_id as account from inboxes
+        where domain_id = ${item.newid} and status = 'connected' and smartlead_account_id is not null`;
+      if (!accounts.length) {
+        await setStep(sql, id, step, "manual", `None of ${item.newname}'s inboxes are linked to Smartlead yet. Add them to ${list.join("; ")} and mark this done.`);
+        return;
+      }
+      await setStep(sql, id, step, "running", `Adding ${accounts.length} inboxes to ${list.length} campaign${list.length === 1 ? "" : "s"}…`);
+      try {
+        for (const camp of campaigns) {
+          await sl.addAccountsToCampaign(Number(camp.id), accounts.map((a) => Number(a.account)));
+          await sql`insert into campaign_inboxes (campaign_id, inbox_id)
+            select ${camp.id}::bigint, unnest(${accounts.map((a) => a.id as string)}::uuid[]) on conflict do nothing`;
+        }
+      } catch (e) {
+        await setStep(sql, id, step, "failed", null, e instanceof Error ? e.message : String(e));
+        return;
+      }
+      await setStep(sql, id, step, "done", null);
+      continue;
     }
   }
 }
@@ -235,6 +311,104 @@ export async function actOnStep(sql: Sql, ctx: StepContext, id: string, step: St
   const after = await loadItem(sql, id);
   const s = after ? currentStep(after) : null;
   return { next: s, completed: Boolean(after?.completed) };
+}
+
+const errText = (e: unknown) => (e instanceof Error ? e.message : String(e));
+
+/**
+ * Submits the swap to Hypertide's replacement queue and keeps the operation
+ * and the new domain's nameservers. Returns the nameservers, or null when the
+ * step can't go on (the reason is left on the step).
+ */
+async function submitHypertideReplacement(sql: Sql, ctx: StepContext, item: Item): Promise<string[] | null> {
+  const ht = ctx.hypertide;
+  if (!ht) {
+    await setStep(sql, item.id, "nameservers", "manual", `Hypertide isn't connected. Replace ${item.oldname} with ${item.newname} in Hypertide, set the nameservers it gives you, then mark this done.`);
+    return null;
+  }
+  const [order] = await sql`
+    select status from hypertide_orders where domain_id = ${item.oldid} and gone_at is null
+    order by (status = 'Done') desc, last_seen_at desc limit 1`;
+  if (order?.status !== "Done") {
+    await setStep(sql, item.id, "nameservers", "manual", order
+      ? `${item.oldname}'s Hypertide order is "${order.status}", not Done, so Hypertide won't replace it. Press Retry once it is, or replace it by hand and mark this done.`
+      : `Hypertide has no order for ${item.oldname}, so it can't be replaced there. Replace it by hand and mark this done, or press Retry after the Hypertide sync.`);
+    return null;
+  }
+  if (ht.dryRun) {
+    await setStep(sql, item.id, "nameservers", "manual", `Dry run is on, so the replacement wasn't sent to Hypertide (it refuses test calls). Turn dry run off and press Retry.`);
+    return null;
+  }
+  try {
+    const r = await ht.submitReplacement({
+      originalDomain: item.oldname,
+      newDomain: item.newname,
+      copyTagsAndWarmup: item.copytw,
+      usernames: item.usernames ?? undefined,
+    });
+    if (r.error && !r.operationId) throw new Error(`Hypertide: ${r.error}`);
+    await sql`update replacement_items set ht_operation_id = ${r.operationId ?? "unknown"}, ht_operation = ${r.status ?? "queued"},
+        ht_response = ${r.raw}, ht_checked_at = now(), hypertide_ns = ${r.nameservers.length ? r.nameservers : null}
+      where id = ${item.id}`;
+    return r.nameservers;
+  } catch (e) {
+    await setStep(sql, item.id, "nameservers", "failed", null, errText(e));
+    return null;
+  }
+}
+
+/**
+ * The inbox step for a Hypertide replacement: follows the operation until
+ * Hypertide hands it to inbox setup, then until the new domain's order shows
+ * Done in the order sync. Returns true when the step finished.
+ */
+async function hypertideReplaceStep(sql: Sql, ht: Hypertide | null, item: Item, state: string) {
+  const id = item.id;
+  const [done] = await sql`select 1 as x from hypertide_orders where domain_id = ${item.newid} and gone_at is null and status = 'Done' limit 1`;
+  if (done) {
+    await setStep(sql, id, "inboxes", "done", null);
+    return true;
+  }
+  if (!ht || !item.htop || item.htop === "unknown") {
+    if (state !== "running") await setStep(sql, id, "inboxes", "running", `Waiting for ${item.newname}'s Hypertide order to show Done (synced every 5 min).`);
+    return false;
+  }
+  // Hypertide's worker runs every 15 minutes; asking every 3 is plenty.
+  if (item.htchecked && Date.now() - +new Date(item.htchecked) < 3 * 60_000 && state === "running") return false;
+  try {
+    const r = await ht.replacementStatus(item.htop, item.newname);
+    await sql`update replacement_items set ht_operation = ${r.status}, ht_response = ${r.raw}, ht_checked_at = now() where id = ${id}`;
+    const s = r.status ?? "queued";
+    if (["expired", "failed", "cancelled", "canceled", "rejected"].includes(s)) {
+      await setStep(sql, id, "inboxes", "failed", null, `Hypertide marked the replacement ${s}${r.error ? `: ${r.error}` : ""}. Check it in Hypertide, then Retry or mark this done.`);
+      return false;
+    }
+    const note = s === "completed"
+      ? `Hypertide has the replacement and is setting up the inboxes on ${item.newname}. Waiting for its order to show Done (synced every 5 min).`
+      : s === "awaiting_payment" || r.requiresPayment
+        ? `Hypertide is waiting for payment on this replacement. Finish it in the Hypertide dashboard; this step carries on by itself.`
+        : `Hypertide: ${s.replace(/_/g, " ")}. Its worker picks replacements up every 15 minutes.`;
+    await setStep(sql, id, "inboxes", "running", note);
+  } catch (e) {
+    await setStep(sql, id, "inboxes", "running", `Couldn't check the replacement on Hypertide (${errText(e)}). Trying again in a few minutes.`);
+  }
+  return false;
+}
+
+/** New inboxes start with the old domain's most common daily limit and gap. */
+async function copySendingSettings(sql: Sql, item: Item, actor: string) {
+  const [old] = await sql`
+    select mode() within group (order by daily_limit) filter (where daily_limit > 0) as limit,
+      mode() within group (order by min_wait_mins) filter (where min_wait_mins is not null) as wait
+    from inboxes where domain_id = ${item.oldid} and status <> 'removed'`;
+  const changes: Record<string, number> = {};
+  if (old?.limit != null) changes.daily_limit = Number(old.limit);
+  if (old?.wait != null) changes.min_wait_mins = Number(old.wait);
+  if (!Object.keys(changes).length) return;
+  await sql`
+    insert into inbox_setting_changes (inbox_id, changes, source, actor)
+    select id, ${sql.json(changes)}, 'replacement', ${actor}
+    from inboxes where domain_id = ${item.newid} and status = 'connected' and smartlead_account_id is not null`;
 }
 
 // The inbox step through Hypertide. Returns true when the step finished.

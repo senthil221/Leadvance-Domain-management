@@ -62,6 +62,7 @@ function BatchCard({ batch: b }: { batch: Batch }) {
         <div className="flex min-w-0 flex-col">
           <span className="card-title">
             {REPLACEMENT_REASONS[b.reason]} · {b.items.length} domain{b.items.length === 1 ? "" : "s"}
+            {b.hypertideReplace ? <span className="ml-2 align-middle"><Badge tone="info">via Hypertide</Badge></span> : null}
           </span>
           <span className="card-sub truncate">
             {b.actor} · {shortDate(b.createdAt)} · {ago(b.createdAt)}{b.note ? ` · ${b.note}` : ""}
@@ -101,6 +102,9 @@ function ItemRow({ item: i }: { item: BatchItem }) {
         <Link href={`/domains?d=${i.newDomainId}`} className="list-title hover:underline">{i.newDomain}</Link>
       </div>
       <span className="hidden w-32 md:block"><ClientCell name={i.clientName} hue={i.clientHue} /></span>
+      {i.htOperation && !i.completedAt ? (
+        <span className="text-[12px] text-muted" title="Status of the replacement on Hypertide">Hypertide: {i.htOperation.replace(/_/g, " ")}</span>
+      ) : null}
       <div className="steps">
         {STEPS.map((s, idx) => (
           <span key={s} className="contents">

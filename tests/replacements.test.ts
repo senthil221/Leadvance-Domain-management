@@ -4,6 +4,7 @@ import postgres from "postgres";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Porkbun } from "../src/integrations/porkbun";
 import type { Hypertide } from "../src/integrations/hypertide";
+import type { Smartlead } from "../src/integrations/smartlead";
 import { actOnStep, advanceItem, advanceReplacements, approveHypertidePayment, trackHypertideOrders } from "../src/jobs/replacements";
 import { loadMigrations } from "../scripts/migrations";
 
@@ -80,6 +81,10 @@ describe("replacement steps", () => {
 
     // The Smartlead sync finds the new inboxes.
     await sql`insert into inboxes (domain_id, email, status) values (${newId}, 'amelia.wren@freshsend.com', 'connected')`;
+    await advanceItem(sql, { porkbun: pb }, itemId);
+    // One of three so far: it waits for the rest.
+    expect((await step("step_smartlead")).note).toMatch(/1 of 3 new inboxes/);
+    await sql`insert into inboxes (domain_id, email, status) values (${newId}, 'awren@freshsend.com', 'connected'), (${newId}, 'sophia@freshsend.com', 'connected')`;
     await advanceItem(sql, { porkbun: pb }, itemId);
     expect((await step("step_smartlead")).s).toBe("done");
     expect(await status(newId)).toBe("warming");
@@ -201,5 +206,99 @@ describe("replacement steps through Hypertide", () => {
     expect(s.s).toBe("manual");
     expect(s.note).toMatch(/Can't order on Hypertide yet: .*forwarding domain.*Smartlead login.*OAuth/);
     expect(ht.createOrder).not.toHaveBeenCalled();
+  });
+});
+
+describe("replacement through Hypertide's replace queue", () => {
+  const pair = ["ada.ns.cloudflare.com", "bob.ns.cloudflare.com"];
+  const answer = (status: string) => ({ operationId: "replacement_1", status, pending: status !== "completed", requiresPayment: false, nameservers: pair, error: null, raw: "{}" });
+  const fakeHypertide = (over: Partial<Hypertide> = {}) => ({
+    dryRun: false,
+    submitReplacement: vi.fn(async () => ({ dryRun: false, ...answer("queued") })),
+    replacementStatus: vi.fn(async () => answer("queued")),
+    ...over,
+  }) as unknown as Hypertide;
+  const fakeSmartlead = () => ({ dryRun: false, addAccountsToCampaign: vi.fn(async () => ({})) }) as unknown as Smartlead;
+
+  beforeEach(async () => {
+    await sql`truncate hypertide_orders, inbox_setting_changes`;
+    await sql`update replacement_batches set hypertide_replace = true,
+      usernames = ${JSON.stringify([{ firstName: "John", lastName: "Smith" }])}::text::jsonb`;
+    await sql`insert into hypertide_orders (id, domain_name, domain_id, status, payment_status) values ('recOLD', 'oldsend.com', ${oldId}, 'Done', 'Paid')`;
+    await sql`update inboxes set daily_limit = 10, min_wait_mins = 55 where domain_id = ${oldId}`;
+  });
+
+  it("submits the swap, sets the nameservers it returns, follows Hypertide, then sets up Smartlead and stops the old domain", async () => {
+    const ht = fakeHypertide();
+    const pb = fakePorkbun({ getNs: vi.fn(async () => pair) } as Partial<Porkbun>);
+    const sl = fakeSmartlead();
+    const ctx = { porkbun: pb, hypertide: ht, smartlead: sl };
+
+    await advanceItem(sql, ctx, itemId);
+    expect(ht.submitReplacement).toHaveBeenCalledWith({
+      originalDomain: "oldsend.com", newDomain: "freshsend.com", copyTagsAndWarmup: true,
+      usernames: [{ firstName: "John", lastName: "Smith" }],
+    });
+    expect(pb.updateNs).toHaveBeenCalledWith("freshsend.com", pair);
+    expect((await step("step_nameservers")).s).toBe("done");
+    const inboxes = await step("step_inboxes");
+    expect(inboxes.s).toBe("running");
+    expect(inboxes.note).toMatch(/Hypertide: queued/);
+
+    // A retry doesn't submit again.
+    await advanceItem(sql, ctx, itemId);
+    expect(ht.submitReplacement).toHaveBeenCalledTimes(1);
+
+    // Hypertide finishes, and the new domain's order shows Done in the sync.
+    await sql`insert into hypertide_orders (id, domain_name, domain_id, status, payment_status) values ('recNEW', 'freshsend.com', ${newId}, 'Done', 'Paid-UserDomain')`;
+    await sql`insert into inboxes (domain_id, email, status, smartlead_account_id) values
+      (${newId}, 'john@freshsend.com', 'connected', 21), (${newId}, 'jsmith@freshsend.com', 'connected', 22), (${newId}, 'j.smith@freshsend.com', 'connected', 23)`;
+    await advanceItem(sql, ctx, itemId);
+
+    expect((await step("step_inboxes")).s).toBe("done");
+    expect((await step("step_smartlead")).s).toBe("done");
+    expect((await step("step_campaigns")).s).toBe("done");
+    expect(sl.addAccountsToCampaign).toHaveBeenCalledWith(501, [21, 22, 23]);
+    expect(await status(newId)).toBe("active");
+    expect(await status(oldId)).toBe("draining");
+
+    const changes = await sql`select i.email, c.changes from inbox_setting_changes c join inboxes i on i.id = c.inbox_id order by i.email`;
+    const of = (domain: string) => changes.filter((c) => (c.email as string).endsWith(domain)).map((c) => c.changes);
+    expect(of("@freshsend.com")).toEqual([{ daily_limit: 10, min_wait_mins: 55 }, { daily_limit: 10, min_wait_mins: 55 }, { daily_limit: 10, min_wait_mins: 55 }]);
+    expect(of("@oldsend.com")).toEqual([{ daily_limit: 0 }, { daily_limit: 0 }, { daily_limit: 0 }]);
+  });
+
+  it("won't submit while the old domain's Hypertide order isn't Done", async () => {
+    await sql`update hypertide_orders set status = 'In progress' where id = 'recOLD'`;
+    const ht = fakeHypertide();
+    await advanceItem(sql, { porkbun: fakePorkbun(), hypertide: ht }, itemId);
+    const s = await step("step_nameservers");
+    expect(s.s).toBe("manual");
+    expect(s.note).toMatch(/"In progress", not Done/);
+    expect(ht.submitReplacement).not.toHaveBeenCalled();
+  });
+
+  it("sends nothing in dry-run", async () => {
+    const ht = fakeHypertide({ dryRun: true } as Partial<Hypertide>);
+    await advanceItem(sql, { porkbun: fakePorkbun(), hypertide: ht }, itemId);
+    expect((await step("step_nameservers")).note).toMatch(/Dry run is on/);
+    expect(ht.submitReplacement).not.toHaveBeenCalled();
+  });
+
+  it("stops on a refused submission and shows Hypertide's reason", async () => {
+    const ht = fakeHypertide({ submitReplacement: vi.fn(async () => { throw new Error("Hypertide /replacements failed (CONFLICT): domain unavailable"); }) } as Partial<Hypertide>);
+    await advanceItem(sql, { porkbun: fakePorkbun(), hypertide: ht }, itemId);
+    const s = await step("step_nameservers");
+    expect(s.s).toBe("failed");
+    expect(s.last_error).toMatch(/domain unavailable/);
+  });
+
+  it("marks the inbox step failed when Hypertide lets the operation expire", async () => {
+    await sql`update replacement_items set step_nameservers = 'done', ht_operation_id = 'replacement_1', hypertide_ns = ${pair} where id = ${itemId}`;
+    const ht = fakeHypertide({ replacementStatus: vi.fn(async () => answer("expired")) } as Partial<Hypertide>);
+    await advanceItem(sql, { porkbun: null, hypertide: ht }, itemId);
+    const s = await step("step_inboxes");
+    expect(s.s).toBe("failed");
+    expect(s.last_error).toMatch(/expired/);
   });
 });

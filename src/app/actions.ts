@@ -5,14 +5,19 @@ import { after } from "next/server";
 import { z } from "zod";
 import { requireActor } from "@/lib/auth";
 import { jobSql, sql } from "@/lib/db";
+import { hypertideAcceptsDomain } from "@/integrations/hypertide";
 import { getDomainDetail, listStorageCandidates } from "@/lib/queries";
 import { DOMAIN_STATUSES, REPLACEMENT_REASONS } from "@/lib/status";
 
 export type ActionResult<T = undefined> = { ok: true; data: T } | { ok: false; error: string };
 
+/** A refusal worded for people, shown as is. */
+class UserError extends Error {}
+
 // Database rules raise check_violation / no_data_found with a message written
 // for people; anything else is unexpected and gets a generic message.
 function fail(e: unknown): { ok: false; error: string } {
+  if (e instanceof UserError) return { ok: false, error: e.message };
   const err = e as { code?: string; message?: string };
   if (err?.code === "23514" || err?.code === "P0002") return { ok: false, error: err.message ?? "Not allowed" };
   if (err?.code === "23505") return { ok: false, error: "That already exists" };
@@ -106,6 +111,14 @@ const replacementInput = z
     reason: z.enum(Object.keys(REPLACEMENT_REASONS) as [keyof typeof REPLACEMENT_REASONS]),
     note: z.string().trim().max(1000).optional(),
     manualInboxes: z.boolean().optional(),
+    // Hypertide's replace-domain queue instead of a new order.
+    hypertideReplace: z.boolean().optional(),
+    copyTagsAndWarmup: z.boolean().default(true),
+    usernames: z
+      .array(z.object({ firstName: z.string().trim().min(1).max(60), lastName: z.string().trim().min(1).max(60) }))
+      .min(1).max(25).optional(),
+    stopOldSending: z.boolean().default(true),
+    addToCampaigns: z.boolean().default(true),
   })
   .refine((v) => v.oldIds.length === v.newIds.length, "Need one new domain for each old domain")
   .refine((v) => new Set(v.newIds).size === v.newIds.length, "Each new domain can only be used once");
@@ -113,11 +126,34 @@ const replacementInput = z
 export async function startReplacement(input: z.input<typeof replacementInput>): Promise<ActionResult<{ batchId: string }>> {
   try {
     const actor = await requireActor();
-    const { oldIds, newIds, reason, note, manualInboxes } = replacementInput.parse(input);
+    const v = replacementInput.parse(input);
+    const { oldIds, newIds, reason, note } = v;
+    if (v.hypertideReplace) {
+      // Hypertide only replaces finished orders, and refuses names it won't host.
+      const rows = await sql<{ name: string; done: boolean; isNew: boolean }[]>`
+        select d.name, d.id = any(${newIds}::uuid[]) as is_new,
+          exists (select 1 from hypertide_orders o where o.domain_id = d.id and o.gone_at is null and o.status = 'Done') as done
+        from domains d where d.id = any(${[...oldIds, ...newIds]}::uuid[])`;
+      const notDone = rows.filter((r) => !r.isNew && !r.done).map((r) => r.name);
+      if (notDone.length) {
+        throw new UserError(`Hypertide can only replace domains with a finished (Done) order. Not done: ${notDone.join(", ")}. Untick "Replace on Hypertide" to do these by hand.`);
+      }
+      const refused = rows.filter((r) => r.isNew && !hypertideAcceptsDomain(r.name)).map((r) => r.name);
+      if (refused.length) throw new UserError(`Hypertide won't accept ${refused.join(", ")} (no hyphens, 35 characters at most). Pick other domains.`);
+    }
     const row = await sql.begin(async (tx) => {
       const [r] = await tx<{ batchId: string }[]>`
         select start_replacement(${oldIds}::uuid[], ${newIds}::uuid[], ${reason}::replacement_reason, ${note ?? null}, ${actor}) as batch_id`;
-      if (manualInboxes) await tx`update replacement_batches set manual_inboxes = true where id = ${r.batchId}`;
+      if (v.hypertideReplace) {
+        await tx`update replacement_batches set hypertide_replace = true, copy_tags_and_warmup = ${v.copyTagsAndWarmup},
+            usernames = ${v.usernames ? JSON.stringify(v.usernames) : null}::text::jsonb, stop_old_sending = ${v.stopOldSending},
+            add_to_campaigns = ${v.addToCampaigns}
+          where id = ${r.batchId}`;
+      } else {
+        await tx`update replacement_batches set manual_inboxes = ${Boolean(v.manualInboxes)}, stop_old_sending = ${v.stopOldSending},
+            add_to_campaigns = ${v.addToCampaigns}
+          where id = ${r.batchId}`;
+      }
       return r;
     });
     refresh();
@@ -314,7 +350,7 @@ export async function actOnReplacementStep(input: z.input<typeof stepInput>): Pr
     const { jobContext } = await import("@/jobs");
     const { actOnStep } = await import("@/jobs/replacements");
     const ctx = await jobContext(jobSql);
-    const r = await actOnStep(sql, { porkbun: ctx.porkbun, hypertide: ctx.hypertide, hypertideCredentials: ctx.hypertideCredentials }, itemId, step, action, actor);
+    const r = await actOnStep(jobSql, { porkbun: ctx.porkbun, hypertide: ctx.hypertide, hypertideCredentials: ctx.hypertideCredentials, smartlead: ctx.smartlead }, itemId, step, action, actor);
     refresh();
     return { ok: true, data: r };
   } catch (e) {
@@ -655,9 +691,6 @@ export async function validateDns(domainIds: string[] = []): Promise<ActionResul
     return fail(e);
   }
 }
-
-/** A refusal worded for people, shown as is. */
-class UserError extends Error {}
 
 async function smartleadAppOrError(what: string) {
   const { jobContext } = await import("@/jobs");

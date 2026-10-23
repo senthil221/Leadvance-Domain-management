@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { buildOrderPayload, createHypertide, hypertideAcceptsDomain, readNameservers } from "../src/integrations/hypertide";
+import { buildOrderPayload, createHypertide, hypertideAcceptsDomain, readNameservers, readReplacement } from "../src/integrations/hypertide";
 
 const res = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
 const creds = { api_key: "sl_x", username: "ops@b2bdrive.net", password: "pw", oauth_link: "https://login.microsoftonline.com/common/oauth2/v2.0/authorize?x" };
@@ -113,5 +113,28 @@ describe("createHypertide", () => {
 
   it("reads single-domain nameserver responses too", () => {
     expect(readNameservers({ nameservers: { domains: [] } }).size).toBe(0);
+  });
+});
+
+describe("readReplacement", () => {
+  it("reads a submit answer with per-domain results", () => {
+    const r = readReplacement({
+      success: true,
+      data: { operationId: "replacement_9", status: "queued", pending: true, requiresPayment: false,
+        results: [{ originalDomain: "old.com", newDomain: "new.com", nameservers: ["Ada.ns.cloudflare.com.", "bob.ns.cloudflare.com"] }] },
+    }, "new.com");
+    expect(r).toEqual({ operationId: "replacement_9", status: "queued", pending: true, requiresPayment: false, nameservers: ["ada.ns.cloudflare.com", "bob.ns.cloudflare.com"], error: null });
+  });
+
+  it("finds nameservers and the operation in other shapes", () => {
+    const r = readReplacement({ data: [{ results: [{ domain: "other.com", operationId: "x" }, { domain: "new.com", operationId: "replacement_2", nameservers: { ns: ["a.ns.cloudflare.com", "b.ns.cloudflare.com"] } }] }] }, "new.com");
+    expect(r.operationId).toBe("replacement_2");
+    expect(r.nameservers).toEqual(["a.ns.cloudflare.com", "b.ns.cloudflare.com"]);
+  });
+
+  it("reads progress, payment and errors", () => {
+    expect(readReplacement({ data: { operationId: "r", status: "AWAITING_PAYMENT", requiresPayment: true, results: [] } }, "new.com"))
+      .toMatchObject({ status: "awaiting_payment", requiresPayment: true, nameservers: [] });
+    expect(readReplacement({ data: { status: "failed", results: [{ newDomain: "new.com", error: "Domain unavailable" }] } }, "new.com").error).toBe("Domain unavailable");
   });
 });

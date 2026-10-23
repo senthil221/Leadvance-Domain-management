@@ -29,6 +29,33 @@ function autoAssign(targets: ReplaceTarget[], candidates: StorageCandidate[]) {
   return out;
 }
 
+// "John Smith" per line → { firstName, lastName }; a single word is used for both.
+function parseNames(text: string) {
+  const seen = new Set<string>();
+  const out: { firstName: string; lastName: string }[] = [];
+  for (const line of text.split(/\r?\n/)) {
+    const [first, ...rest] = line.trim().split(/\s+/).filter(Boolean);
+    if (!first) continue;
+    const key = line.trim().toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push({ firstName: first, lastName: rest.join(" ") || first });
+  }
+  return out;
+}
+
+function Check({ checked, onChange, label, hint }: { checked: boolean; onChange: (v: boolean) => void; label: string; hint: string }) {
+  return (
+    <label className="flex items-start gap-2">
+      <input type="checkbox" className="checkbox mt-0.5" checked={checked} onChange={(e) => onChange(e.target.checked)} />
+      <span>
+        {label}
+        <span className="field-hint block">{hint}</span>
+      </span>
+    </label>
+  );
+}
+
 export function ReplaceDialog({
   open,
   onOpenChange,
@@ -47,7 +74,12 @@ export function ReplaceDialog({
   const [assign, setAssign] = useState<Record<string, string>>({});
   const [reason, setReason] = useState<ReplacementReason>(defaultReason);
   const [note, setNote] = useState("");
-  const [manualInboxes, setManualInboxes] = useState(true);
+  const [mode, setMode] = useState<"hypertide" | "manual">("hypertide");
+  const [copyTagsAndWarmup, setCopyTagsAndWarmup] = useState(true);
+  const [changeNames, setChangeNames] = useState(false);
+  const [namesText, setNamesText] = useState("");
+  const [stopOldSending, setStopOldSending] = useState(true);
+  const [addToCampaigns, setAddToCampaigns] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [pending, startTransition] = useTransition();
 
@@ -80,17 +112,28 @@ export function ReplaceDialog({
 
   const used = useMemo(() => new Set(Object.values(assign)), [assign]);
   const short = candidates ? Math.max(0, targets.length - candidates.length) : 0;
-  const ready = candidates !== null && short === 0 && targets.every((t) => assign[t.id]);
+  const names = useMemo(() => parseNames(namesText), [namesText]);
+  const namesOk = !changeNames || (names.length >= 1 && names.length <= 25);
+  const refused = mode === "hypertide" && candidates
+    ? targets.filter((t) => assign[t.id] && !hypertideAcceptsDomain(candidates.find((c) => c.id === assign[t.id])?.name ?? "")).length
+    : 0;
+  const ready = candidates !== null && short === 0 && targets.every((t) => assign[t.id]) && namesOk && refused === 0;
 
   const submit = () => {
     setError(null);
     startTransition(async () => {
+      const hypertide = mode === "hypertide";
       const res = await startReplacement({
         oldIds: targets.map((t) => t.id),
         newIds: targets.map((t) => assign[t.id]),
         reason,
         note: note || undefined,
-        manualInboxes,
+        manualInboxes: !hypertide,
+        hypertideReplace: hypertide,
+        copyTagsAndWarmup,
+        usernames: hypertide && changeNames ? names : undefined,
+        stopOldSending,
+        addToCampaigns,
       });
       if (!res.ok) {
         setError(res.error);
@@ -172,25 +215,53 @@ export function ReplaceDialog({
               </div>
             </div>
 
-            <label className="flex items-start gap-2">
-              <input type="checkbox" className="checkbox mt-0.5" checked={manualInboxes} onChange={(e) => setManualInboxes(e.target.checked)} />
-              <span>
-                I&apos;ll order the inboxes on Hypertide myself
-                <span className="field-hint block">The app still sets the nameservers, and ticks the inbox step off when the Hypertide order shows Done.</span>
+            <div className="field">
+              <span className="field-label">Inboxes</span>
+              <div className="seg cfg-seg" role="group" aria-label="How the inboxes move">
+                <button type="button" aria-pressed={mode === "hypertide"} onClick={() => setMode("hypertide")}>Replace on Hypertide</button>
+                <button type="button" aria-pressed={mode === "manual"} onClick={() => setMode("manual")}>I&apos;ll do it in Hypertide</button>
+              </div>
+              <span className="field-hint">
+                {mode === "hypertide"
+                  ? "The app sends the swap to Hypertide (no new order, no payment), sets the nameservers it returns at Porkbun and follows it until the inboxes are in Smartlead."
+                  : "The app sets the nameservers and ticks the inbox step off when the new domain's Hypertide order shows Done."}
               </span>
-            </label>
+            </div>
+
+            <div className="grid gap-2">
+              {mode === "hypertide" ? (
+                <>
+                  <Check checked={copyTagsAndWarmup} onChange={setCopyTagsAndWarmup} label="Copy tags and warmup to the new inboxes" hint="Hypertide copies them from the old inboxes; paused warmup stays paused." />
+                  <Check checked={changeNames} onChange={setChangeNames} label="Change the sender names" hint="Off keeps the old domain's names." />
+                  {changeNames ? (
+                    <label className="field" style={{ marginLeft: 24 }}>
+                      <span className="field-label">One name per line, first and last <span className="zero">({names.length}/25)</span></span>
+                      <textarea className="textarea" rows={4} value={namesText} onChange={(e) => setNamesText(e.target.value)} placeholder={"John Smith\nSarah Jones"} />
+                      <span className="field-hint">Hypertide spreads 25 inboxes across these names. Names you leave out are removed.</span>
+                    </label>
+                  ) : null}
+                </>
+              ) : null}
+              <Check checked={addToCampaigns} onChange={setAddToCampaigns} label="Add the new inboxes to the old domain's campaigns" hint="Once they're in Smartlead, with the old domain's daily limit and gap." />
+              <Check checked={stopOldSending} onChange={setStopOldSending} label="Stop sending from the old domain when the new one is live" hint="Its daily limit goes to 0. Its inboxes stay up for Hypertide's ~18-day grace period, so replies still arrive; then it moves to Replaced." />
+            </div>
 
             {short > 0 ? (
               <div className="callout tone-warning">
                 <TriangleAlert size={15} strokeWidth={1.75} />
                 <span>Storage has {candidates?.length ?? 0} free domains, {short} short. Add domains in Inventory first, or replace fewer.</span>
               </div>
+            ) : refused > 0 ? (
+              <div className="callout tone-warning">
+                <TriangleAlert size={15} strokeWidth={1.75} />
+                <span>Hypertide won&apos;t take {refused === 1 ? "one of the new domains" : `${refused} of the new domains`} (no hyphens, 35 characters at most). Pick another.</span>
+              </div>
             ) : (
               <div className="callout tone-info">
                 <Info size={15} strokeWidth={1.75} />
                 <span>
-                  Next: nameservers point to Hypertide, inboxes are {manualInboxes ? "ordered by you" : "ordered by the app"} with the same sender names,
-                  connected to Smartlead, then added to the old domain&apos;s campaigns. Old domains drain, then retire automatically.
+                  Nothing goes to Hypertide until you press Replace. Only domains whose Hypertide order is Done can be replaced there.
+                  Follow each step in Replacements.
                 </span>
               </div>
             )}

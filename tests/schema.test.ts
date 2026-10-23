@@ -238,12 +238,12 @@ describe("assign_clients_from_campaigns", () => {
 });
 
 describe("retire_drained_domains", () => {
-  it("retires domains once the drain period is over, and only those", async () => {
+  it("retires domains once the drain period (18 days, Hypertide's grace) is over, and only those", async () => {
     const old = await addDomain("old.com", "active");
     const fresh = await addDomain("fresh.com", "active");
     await db.query("select transition_domain($1, 'draining')", [old]);
     await db.query("select transition_domain($1, 'draining')", [fresh]);
-    await db.query("update domains set draining_since = now() - interval '8 days' where id = $1", [old]);
+    await db.query("update domains set draining_since = now() - interval '19 days' where id = $1", [old]);
     const r = await db.query<{ n: number }>("select retire_drained_domains() as n");
     expect(r.rows[0].n).toBe(1);
     expect(await status(old)).toBe("burned");

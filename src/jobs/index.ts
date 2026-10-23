@@ -36,7 +36,7 @@ export const JOBS: Job[] = [
     name: "replacement-steps",
     label: "Replacement steps",
     everyMinutes: 1,
-    run: ({ sql, porkbun, hypertide, hypertideCredentials }) => advanceReplacements(sql, { porkbun, hypertide, hypertideCredentials }),
+    run: ({ sql, porkbun, hypertide, hypertideCredentials, smartlead }) => advanceReplacements(sql, { porkbun, hypertide, hypertideCredentials, smartlead }),
   },
   {
     name: "hypertide-orders",
@@ -44,7 +44,7 @@ export const JOBS: Job[] = [
     everyMinutes: 5,
     run: async (ctx) => {
       if (!ctx.hypertide) return { skipped: "HYPERTIDE_API_KEY not set" };
-      const stepCtx = { porkbun: ctx.porkbun, hypertide: ctx.hypertide, hypertideCredentials: ctx.hypertideCredentials };
+      const stepCtx = { porkbun: ctx.porkbun, hypertide: ctx.hypertide, hypertideCredentials: ctx.hypertideCredentials, smartlead: ctx.smartlead };
       const synced = await syncHypertideOrders(ctx.sql, stepCtx);
       const tracked = await trackHypertideOrders(ctx.sql, stepCtx);
       return { ...synced, tracking: tracked.open };
