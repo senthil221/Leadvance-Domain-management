@@ -10,7 +10,7 @@ const LABEL = { nameservers: "Nameservers", inboxes: "Inboxes", smartlead: "Smar
 type Step = keyof typeof LABEL;
 
 // Buttons for the step a replacement is waiting on.
-export function StepActions({ itemId, step, status }: { itemId: string; step: Step; status: StepStatus }) {
+export function StepActions({ itemId, step, status, compact = false }: { itemId: string; step: Step; status: StepStatus; compact?: boolean }) {
   const [pending, start] = useTransition();
   const act = (action: "done" | "retry") =>
     start(async () => {
@@ -29,8 +29,8 @@ export function StepActions({ itemId, step, status }: { itemId: string; step: St
           <RotateCw size={12} className={pending ? "animate-spin" : undefined} /> Retry
         </button>
       ) : null}
-      <button type="button" className="btn btn-sm" disabled={pending} onClick={() => act("done")}>
-        <Check size={12} /> Mark {LABEL[step].toLowerCase()} done
+      <button type="button" className="btn btn-sm" disabled={pending} onClick={() => act("done")} title={`Mark ${LABEL[step].toLowerCase()} done`}>
+        <Check size={12} /> {compact ? "Done" : `Mark ${LABEL[step].toLowerCase()} done`}
       </button>
     </span>
   );

@@ -34,13 +34,15 @@ export function Badge({ tone, children }: { tone?: Tone; children: ReactNode }) 
 // campaigns, Replaced with the days left in Hypertide's grace period.
 function TagBadge({ tag, graceDaysLeft }: { tag: string; graceDaysLeft: number | null }) {
   const t = tag.toLowerCase();
-  if (t === "new") return <span className="badge tone-violet" title="Replacement domain, warming before it joins campaigns">New</span>;
+  if (t === "new") return <span className="rpl-tag is-new" title="Replacement domain, warming before it joins campaigns">New</span>;
   if (t === "replaced") {
-    if (graceDaysLeft == null) return <span className="badge" title="Replaced; its inboxes are gone">Replaced</span>;
-    const tone = graceDaysLeft <= 3 ? "tone-danger" : "tone-warning";
+    if (graceDaysLeft == null) return <span className="rpl-tag is-gone" title="Replaced; its inboxes are gone">Replaced</span>;
+    // The bar empties over the default 18-day grace period.
+    const pct = Math.max(0, Math.min(100, (100 * graceDaysLeft) / 18));
     return (
-      <span className={`badge ${tone} num`} title="Replaced: Hypertide keeps its inboxes up for replies until the grace period ends">
+      <span className={`rpl-tag is-replaced${graceDaysLeft <= 3 ? " is-ending" : ""}`} title="Replaced: Hypertide keeps its inboxes up for replies until the grace period ends">
         Replaced · {graceDaysLeft ? `${graceDaysLeft}d left` : "ends today"}
+        <span className="rpl-grace"><span style={{ width: `${pct}%` }} /></span>
       </span>
     );
   }

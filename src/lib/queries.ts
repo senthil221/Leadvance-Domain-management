@@ -452,9 +452,10 @@ export type ReplacementRow = {
 };
 
 /** One row per replacement, newest first, with what the page shows about both domains. */
-export async function listReplacements(limit = 200): Promise<{ rows: ReplacementRow[]; now: number }> {
+export async function listReplacements(limit = 200): Promise<{ rows: ReplacementRow[]; now: number; graceDays: number }> {
   // The database clock, so relative times render the same on server and client.
-  const [[{ now }], rows] = await Promise.all([sql<{ now: Date }[]>`select now()`, sql<ReplacementRow[]>`
+  const [[{ now, graceDays }], rows] = await Promise.all([sql<{ now: Date; graceDays: number }[]>`
+    select now(), coalesce((select (value #>> '{}')::int from settings where key = 'drain_days'), 18) as grace_days`, sql<ReplacementRow[]>`
     with drain as (select coalesce((select (value #>> '{}')::int from settings where key = 'drain_days'), 18) as days)
     select ri.id, rb.reason, rb.note as batch_note, rb.actor, ri.created_at, ri.completed_at,
       rb.hypertide_replace, rb.add_to_campaigns, rb.stop_old_sending, rb.copy_tags_and_warmup,
@@ -483,7 +484,7 @@ export async function listReplacements(limit = 200): Promise<{ rows: Replacement
     ) n
     order by ri.created_at desc
     limit ${limit}`]);
-  return { rows, now: +now };
+  return { rows, now: +now, graceDays };
 }
 
 // ---------------------------------------------------------------------------
