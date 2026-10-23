@@ -36,7 +36,8 @@ export const JOBS: Job[] = [
     name: "replacement-steps",
     label: "Replacement steps",
     everyMinutes: 1,
-    run: ({ sql, porkbun, hypertide, hypertideCredentials, smartlead }) => advanceReplacements(sql, { porkbun, hypertide, hypertideCredentials, smartlead }),
+    run: ({ sql, porkbun, hypertide, hypertideCredentials, smartlead, smartleadApp }) =>
+      advanceReplacements(sql, { porkbun, hypertide, hypertideCredentials, smartlead, smartleadApp }),
   },
   {
     name: "hypertide-orders",

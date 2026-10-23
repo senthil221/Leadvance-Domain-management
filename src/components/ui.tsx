@@ -30,6 +30,37 @@ export function Badge({ tone, children }: { tone?: Tone; children: ReactNode }) 
   return <span className={`badge${tone ? ` tone-${tone}` : ""}`}>{children}</span>;
 }
 
+// Replacement tags carry their state: New (violet) until the domain joins
+// campaigns, Replaced with the days left in Hypertide's grace period.
+function TagBadge({ tag, graceDaysLeft }: { tag: string; graceDaysLeft: number | null }) {
+  const t = tag.toLowerCase();
+  if (t === "new") return <span className="badge tone-violet" title="Replacement domain, warming before it joins campaigns">New</span>;
+  if (t === "replaced") {
+    if (graceDaysLeft == null) return <span className="badge" title="Replaced; its inboxes are gone">Replaced</span>;
+    const tone = graceDaysLeft <= 3 ? "tone-danger" : "tone-warning";
+    return (
+      <span className={`badge ${tone} num`} title="Replaced: Hypertide keeps its inboxes up for replies until the grace period ends">
+        Replaced · {graceDaysLeft ? `${graceDaysLeft}d left` : "ends today"}
+      </span>
+    );
+  }
+  return <span className="badge">{tag}</span>;
+}
+
+/** A domain's tags, replacement tags first, the rest folded after `max`. */
+export function TagList({ tags, graceDaysLeft = null, max = 2 }: { tags: string[]; graceDaysLeft?: number | null; max?: number }) {
+  if (!tags.length) return null;
+  const special = (t: string) => (["new", "replaced"].includes(t.toLowerCase()) ? 0 : 1);
+  const sorted = [...tags].sort((a, b) => special(a) - special(b));
+  const shown = sorted.slice(0, max), rest = sorted.slice(max);
+  return (
+    <>
+      {shown.map((t) => <TagBadge key={t} tag={t} graceDaysLeft={graceDaysLeft} />)}
+      {rest.length ? <span className="badge" title={rest.join(", ")}>+{rest.length}</span> : null}
+    </>
+  );
+}
+
 export function ClientCell({ name, hue }: { name: string | null; hue: number | null }) {
   if (!name) return <span className="zero">—</span>;
   return (

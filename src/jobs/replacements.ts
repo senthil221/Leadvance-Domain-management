@@ -2,6 +2,7 @@ import type postgres from "postgres";
 import { buildOrderPayload, type Hypertide, type OrderTemplate, type SmartleadCredentials } from "../integrations/hypertide";
 import { sameNameservers, type Porkbun } from "../integrations/porkbun";
 import type { Smartlead } from "../integrations/smartlead";
+import type { SmartleadApp, SmartleadTag } from "../integrations/smartlead-app";
 
 // Moves each replacement pair through its steps:
 //   nameservers → inboxes → smartlead → campaigns (live)
@@ -36,7 +37,8 @@ type Item = {
   manual: boolean;
   htreplace: boolean; copytw: boolean; usernames: { firstName: string; lastName: string }[] | null;
   stopold: boolean; addcampaigns: boolean;
-  htop: string | null; htchecked: Date | null; oldstopped: Date | null;
+  htop: string | null; htopstatus: string | null; htchecked: Date | null; oldstopped: Date | null;
+  autowarmup: boolean; warmupqueued: Date | null;
 };
 
 async function loadItem(sql: Sql, id: string): Promise<Item | undefined> {
@@ -49,7 +51,8 @@ async function loadItem(sql: Sql, id: string): Promise<Item | undefined> {
       ri.hypertide_paid_at as htpaid, ri.hypertide_ns_verified_at as htverified, rb.manual_inboxes as manual,
       rb.hypertide_replace as htreplace, rb.copy_tags_and_warmup as copytw, rb.usernames::text as usernames,
       rb.stop_old_sending as stopold, rb.add_to_campaigns as addcampaigns,
-      ri.ht_operation_id as htop, ri.ht_checked_at as htchecked, ri.old_stopped_at as oldstopped
+      ri.ht_operation_id as htop, ri.ht_operation as htopstatus, ri.ht_checked_at as htchecked, ri.old_stopped_at as oldstopped,
+      rb.auto_warmup as autowarmup, ri.warmup_queued_at as warmupqueued
     from replacement_items ri
     join replacement_batches rb on rb.id = ri.batch_id
     join domains nd on nd.id = ri.new_domain_id
@@ -80,8 +83,32 @@ async function targetNameservers(sql: Sql): Promise<string[]> {
   return Array.isArray(v) ? v.filter((x): x is string => typeof x === "string" && x.trim() !== "") : [];
 }
 
+/** Adds or removes app tags on a domain (New, Replaced). */
+async function retag(sql: Sql, domainId: string, add: string[], remove: string[] = []) {
+  await sql`update domains set tags = array(
+      select distinct t from unnest(tags || ${add}::text[]) t where not (t = any(${remove}::text[])) order by 1)
+    where id = ${domainId}`;
+}
+
+// The old domain is Replaced from the moment Hypertide swaps it: its inboxes
+// live on for the grace period (the drain days), then it retires.
+async function startGrace(sql: Sql, item: Item, actor: string) {
+  await sql`select transition_domain(${item.oldid}, 'draining', ${"replaced by " + item.newname}, ${actor})`;
+  // Count from when Hypertide finished the swap, when it said so.
+  await sql`
+    update domains d set draining_since = least(d.draining_since, x.at)
+    from (select substring(ht_response from '"completedAt":"([0-9T:.+-]+Z?)"')::timestamptz as at
+          from replacement_items where id = ${item.id}) x
+    where d.id = ${item.oldid} and x.at is not null`;
+  await retag(sql, item.oldid, ["Replaced"], ["New"]);
+  item.oldstatus = "draining";
+}
+
 // Keeps domain statuses in line with how far the pair has got.
 async function syncStatuses(sql: Sql, item: Item, actor: string) {
+  // A Hypertide swap starts the old domain's clock as soon as Hypertide has it.
+  const swapped = item.htreplace && (finished(item.inboxes) || item.htopstatus === "completed");
+  if (swapped && (item.oldstatus === "active" || item.oldstatus === "warming")) await startGrace(sql, item, actor);
   const live = finished(item.smartlead);
   if (live && item.newstatus === "provisioning") {
     await sql`select transition_domain(${item.newid}, 'warming', ${"inboxes connected, replacing " + item.oldname}, ${actor})`;
@@ -89,10 +116,12 @@ async function syncStatuses(sql: Sql, item: Item, actor: string) {
   }
   if (finished(item.campaigns) && !item.completed) {
     if (item.newstatus === "provisioning") await sql`select transition_domain(${item.newid}, 'warming', 'setup finished', ${actor})`;
-    if (item.newstatus !== "active") await sql`select transition_domain(${item.newid}, 'active', ${"replaced " + item.oldname}, ${actor})`;
-    if (item.oldstatus === "active" || item.oldstatus === "warming") {
-      await sql`select transition_domain(${item.oldid}, 'draining', ${"replaced by " + item.newname}, ${actor})`;
+    // Not in campaigns yet: the new domain keeps warming until someone adds it.
+    if (item.campaigns === "done") {
+      if (item.newstatus !== "active") await sql`select transition_domain(${item.newid}, 'active', ${"replaced " + item.oldname}, ${actor})`;
+      await retag(sql, item.newid, [], ["New"]);
     }
+    if (item.oldstatus === "active" || item.oldstatus === "warming") await startGrace(sql, item, actor);
     // Hypertide keeps the old inboxes up for the grace period so replies
     // still land; they just stop sending.
     if (item.stopold && !item.oldstopped) {
@@ -111,6 +140,7 @@ export type StepContext = {
   hypertide?: Hypertide | null;
   hypertideCredentials?: Partial<SmartleadCredentials>;
   smartlead?: Smartlead | null;
+  smartleadApp?: SmartleadApp | null;
 };
 
 async function orderTemplate(sql: Sql): Promise<OrderTemplate> {
@@ -226,6 +256,7 @@ export async function advanceItem(sql: Sql, ctx: StepContext, id: string, actor 
       const n = Number(c.n), expected = Number(c.expected);
       if (n > 0 && (n >= expected || c.settled)) {
         await copySendingSettings(sql, item, actor);
+        if (item.autowarmup && !item.warmupqueued) await turnOnWarmup(sql, item, actor);
         await setStep(sql, id, step, "done", null);
         continue;
       }
@@ -240,41 +271,75 @@ export async function advanceItem(sql: Sql, ctx: StepContext, id: string, actor 
         select distinct c.id, c.name from campaign_inboxes ci join inboxes i on i.id = ci.inbox_id join campaigns c on c.id = ci.campaign_id
         where i.domain_id = ${item.oldid} order by c.name`;
       const list = campaigns.map((c) => c.name as string);
-      if (item.addcampaigns && !list.length) {
+      // New inboxes warm up first; they're added later from Replacements.
+      if (!item.addcampaigns) {
+        await setStep(sql, id, step, "skipped", null);
+        continue;
+      }
+      if (!list.length) {
         await setStep(sql, id, step, "done", null);
         continue;
       }
       const sl = ctx.smartlead;
-      // Left to a person when asked to, or when the app can't write to Smartlead.
-      if (!item.addcampaigns || !sl || sl.dryRun) {
-        const dry = item.addcampaigns && sl?.dryRun ? " (dry run is on, so the app didn't)" : "";
+      if (!sl || sl.dryRun) {
+        const dry = sl?.dryRun ? " (dry run is on, so the app didn't)" : "";
         await setStep(sql, id, step, "manual", list.length
           ? `Add the new inboxes to ${list.length === 1 ? "this campaign" : `these ${list.length} campaigns`}: ${list.join("; ")}${dry}. Then mark this done; ${item.oldname} will start draining.`
           : `Add the new inboxes to ${item.oldname}'s campaigns, then mark this done; ${item.oldname} will start draining.`);
         return;
       }
-      const accounts = await sql`
-        select id, smartlead_account_id as account from inboxes
-        where domain_id = ${item.newid} and status = 'connected' and smartlead_account_id is not null`;
-      if (!accounts.length) {
-        await setStep(sql, id, step, "manual", `None of ${item.newname}'s inboxes are linked to Smartlead yet. Add them to ${list.join("; ")} and mark this done.`);
-        return;
-      }
-      await setStep(sql, id, step, "running", `Adding ${accounts.length} inboxes to ${list.length} campaign${list.length === 1 ? "" : "s"}…`);
+      await setStep(sql, id, step, "running", `Adding the new inboxes to ${list.length} campaign${list.length === 1 ? "" : "s"}…`);
       try {
-        for (const camp of campaigns) {
-          await sl.addAccountsToCampaign(Number(camp.id), accounts.map((a) => Number(a.account)));
-          await sql`insert into campaign_inboxes (campaign_id, inbox_id)
-            select ${camp.id}::bigint, unnest(${accounts.map((a) => a.id as string)}::uuid[]) on conflict do nothing`;
-        }
+        await addInboxesToCampaigns(sql, sl, item.newid, campaigns.map((c) => Number(c.id)));
       } catch (e) {
-        await setStep(sql, id, step, "failed", null, e instanceof Error ? e.message : String(e));
+        await setStep(sql, id, step, "failed", null, errText(e));
         return;
       }
+      await sql`update replacement_items set campaigns_added_at = now() where id = ${id}`;
       await setStep(sql, id, step, "done", null);
       continue;
     }
   }
+}
+
+/** Adds a domain's connected inboxes to these Smartlead campaigns, and records it. */
+async function addInboxesToCampaigns(sql: Sql, sl: Smartlead, domainId: string, campaignIds: number[]) {
+  const accounts = await sql`
+    select id, smartlead_account_id as account from inboxes
+    where domain_id = ${domainId} and status = 'connected' and smartlead_account_id is not null`;
+  if (!accounts.length) throw new Error("None of the new inboxes are linked to Smartlead yet");
+  for (const c of campaignIds) {
+    await sl.addAccountsToCampaign(c, accounts.map((a) => Number(a.account)));
+    await sql`insert into campaign_inboxes (campaign_id, inbox_id)
+      select ${c}::bigint, unnest(${accounts.map((a) => a.id as string)}::uuid[]) on conflict do nothing`;
+  }
+  return accounts.length;
+}
+
+/**
+ * From Replacements, once the new inboxes have warmed up: adds them to the
+ * campaigns the old domain's inboxes are in, and the new domain goes Active.
+ */
+export async function addReplacementToCampaigns(sql: Sql, sl: Smartlead, id: string, actor: string) {
+  const item = await loadItem(sql, id);
+  if (!item) throw new Error("Replacement not found");
+  if (!finished(item.smartlead)) throw new Error("The new inboxes aren't in Smartlead yet");
+  if (item.campaigns === "done") throw new Error("These inboxes are already in the campaigns");
+  if (sl.dryRun) throw new Error("Dry run is on, so Smartlead can't be changed");
+  const campaigns = await sql`
+    select distinct ci.campaign_id as id from campaign_inboxes ci join inboxes i on i.id = ci.inbox_id
+    where i.domain_id = ${item.oldid}`;
+  if (!campaigns.length) throw new Error(`${item.oldname} isn't in any campaign`);
+  const inboxes = await addInboxesToCampaigns(sql, sl, item.newid, campaigns.map((c) => Number(c.id)));
+  await sql`update replacement_items set step_campaigns = 'done', campaigns_added_at = now(), note = null, last_error = null where id = ${id}`;
+  if (item.newstatus === "provisioning") await sql`select transition_domain(${item.newid}, 'warming', 'setup finished', ${actor})`;
+  if (item.newstatus !== "active") await sql`select transition_domain(${item.newid}, 'active', ${"added to campaigns, replaced " + item.oldname}, ${actor})`;
+  await retag(sql, item.newid, [], ["New"]);
+  // The Smartlead "New" tag comes off with the next tag pass.
+  await sql`update replacement_items set sl_new_tagged_at = null where id = ${id} and sl_new_tagged_at is not null`;
+  // Still mid-run: let the runner finish it (old domain, completion).
+  if (!item.completed) await advanceItem(sql, { porkbun: null, smartlead: sl }, id, actor);
+  return { inboxes, campaigns: campaigns.length };
 }
 
 /** Worker job: advance every open pair, then close finished batches. */
@@ -292,11 +357,13 @@ export async function advanceReplacements(sql: postgres.Sql, ctx: StepContext) {
       await sql`update replacement_items set last_error = ${e instanceof Error ? e.message : String(e)} where id = ${r.id}`;
     }
   }
+  const tagged = ctx.smartleadApp && !ctx.smartleadApp.dryRun ? await syncSmartleadTags(sql, ctx.smartleadApp).catch(() => ({ tagged: 0, errors: 1 })) : null;
+  if (tagged) errors += tagged.errors;
   const closed = await sql`
     update replacement_batches b set status = 'completed', completed_at = now()
     where b.status = 'running' and not exists (select 1 from replacement_items i where i.batch_id = b.id and i.completed_at is null)
     returning id`;
-  return { open: open.length, batchesCompleted: closed.length, errors };
+  return { open: open.length, batchesCompleted: closed.length, errors, tagged: tagged?.tagged ?? 0 };
 }
 
 /** A person acting on a pair's current step from the Replacements page. */
@@ -393,6 +460,28 @@ async function hypertideReplaceStep(sql: Sql, ht: Hypertide | null, item: Item, 
     await setStep(sql, id, "inboxes", "running", `Couldn't check the replacement on Hypertide (${errText(e)}). Trying again in a few minutes.`);
   }
   return false;
+}
+
+/**
+ * New inboxes need warmup before they can send: turn it on for any that are
+ * off, with the old domain's usual warmup numbers when it had them.
+ */
+async function turnOnWarmup(sql: Sql, item: Item, actor: string) {
+  const [old] = await sql`
+    select mode() within group (order by warmup_per_day) filter (where warmup_per_day > 0) as perday,
+      mode() within group (order by warmup_rampup) filter (where warmup_rampup is not null) as rampup,
+      mode() within group (order by warmup_reply_rate) filter (where warmup_reply_rate is not null) as reply
+    from inboxes where domain_id = ${item.oldid} and status <> 'removed'`;
+  const changes: Record<string, number | boolean> = { warmup_enabled: true };
+  if (old?.perday != null) changes.warmup_per_day = Number(old.perday);
+  if (old?.rampup != null) changes.warmup_rampup = Number(old.rampup);
+  if (old?.reply != null) changes.warmup_reply_rate = Number(old.reply);
+  await sql`
+    insert into inbox_setting_changes (inbox_id, changes, source, actor)
+    select id, ${sql.json(changes)}, 'replacement', ${actor}
+    from inboxes where domain_id = ${item.newid} and status = 'connected' and smartlead_account_id is not null
+      and warmup_enabled is not true`;
+  await sql`update replacement_items set warmup_queued_at = now() where id = ${item.id}`;
 }
 
 /** New inboxes start with the old domain's most common daily limit and gap. */
@@ -535,4 +624,81 @@ export async function approveHypertidePayment(sql: Sql, ctx: StepContext & { hyp
       step_inboxes = 'pending' where id = any(${ids}::uuid[])`;
   for (const x of rows) await advanceItem(sql, ctx, x.id as string, actor);
   return { charged: rows.length, dryRun: false };
+}
+
+/**
+ * Mirrors the replacement tags on the inboxes in Smartlead: "New" on the new
+ * inboxes until they join campaigns, "Replaced" on the old ones once their
+ * grace period starts. Each inbox keeps its other tags (Smartlead replaces the
+ * whole set, so inboxes are written in groups that share the same result).
+ */
+export async function syncSmartleadTags(sql: Sql, app: SmartleadApp) {
+  const due = await sql`
+    select ri.id, ri.new_domain_id as newid, ri.old_domain_id as oldid, ri.step_campaigns as campaigns,
+      (ri.sl_new_tagged_at is null and ri.step_smartlead in ('done', 'skipped')) as fornew,
+      (ri.sl_old_tagged_at is null and od.status = 'draining') as forold
+    from replacement_items ri
+    join replacement_batches rb on rb.id = ri.batch_id
+    join domains od on od.id = ri.old_domain_id
+    where rb.hypertide_replace and ri.created_at > now() - interval '60 days'
+      and ((ri.sl_new_tagged_at is null and ri.step_smartlead in ('done', 'skipped'))
+        or (ri.sl_old_tagged_at is null and od.status = 'draining'))`;
+  if (!due.length) return { tagged: 0, errors: 0 };
+  let known: SmartleadTag[] = await app.tags();
+  const tagId = async (name: string) => {
+    let t = known.find((k) => k.name.toLowerCase() === name.toLowerCase());
+    if (!t) {
+      const made = await app.createTag(name);
+      if (!made) return null;
+      known = [...known, made];
+      t = made;
+    }
+    return t;
+  };
+  let tagged = 0, errors = 0;
+  for (const r of due) {
+    try {
+      if (r.fornew) {
+        tagged += await retagInboxes(sql, app, r.newid as string, r.campaigns === "done" ? [] : ["New"], r.campaigns === "done" ? ["New"] : [], tagId, () => known);
+        await sql`update replacement_items set sl_new_tagged_at = now() where id = ${r.id}`;
+      }
+      if (r.forold) {
+        tagged += await retagInboxes(sql, app, r.oldid as string, ["Replaced"], ["New"], tagId, () => known);
+        await sql`update replacement_items set sl_old_tagged_at = now() where id = ${r.id}`;
+      }
+    } catch {
+      errors++; // logged in api_calls; tried again on the next run
+    }
+  }
+  return { tagged, errors };
+}
+
+async function retagInboxes(
+  sql: Sql, app: SmartleadApp, domainId: string, add: string[], remove: string[],
+  tagId: (name: string) => Promise<SmartleadTag | null>, known: () => SmartleadTag[],
+) {
+  const inboxes = await sql`
+    select id, smartlead_account_id as account, smartlead_tags as tags from inboxes
+    where domain_id = ${domainId} and status = 'connected' and smartlead_account_id is not null`;
+  for (const name of add) if (!(await tagId(name))) return 0;
+  const lower = (x: string) => x.toLowerCase();
+  const groups = new Map<string, { names: string[]; accounts: number[]; ids: string[] }>();
+  for (const ib of inboxes) {
+    const current = (ib.tags as string[]) ?? [];
+    const names = [...new Map([...current, ...add].filter((t) => !remove.map(lower).includes(lower(t))).map((t) => [lower(t), t])).values()];
+    if (names.length === current.length && names.every((n) => current.map(lower).includes(lower(n)))) continue;
+    const key = names.map(lower).sort().join("|");
+    const g = groups.get(key) ?? { names, accounts: [], ids: [] };
+    g.accounts.push(Number(ib.account));
+    g.ids.push(ib.id as string);
+    groups.set(key, g);
+  }
+  let n = 0;
+  for (const g of groups.values()) {
+    const tags = g.names.map((name) => known().find((k) => lower(k.name) === lower(name))).filter((t): t is SmartleadTag => Boolean(t));
+    await app.bulkConfig(g.accounts, { tags: tags.map((t) => t.id) });
+    await sql`update inboxes set smartlead_tags = ${tags.map((t) => t.name)}::text[] where id = any(${g.ids}::uuid[])`;
+    n += g.accounts.length;
+  }
+  return n;
 }

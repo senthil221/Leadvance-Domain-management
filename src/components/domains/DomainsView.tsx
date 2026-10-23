@@ -9,7 +9,7 @@ import { toast } from "sonner";
 import { assignClient } from "@/app/actions";
 import { ColumnsMenu, useColumns, type ColumnDef } from "@/components/Columns";
 import { isTyping } from "@/components/shell/AppShell";
-import { ClientCell, Empty, Kbd, Metric, Rep, Spark, StatusDot } from "@/components/ui";
+import { ClientCell, Empty, Kbd, Metric, Rep, Spark, StatusDot, TagList } from "@/components/ui";
 import { daysSince, int, shortDate } from "@/lib/format";
 import type { ClientRow, DomainRow } from "@/lib/queries";
 import { DOMAIN_STATUSES, type DomainStatus } from "@/lib/status";
@@ -295,8 +295,7 @@ export function DomainsView({ domains, clients }: { domains: DomainRow[]; client
                       <td className="col-first">
                         <span className="flex items-center gap-2">
                           <span className="strong">{d.name}</span>
-                          {d.tags.slice(0, 2).map((t) => <span key={t} className="badge">{t}</span>)}
-                          {d.tags.length > 2 ? <span className="badge" title={d.tags.join(", ")}>+{d.tags.length - 2}</span> : null}
+                          <TagList tags={d.tags} graceDaysLeft={d.graceDaysLeft} />
                           {d.openAlerts > 0 && replaceable(d) ? <TriangleAlert size={13} className="text-warning-ink" aria-label={`${d.openAlerts} open alerts`} /> : null}
                         </span>
                       </td>

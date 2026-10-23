@@ -79,7 +79,8 @@ export function ReplaceDialog({
   const [changeNames, setChangeNames] = useState(false);
   const [namesText, setNamesText] = useState("");
   const [stopOldSending, setStopOldSending] = useState(true);
-  const [addToCampaigns, setAddToCampaigns] = useState(true);
+  const [addToCampaigns, setAddToCampaigns] = useState(false);
+  const [autoWarmup, setAutoWarmup] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [pending, startTransition] = useTransition();
 
@@ -134,6 +135,7 @@ export function ReplaceDialog({
         usernames: hypertide && changeNames ? names : undefined,
         stopOldSending,
         addToCampaigns,
+        autoWarmup,
       });
       if (!res.ok) {
         setError(res.error);
@@ -242,8 +244,9 @@ export function ReplaceDialog({
                   ) : null}
                 </>
               ) : null}
-              <Check checked={addToCampaigns} onChange={setAddToCampaigns} label="Add the new inboxes to the old domain's campaigns" hint="Once they're in Smartlead, with the old domain's daily limit and gap." />
-              <Check checked={stopOldSending} onChange={setStopOldSending} label="Stop sending from the old domain when the new one is live" hint="Its daily limit goes to 0. Its inboxes stay up for Hypertide's ~18-day grace period, so replies still arrive; then it moves to Replaced." />
+              <Check checked={autoWarmup} onChange={setAutoWarmup} label="Turn warmup on for the new inboxes" hint="As soon as they're in Smartlead, using the old domain's warmup numbers. The new domain is tagged New until it joins campaigns." />
+              <Check checked={addToCampaigns} onChange={setAddToCampaigns} label="Add the new inboxes to campaigns straight away" hint="Only for domains that are already warmed up. Otherwise they warm first and you add them from Replacements when they're ready." />
+              <Check checked={stopOldSending} onChange={setStopOldSending} label="Stop sending from the old domain when the new one is live" hint="Its daily limit goes to 0 once the new inboxes are in Smartlead. Either way it's tagged Replaced with an 18-day countdown from the swap, while Hypertide keeps its inboxes up for replies." />
             </div>
 
             {short > 0 ? (

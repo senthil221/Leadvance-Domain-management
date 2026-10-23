@@ -280,7 +280,7 @@ export function readReplacement(json: unknown, newDomain: string): ReplacementSt
 
   const status = pick((o) => text(o.status) ?? text(o.state));
   const pendingRaw = pick((o) => (typeof o.pending === "boolean" ? o.pending : null));
-  const err = pick((o) => text(o.error) ?? text(o.errorMessage) ?? text(o.reason) ?? (o.success === false ? text(o.message) : null));
+  const err = pick((o) => text(o.error) ?? text(o.lastError) ?? text(o.errorMessage) ?? text(o.reason) ?? (o.success === false ? text(o.message) : null));
   return {
     operationId: pick((o) => text(o.operationId) ?? text(o.operation_id)),
     status: status ? status.toLowerCase() : null,

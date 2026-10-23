@@ -8,7 +8,7 @@ import Link from "next/link";
 import { Fragment, useMemo, useState } from "react";
 import { ColumnsMenu, useColumns, type ColumnDef } from "@/components/Columns";
 import { SortTh } from "@/components/SortTh";
-import { ClientCell, Empty, Metric, Rep, StatusDot } from "@/components/ui";
+import { ClientCell, Empty, Metric, Rep, StatusDot, TagList } from "@/components/ui";
 import { InboxSettingsDialog } from "./InboxSettingsDialog";
 import { PlansCard } from "./PlansCard";
 import { ago, int } from "@/lib/format";
@@ -31,6 +31,7 @@ type Group = {
   avgRep: number | null; minRep: number | null; lowRep: number; campaigns: number;
   sent7: number; replies7: number; human7: number; bounces7: number;
   sentToday: number; avgWait: number | null; pending: number; tags: string[]; esp: string | null;
+  domainTags: string[]; graceDaysLeft: number | null;
   ageDays: number | null; dns: Dns; bl: number | null; blListings: string[]; blocked: number; paused: number; disconnected: number;
 };
 
@@ -63,6 +64,8 @@ function group(rows: InboxListRow[]): Group[] {
       avgWait: avg(list.filter((i) => i.minWaitMins != null).map((i) => i.minWaitMins!)),
       pending: list.filter((i) => i.change?.status === "pending" || i.change?.status === "running").length,
       tags: [...new Set(list.flatMap((i) => i.smartleadTags))],
+      domainTags: f.domainTags.filter((t) => ["new", "replaced"].includes(t.toLowerCase())),
+      graceDaysLeft: f.domainGraceDaysLeft,
       ageDays: (() => {
         // Age counts from the first inbox added to Smartlead; registration only when no inbox has a date.
         const t = list.map((i) => (i.smartleadCreatedAt ? new Date(i.smartleadCreatedAt).getTime() : NaN)).filter((x) => !Number.isNaN(x));
@@ -144,9 +147,9 @@ function EspBadge({ type }: { type: string }) {
   const tone = type === "OUTLOOK" ? "tone-info" : type === "GMAIL" || type === "GOOGLE" ? "tone-success" : "";
   return <span className={`badge ${tone}`}>{espLabel(type)}</span>;
 }
-function Tags({ tags }: { tags: string[] }) {
+function Tags({ tags, graceDaysLeft = null }: { tags: string[]; graceDaysLeft?: number | null }) {
   if (!tags.length) return <span className="zero">—</span>;
-  return <span className="flex items-center gap-1">{tags.slice(0, 2).map((t) => <span key={t} className="badge">{t}</span>)}{tags.length > 2 ? <span className="badge" title={tags.join(", ")}>+{tags.length - 2}</span> : null}</span>;
+  return <span className="flex items-center gap-1"><TagList tags={tags} graceDaysLeft={graceDaysLeft} /></span>;
 }
 
 type Dns = { state: "ok" | "missing" | "nozone" | "unknown"; missing: string[]; checks: [string, boolean | null][] };
@@ -393,13 +396,14 @@ export function InboxesView({ inboxes, clients, plans, smartleadConnected, dryRu
                         <span className="flex items-center gap-1.5">
                           <ChevronRight size={14} className="flex-none text-faint transition-transform" style={{ transform: isOpen ? "rotate(90deg)" : undefined }} />
                           <Link href={`/domains?d=${g.domainId}&view=all`} className="strong hover:underline" onClick={(e) => e.stopPropagation()}>{g.domain}</Link>
+                          <TagList tags={g.domainTags} graceDaysLeft={g.graceDaysLeft} />
                           {g.pending ? <span className="badge tone-info">{g.pending} pending</span> : null}
                         </span>
                       </td>
                       {on("status") ? <td><StatusDot status={g.status} /></td> : null}
                       {on("client") ? <td><ClientCell name={g.clientName} hue={g.clientHue} /></td> : null}
                       {on("esp") ? <td>{g.esp ? <EspBadge type={g.esp} /> : <span className="zero">—</span>}</td> : null}
-                      {on("tags") ? <td><Tags tags={g.tags} /></td> : null}
+                      {on("tags") ? <td><Tags tags={g.tags} graceDaysLeft={g.graceDaysLeft} /></td> : null}
                       {on("count") ? <td className="is-num">{int(g.count)}</td> : null}
                       {on("warmup") ? (
                         <td className="is-num" title={g.warmupOff ? `${g.warmupOff} with warmup off` : undefined}>
@@ -438,7 +442,7 @@ export function InboxesView({ inboxes, clients, plans, smartleadConnected, dryRu
                         {on("status") ? <td /> : null}
                         {on("client") ? <td className="text-muted">{i.senderName ?? <span className="zero">—</span>}</td> : null}
                         {on("esp") ? <td>{i.providerType ? <EspBadge type={i.providerType} /> : <span className="zero">—</span>}</td> : null}
-                        {on("tags") ? <td><Tags tags={i.smartleadTags} /></td> : null}
+                        {on("tags") ? <td><Tags tags={i.smartleadTags} graceDaysLeft={i.domainGraceDaysLeft} /></td> : null}
                         {on("count") ? <td className="is-num"><span className="zero">—</span></td> : null}
                         {on("warmup") ? (
                           <td className="is-num" title={i.warmupMin != null ? `Smartlead sends ${i.warmupMin}–${i.warmupPerDay} a day${i.warmupReplyRate != null ? `, ${i.warmupReplyRate}% reply rate` : ""}` : undefined}>

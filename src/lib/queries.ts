@@ -170,6 +170,8 @@ export type DomainRow = {
   sl7Replies: number | null;
   sl7Bounces: number | null;
   tags: string[];
+  /** Days until a replaced (draining) domain's grace period ends. */
+  graceDaysLeft: number | null;
   nameservers: string[];
   htOrderStatus: string | null;
   htPayment: string | null;
@@ -205,7 +207,7 @@ export async function listDomains() {
         left join domain_daily_stats s on s.domain_id = d.id and s.day = g.day::date
         order by g.day
       ) as spark,
-      d.tags, d.nameservers, d.draining_since, d.burned_at, d.cost_cents, d.registrar_api_access as api_access, d.nameservers_checked_at, d.nameservers_answering,
+      d.tags, grace_days_left(d.status, d.draining_since) as grace_days_left, d.nameservers, d.draining_since, d.burned_at, d.cost_cents, d.registrar_api_access as api_access, d.nameservers_checked_at, d.nameservers_answering,
       ho.status as ht_order_status, ho.payment_status as ht_payment,
       nr.status as ns_request_status, nr.message as ns_request_message, nr.target as ns_request_target,
       rp.new_domain_id as replaced_by_id, rp.name as replaced_by_name, rp.created_at as replaced_at,
@@ -278,7 +280,7 @@ export async function getDomainDetail(id: string): Promise<DomainDetail | null> 
       (select count(*)::int from alerts a where a.domain_id = d.id and a.status = 'open') as open_alerts,
       '{}'::int[] as spark,
       s7.sent as sl7_sent, s7.replies as sl7_replies, s7.bounces as sl7_bounces,
-      d.tags, d.registrar_api_access as api_access, d.nameservers_answering, ho.status as ht_order_status, ho.payment_status as ht_payment,
+      d.tags, grace_days_left(d.status, d.draining_since) as grace_days_left, d.registrar_api_access as api_access, d.nameservers_answering, ho.status as ht_order_status, ho.payment_status as ht_payment,
       nr.status as ns_request_status, nr.message as ns_request_message, nr.target as ns_request_target,
       null as replaced_by_id, null as replaced_by_name, null as replaced_at,
       (select coalesce(sum(i.daily_limit), 0)::int from inboxes i where i.domain_id = d.id and i.status = 'connected') as capacity
@@ -411,56 +413,77 @@ export async function getHypertideSummary(): Promise<HypertideSummary> {
 // Replacements
 // ---------------------------------------------------------------------------
 
-export type BatchItem = {
+export type ReplacementRow = {
   id: string;
+  reason: ReplacementReason;
+  batchNote: string | null;
+  actor: string;
+  createdAt: Date;
+  completedAt: Date | null;
+  hypertideReplace: boolean;
+  addToCampaigns: boolean;
+  stopOldSending: boolean;
+  copyTagsAndWarmup: boolean;
   oldDomainId: string;
   oldDomain: string;
+  oldStatus: DomainStatus;
+  oldInboxes: number;
+  oldCampaigns: string[];
+  graceEndsAt: Date | null;
   newDomainId: string;
   newDomain: string;
+  newStatus: DomainStatus;
+  newInboxes: number;
+  newWarmupOn: number;
+  newReputation: number | null;
   clientName: string | null;
   clientHue: number | null;
   stepNameservers: StepStatus;
   stepInboxes: StepStatus;
   stepSmartlead: StepStatus;
   stepCampaigns: StepStatus;
-  htOperation: string | null;
+  note: string | null;
   lastError: string | null;
-  note: string | null;
-  completedAt: Date | null;
+  htOperation: string | null;
+  htNameservers: string[] | null;
   htOrderId: string | null;
-  htStatus: string | null;
   htPaidAt: Date | null;
+  campaignsAddedAt: Date | null;
 };
 
-export type Batch = {
-  id: string;
-  reason: ReplacementReason;
-  note: string | null;
-  actor: string;
-  status: "running" | "completed" | "partial" | "cancelled";
-  hypertideReplace: boolean;
-  createdAt: Date;
-  completedAt: Date | null;
-  items: BatchItem[];
-};
-
-export async function listBatches(limit = 50): Promise<Batch[]> {
-  const batches = await sql<Omit<Batch, "items">[]>`
-    select id, reason, note, actor, status, hypertide_replace, created_at, completed_at
-    from replacement_batches order by created_at desc limit ${limit}`;
-  if (batches.length === 0) return [];
-  const items = await sql<(BatchItem & { batchId: string })[]>`
-    select ri.id, ri.batch_id, ri.old_domain_id, od.name as old_domain, ri.new_domain_id, nd.name as new_domain,
+/** One row per replacement, newest first, with what the page shows about both domains. */
+export async function listReplacements(limit = 200): Promise<{ rows: ReplacementRow[]; now: number }> {
+  // The database clock, so relative times render the same on server and client.
+  const [[{ now }], rows] = await Promise.all([sql<{ now: Date }[]>`select now()`, sql<ReplacementRow[]>`
+    with drain as (select coalesce((select (value #>> '{}')::int from settings where key = 'drain_days'), 18) as days)
+    select ri.id, rb.reason, rb.note as batch_note, rb.actor, ri.created_at, ri.completed_at,
+      rb.hypertide_replace, rb.add_to_campaigns, rb.stop_old_sending, rb.copy_tags_and_warmup,
+      od.id as old_domain_id, od.name as old_domain, od.status as old_status,
+      (select count(*)::int from inboxes i where i.domain_id = od.id and i.status <> 'removed') as old_inboxes,
+      coalesce((select array_agg(distinct c.name order by c.name) from campaign_inboxes ci
+        join inboxes i on i.id = ci.inbox_id join campaigns c on c.id = ci.campaign_id where i.domain_id = od.id), '{}') as old_campaigns,
+      case when od.status = 'draining' and od.draining_since is not null
+        then od.draining_since + make_interval(days => (select days from drain)) end as grace_ends_at,
+      nd.id as new_domain_id, nd.name as new_domain, nd.status as new_status,
+      n.inboxes as new_inboxes, n.warm as new_warmup_on, n.rep as new_reputation,
       c.name as client_name, c.hue as client_hue,
-      ri.step_nameservers, ri.step_inboxes, ri.step_smartlead, ri.step_campaigns, ri.last_error, ri.note, ri.completed_at,
-      ri.hypertide_order_id as ht_order_id, ri.hypertide_status as ht_status, ri.hypertide_paid_at as ht_paid_at, ri.ht_operation
+      ri.step_nameservers, ri.step_inboxes, ri.step_smartlead, ri.step_campaigns, ri.note, ri.last_error,
+      ri.ht_operation, ri.hypertide_ns as ht_nameservers, ri.hypertide_order_id as ht_order_id, ri.hypertide_paid_at as ht_paid_at,
+      ri.campaigns_added_at
     from replacement_items ri
+    join replacement_batches rb on rb.id = ri.batch_id
     join domains od on od.id = ri.old_domain_id
     join domains nd on nd.id = ri.new_domain_id
-    left join clients c on c.id = ri.client_id
-    where ri.batch_id in ${sql(batches.map((b) => b.id))}
-    order by od.name`;
-  return batches.map((b) => ({ ...b, items: items.filter((i) => i.batchId === b.id) }));
+    left join clients c on c.id = coalesce(ri.client_id, nd.client_id)
+    cross join lateral (
+      select count(*) filter (where i.status = 'connected')::int as inboxes,
+        count(*) filter (where i.status = 'connected' and i.warmup_enabled)::int as warm,
+        round(avg(i.warmup_reputation) filter (where i.status = 'connected'), 1)::float8 as rep
+      from inboxes i where i.domain_id = nd.id
+    ) n
+    order by ri.created_at desc
+    limit ${limit}`]);
+  return { rows, now: +now };
 }
 
 // ---------------------------------------------------------------------------
@@ -499,6 +522,7 @@ export async function listOpenAlerts() {
 
 export type InboxListRow = InboxRow & {
   domainId: string; domain: string; domainStatus: DomainStatus; clientName: string | null; clientHue: number | null;
+  domainTags: string[]; domainGraceDaysLeft: number | null;
   sent7: number; replies7: number; human7: number; bounces7: number; campaigns: number;
   smartleadTags: string[]; providerType: string | null; minWaitMins: number | null; dailySent: number | null;
   warmupMin: number | null; warmupReplyRate: number | null; warmupStatus: string | null;
@@ -525,6 +549,7 @@ export async function listInboxes() {
     select i.id, i.email, i.sender_name, i.status, i.warmup_enabled, i.warmup_per_day, i.warmup_rampup, i.daily_limit,
       i.warmup_reputation::float8 as warmup_reputation, i.smartlead_account_id, i.last_synced_at,
       d.id as domain_id, d.name as domain, d.status as domain_status, c.name as client_name, c.hue as client_hue,
+      d.tags as domain_tags, grace_days_left(d.status, d.draining_since) as domain_grace_days_left,
       coalesce(ev.sent7, 0) as sent7, coalesce(ev.replies7, 0) as replies7, coalesce(ev.human7, 0) as human7,
       coalesce(ev.bounces7, 0) as bounces7, coalesce(camp.n, i.campaign_count, 0) as campaigns,
       i.smartlead_tags, i.provider_type, i.min_wait_mins, i.daily_sent, i.warmup_min, i.warmup_reply_rate, i.warmup_status,

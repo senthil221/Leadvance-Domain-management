@@ -9,7 +9,7 @@ import { toast } from "sonner";
 import { ColumnsMenu, useColumns, type ColumnDef } from "@/components/Columns";
 import { SetupDialog } from "@/components/domains/SetupDialog";
 import { MarkReplacedDialog } from "./MarkReplacedDialog";
-import { Badge, ClientCell, Empty } from "@/components/ui";
+import { Badge, ClientCell, Empty, TagList } from "@/components/ui";
 import { daysSince, int, shortDate } from "@/lib/format";
 import type { ClientRow, DomainRow } from "@/lib/queries";
 import { LIFE, LIFE_ORDER, LIFE_TABS, htOf, lifeOf, nsOf, type Life } from "@/lib/lifecycle";
@@ -206,8 +206,7 @@ export function InventoryView({ domains, clients }: { domains: DomainRow[]; clie
                       <td className="col-first">
                         <span className="flex items-center gap-2">
                           <Link href={`/domains?d=${d.id}&view=all`} className="strong hover:underline" onClick={(e) => e.stopPropagation()}>{d.name}</Link>
-                          {d.tags.slice(0, 2).map((t) => <span key={t} className="badge">{t}</span>)}
-                          {d.tags.length > 2 ? <span className="badge" title={d.tags.join(", ")}>+{d.tags.length - 2}</span> : null}
+                          <TagList tags={d.tags} graceDaysLeft={d.graceDaysLeft} />
                         </span>
                       </td>
                       {on("life") ? (

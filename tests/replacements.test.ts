@@ -5,7 +5,8 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vites
 import type { Porkbun } from "../src/integrations/porkbun";
 import type { Hypertide } from "../src/integrations/hypertide";
 import type { Smartlead } from "../src/integrations/smartlead";
-import { actOnStep, advanceItem, advanceReplacements, approveHypertidePayment, trackHypertideOrders } from "../src/jobs/replacements";
+import type { SmartleadApp } from "../src/integrations/smartlead-app";
+import { actOnStep, addReplacementToCampaigns, advanceItem, advanceReplacements, approveHypertidePayment, syncSmartleadTags, trackHypertideOrders } from "../src/jobs/replacements";
 import { loadMigrations } from "../scripts/migrations";
 
 // The step runner uses the same Postgres client as production, so it runs
@@ -64,6 +65,7 @@ describe("replacement steps", () => {
   });
 
   it("runs the whole lifecycle: nameservers via Porkbun, manual inboxes, Smartlead check, campaigns, then statuses", async () => {
+    await sql`update replacement_batches set add_to_campaigns = true`;
     await sql`update settings set value = '["ns1.hypertide.io","ns2.hypertide.io"]' where key = 'hypertide_nameservers'`;
     const pb = fakePorkbun();
     await advanceItem(sql, { porkbun: pb }, itemId);
@@ -223,7 +225,7 @@ describe("replacement through Hypertide's replace queue", () => {
   beforeEach(async () => {
     await sql`truncate hypertide_orders, inbox_setting_changes`;
     await sql`update replacement_batches set hypertide_replace = true,
-      usernames = ${JSON.stringify([{ firstName: "John", lastName: "Smith" }])}::text::jsonb`;
+      usernames = ${JSON.stringify([{ firstName: "John", lastName: "Smith" }])}::text::jsonb, add_to_campaigns = true`;
     await sql`insert into hypertide_orders (id, domain_name, domain_id, status, payment_status) values ('recOLD', 'oldsend.com', ${oldId}, 'Done', 'Paid')`;
     await sql`update inboxes set daily_limit = 10, min_wait_mins = 55 where domain_id = ${oldId}`;
   });
@@ -264,8 +266,61 @@ describe("replacement through Hypertide's replace queue", () => {
 
     const changes = await sql`select i.email, c.changes from inbox_setting_changes c join inboxes i on i.id = c.inbox_id order by i.email`;
     const of = (domain: string) => changes.filter((c) => (c.email as string).endsWith(domain)).map((c) => c.changes);
-    expect(of("@freshsend.com")).toEqual([{ daily_limit: 10, min_wait_mins: 55 }, { daily_limit: 10, min_wait_mins: 55 }, { daily_limit: 10, min_wait_mins: 55 }]);
+    const limits = { daily_limit: 10, min_wait_mins: 55 };
+    expect(of("@freshsend.com")).toEqual(expect.arrayContaining([limits, { warmup_enabled: true }]));
+    expect(of("@freshsend.com").filter((c) => c.warmup_enabled)).toHaveLength(3);
     expect(of("@oldsend.com")).toEqual([{ daily_limit: 0 }, { daily_limit: 0 }, { daily_limit: 0 }]);
+  });
+
+  it("by default leaves the new inboxes out of campaigns to warm, then adds them on request", async () => {
+    await sql`update replacement_batches set add_to_campaigns = false`;
+    await sql`update replacement_items set step_nameservers = 'done', step_inboxes = 'done' where id = ${itemId}`;
+    await sql`insert into inboxes (domain_id, email, status, smartlead_account_id) values
+      (${newId}, 'a@freshsend.com', 'connected', 31), (${newId}, 'b@freshsend.com', 'connected', 32), (${newId}, 'c@freshsend.com', 'connected', 33)`;
+    const sl = fakeSmartlead();
+    await advanceItem(sql, { porkbun: null, smartlead: sl }, itemId);
+
+    expect((await step("step_campaigns")).s).toBe("skipped");
+    expect(sl.addAccountsToCampaign).not.toHaveBeenCalled();
+    expect(await status(newId)).toBe("warming");
+    expect(await status(oldId)).toBe("draining");
+    expect((await sql`select completed_at from replacement_items where id = ${itemId}`)[0].completed_at).not.toBeNull();
+
+    const r = await addReplacementToCampaigns(sql, sl, itemId, "me");
+    expect(r).toEqual({ inboxes: 3, campaigns: 1 });
+    expect(sl.addAccountsToCampaign).toHaveBeenCalledWith(501, [31, 32, 33]);
+    expect((await step("step_campaigns")).s).toBe("done");
+    expect(await status(newId)).toBe("active");
+    await expect(addReplacementToCampaigns(sql, sl, itemId, "me")).rejects.toThrow(/already in the campaigns/);
+  });
+
+  it("tags the domains, starts the old domain's grace when Hypertide has the swap, and mirrors the tags in Smartlead", async () => {
+    await sql`update domains set tags = '{New}' where id = ${newId}`;
+    await sql`update inboxes set smartlead_tags = '{Kapable}' where domain_id = ${oldId}`;
+    const ht = fakeHypertide({ submitReplacement: vi.fn(async () => ({ dryRun: false, ...answer("completed"), raw: JSON.stringify({ data: { completedAt: new Date(Date.now() - 2 * 86_400_000).toISOString() } }) })) } as Partial<Hypertide>);
+    const pb = fakePorkbun({ getNs: vi.fn(async () => pair) } as Partial<Porkbun>);
+    await advanceItem(sql, { porkbun: pb, hypertide: ht }, itemId);
+
+    // Hypertide has it: the old domain is Replaced and its 18 days start now.
+    expect(await status(oldId)).toBe("draining");
+    const [old] = await sql`select tags, grace_days_left(status, draining_since) as left from domains where id = ${oldId}`;
+    expect(old.tags).toEqual(["Replaced"]);
+    expect(old.left).toBe(16); // counted from Hypertide's completedAt, two days ago
+    expect((await sql`select tags from domains where id = ${newId}`)[0].tags).toEqual(["New"]);
+
+    // Smartlead: Replaced on the old inboxes, keeping their other tags; New on the new ones once they're in.
+    const bulk = vi.fn(async () => 0);
+    const app = { dryRun: false, tags: vi.fn(async () => [{ id: 1, name: "Kapable", color: "" }]), createTag: vi.fn(async (name: string) => ({ id: name === "New" ? 7 : 8, name, color: "" })), bulkConfig: bulk } as unknown as SmartleadApp;
+    let r = await syncSmartleadTags(sql, app);
+    expect(bulk).toHaveBeenCalledWith([11, 12, 13], { tags: [1, 8] });
+    expect((await sql`select distinct smartlead_tags from inboxes where domain_id = ${oldId}`)[0].smartlead_tags).toEqual(["Kapable", "Replaced"]);
+
+    await sql`update replacement_items set step_inboxes = 'done', step_smartlead = 'done' where id = ${itemId}`;
+    await sql`insert into inboxes (domain_id, email, status, smartlead_account_id) values (${newId}, 'n@freshsend.com', 'connected', 41)`;
+    r = await syncSmartleadTags(sql, app);
+    expect(r.errors).toBe(0);
+    expect(bulk).toHaveBeenLastCalledWith([41], { tags: [7] });
+    expect(await syncSmartleadTags(sql, app)).toEqual({ tagged: 0, errors: 0 });
   });
 
   it("won't submit while the old domain's Hypertide order isn't Done", async () => {

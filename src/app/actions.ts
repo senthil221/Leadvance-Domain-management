@@ -118,7 +118,8 @@ const replacementInput = z
       .array(z.object({ firstName: z.string().trim().min(1).max(60), lastName: z.string().trim().min(1).max(60) }))
       .min(1).max(25).optional(),
     stopOldSending: z.boolean().default(true),
-    addToCampaigns: z.boolean().default(true),
+    addToCampaigns: z.boolean().default(false),
+    autoWarmup: z.boolean().default(true),
   })
   .refine((v) => v.oldIds.length === v.newIds.length, "Need one new domain for each old domain")
   .refine((v) => new Set(v.newIds).size === v.newIds.length, "Each new domain can only be used once");
@@ -147,11 +148,14 @@ export async function startReplacement(input: z.input<typeof replacementInput>):
       if (v.hypertideReplace) {
         await tx`update replacement_batches set hypertide_replace = true, copy_tags_and_warmup = ${v.copyTagsAndWarmup},
             usernames = ${v.usernames ? JSON.stringify(v.usernames) : null}::text::jsonb, stop_old_sending = ${v.stopOldSending},
-            add_to_campaigns = ${v.addToCampaigns}
+            add_to_campaigns = ${v.addToCampaigns}, auto_warmup = ${v.autoWarmup}
           where id = ${r.batchId}`;
+        // New until it joins campaigns.
+        await tx`update domains set tags = array(select distinct t from unnest(tags || array['New']) t order by 1)
+          where id = any(${newIds}::uuid[])`;
       } else {
         await tx`update replacement_batches set manual_inboxes = ${Boolean(v.manualInboxes)}, stop_old_sending = ${v.stopOldSending},
-            add_to_campaigns = ${v.addToCampaigns}
+            add_to_campaigns = ${v.addToCampaigns}, auto_warmup = ${v.autoWarmup}
           where id = ${r.batchId}`;
       }
       return r;
@@ -355,6 +359,24 @@ export async function actOnReplacementStep(input: z.input<typeof stepInput>): Pr
     return { ok: true, data: r };
   } catch (e) {
     if (e instanceof Error && /Finish the earlier|already finished|not found/.test(e.message)) return { ok: false, error: e.message };
+    return fail(e);
+  }
+}
+
+/** Once a replacement's new inboxes have warmed up: add them to the old domain's campaigns. */
+export async function addReplacementToCampaigns(itemId: string): Promise<ActionResult<{ inboxes: number; campaigns: number }>> {
+  try {
+    const actor = await requireActor();
+    const id = z.uuid().parse(itemId);
+    const { jobContext } = await import("@/jobs");
+    const { addReplacementToCampaigns: add } = await import("@/jobs/replacements");
+    const ctx = await jobContext(jobSql);
+    if (!ctx.smartlead) return { ok: false, error: "Smartlead isn't connected" };
+    const r = await add(jobSql, ctx.smartlead, id, actor);
+    refresh();
+    return { ok: true, data: r };
+  } catch (e) {
+    if (e instanceof Error && /Smartlead|campaign|not found|Dry run|already/.test(e.message)) return { ok: false, error: e.message };
     return fail(e);
   }
 }
