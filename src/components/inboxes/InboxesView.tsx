@@ -18,7 +18,6 @@ import { DOMAIN_STATUSES, type DomainStatus } from "@/lib/status";
 const TABS = [
   { key: "connected", label: "Connected", match: (i: InboxListRow) => i.status === "connected" },
   { key: "lowrep", label: "Reputation under 90", match: (i: InboxListRow) => i.status === "connected" && i.warmupReputation != null && i.warmupReputation < 90 },
-  { key: "pending", label: "Pending", match: (i: InboxListRow) => i.status === "pending" },
   { key: "disconnected", label: "Disconnected", match: (i: InboxListRow) => i.status === "disconnected" },
   { key: "all", label: "All", match: () => true },
 ] as const;
@@ -79,6 +78,40 @@ function group(rows: InboxListRow[]): Group[] {
       paused: list.filter((i) => warmupOf(i) === "paused").length,
       disconnected: list.filter((i) => i.status === "disconnected").length,
       esp: (() => { const t = [...new Set(list.map((i) => i.providerType).filter(Boolean))]; return t.length === 1 ? t[0] : t.length ? "MIXED" : null; })(),
+    };
+  });
+}
+
+/**
+ * A client's domains rolled up into one row with the same columns: sums for
+ * counts, averages over inboxes for rates, and how many domains have a problem.
+ */
+type ClientGroup = Group & { key: string; domains: Group[]; dnsBad: number; listed: number };
+function byClient(groups: Group[]): ClientGroup[] {
+  const map = new Map<string, Group[]>();
+  for (const g of groups) map.set(g.clientName ?? "", [...(map.get(g.clientName ?? "") ?? []), g]);
+  return [...map.entries()].map(([key, domains]) => {
+    const list = domains.flatMap((d) => d.inboxes);
+    const [s] = group(list.map((i) => ({ ...i, domainId: `client:${key}` })));
+    const missing = [...new Set(domains.flatMap((d) => d.dns.missing))];
+    return {
+      ...s,
+      key,
+      domains,
+      domainId: `client:${key}`,
+      domain: key || "No client",
+      clientName: key || null,
+      clientHue: domains[0].clientHue,
+      inboxes: list,
+      ageDays: null,
+      domainTags: [],
+      graceDaysLeft: null,
+      campaigns: Math.max(0, ...domains.map((d) => d.campaigns)),
+      dns: { state: domains.some((d) => d.dns.state === "nozone") ? "nozone" : missing.length ? "missing" : domains.every((d) => d.dns.state === "unknown") ? "unknown" : "ok", missing, checks: [] },
+      dnsBad: domains.filter((d) => d.dns.state === "missing" || d.dns.state === "nozone").length,
+      bl: domains.some((d) => d.bl != null) ? domains.reduce((a, d) => a + (d.bl ?? 0), 0) : null,
+      listed: domains.filter((d) => (d.bl ?? 0) > 0).length,
+      blListings: [...new Set(domains.flatMap((d) => (d.bl ? [d.domain] : [])))],
     };
   });
 }
@@ -191,7 +224,6 @@ function BlacklistCell({ count, listings }: { count: number | null; listings: st
 function ChangeBadge({ change }: { change: InboxListRow["change"] }) {
   if (!change) return null;
   const what = Object.entries(change.changes).map(([k, v]) => `${k.replace(/_/g, " ")} ${v}`).join(", ");
-  if (change.status === "pending" || change.status === "running") return <span className="badge tone-info" title={what}>Pending</span>;
   if (change.status === "failed") return <span className="badge tone-danger" title={change.error ?? what}>Update failed</span>;
   if (change.status === "dry_run") return <span className="badge" title={`Dry run: would set ${what}`}>Dry run</span>;
   return null;
@@ -209,6 +241,7 @@ export function InboxesView({ inboxes, clients, plans, smartleadConnected, dryRu
   const [clientId, setClientId] = useState("");
   const [sort, setSort] = useState<{ key: SortKey; dir: 1 | -1 }>({ key: "domain", dir: 1 });
   const [open, setOpen] = useState<Set<string>>(new Set());
+  const [openClients, setOpenClients] = useState<Set<string>>(new Set());
   const [esp, setEsp] = useState("");
   const [issue, setIssue] = useState("");
   const [acting, startAct] = useTransition();
@@ -243,6 +276,16 @@ export function InboxesView({ inboxes, clients, plans, smartleadConnected, dryRu
     });
   }, [base, tab, q, sort, issue]);
 
+  const clientGroups = useMemo(() => byClient(groups).sort((a, b) => {
+    // Clients follow the same sort as their domains; by name otherwise, "No client" last.
+    const byName = (a.key ? 0 : 1) - (b.key ? 0 : 1) || a.domain.localeCompare(b.domain);
+    if (sort.key === "domain" || sort.key === "client") return byName * (sort.key === "client" ? sort.dir : 1);
+    const x = sortValue(a, sort.key), y = sortValue(b, sort.key);
+    if (x === y) return byName;
+    if (x === null) return 1;
+    if (y === null) return -1;
+    return (x < y ? -1 : 1) * sort.dir;
+  }), [groups, sort]);
   const all = useMemo(() => groups.flatMap((g) => g.inboxes), [groups]);
   const totals = useMemo(() => {
     const reps = all.map((i) => i.warmupReputation).filter((x): x is number => x != null);
@@ -283,8 +326,10 @@ export function InboxesView({ inboxes, clients, plans, smartleadConnected, dryRu
   const allSel = allIds.length > 0 && allIds.every((id) => selected.has(id));
   const someSel = allIds.some((id) => selected.has(id));
 
-  const allOpen = groups.length > 0 && groups.every((g) => open.has(g.domainId));
-  const toggle = (id: string) => setOpen((s) => { const n = new Set(s); if (n.has(id)) n.delete(id); else n.add(id); return n; });
+  const allOpen = clientGroups.length > 0 && clientGroups.every((c) => openClients.has(c.key));
+  const flip = (id: string) => (s: Set<string>) => { const n = new Set(s); if (n.has(id)) n.delete(id); else n.add(id); return n; };
+  const toggle = (id: string) => setOpen(flip(id));
+  const toggleClient = (key: string) => setOpenClients(flip(key));
   const sortBy = (key: SortKey) => setSort((s) => (s.key === key ? { key, dir: (s.dir * -1) as 1 | -1 } : { key, dir: key === "domain" || key === "client" ? 1 : -1 }));
 
   return (
@@ -327,7 +372,7 @@ export function InboxesView({ inboxes, clients, plans, smartleadConnected, dryRu
           <Search size={14} strokeWidth={1.5} />
           <input className="input" value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search" aria-label="Search inboxes" />
         </label>
-        <button type="button" className="btn btn-sm" aria-label={allOpen ? "Collapse all" : "Expand all"} title={allOpen ? "Collapse all" : "Expand all"} onClick={() => setOpen(allOpen ? new Set() : new Set(groups.map((g) => g.domainId)))}>
+        <button type="button" className="btn btn-sm" aria-label={allOpen ? "Collapse all" : "Expand all"} title={allOpen ? "Collapse all" : "Expand all"} onClick={() => setOpenClients(allOpen ? new Set() : new Set(clientGroups.map((c) => c.key)))}>
           {allOpen ? <ChevronsDownUp size={14} /> : <ChevronsUpDown size={14} />}
         </button>
         <select className="select" style={{ width: 150 }} value={issue} onChange={(e) => setIssue(e.target.value)} aria-label="Filter by issue">
@@ -381,7 +426,46 @@ export function InboxesView({ inboxes, clients, plans, smartleadConnected, dryRu
               </tr>
             </thead>
             <tbody>
-              {groups.map((g) => {
+              {clientGroups.map((c) => {
+                const cOpen = openClients.has(c.key);
+                const cIds = c.inboxes.map((i) => i.id);
+                const cSel = cIds.every((id) => selected.has(id));
+                const cSome = cIds.some((id) => selected.has(id));
+                return (
+                  <Fragment key={c.key || "none"}>
+                    <tr className="is-clickable inb-client" aria-expanded={cOpen} data-selected={cSel} onClick={() => toggleClient(c.key)}>
+                      <td className="col-check" onClick={(e) => { e.stopPropagation(); toggleIds(cIds); }}>
+                        <input type="checkbox" className="checkbox" checked={cSel} ref={(el) => { if (el) el.indeterminate = !cSel && cSome; }} onChange={() => {}} aria-label={`Select every inbox of ${c.domain}`} tabIndex={-1} />
+                      </td>
+                      <td className="col-first">
+                        <span className="flex items-center gap-1.5">
+                          <ChevronRight size={14} className="flex-none text-faint transition-transform" style={{ transform: cOpen ? "rotate(90deg)" : undefined }} />
+                          <ClientCell name={c.domain} hue={c.clientHue} />
+                          <span className="text-faint">{c.domains.length} domain{c.domains.length === 1 ? "" : "s"}</span>
+                        </span>
+                      </td>
+                      {on("status") ? <td /> : null}
+                      {on("client") ? <td /> : null}
+                      {on("esp") ? <td>{c.esp ? <EspBadge type={c.esp} /> : <span className="zero">—</span>}</td> : null}
+                      {on("tags") ? <td /> : null}
+                      {on("count") ? <td className="is-num strong">{int(c.count)}</td> : null}
+                      {on("warmup") ? <td className="is-num">{n0(c.avgWarmup)}{c.warmupOff ? <span className="text-faint"> · {c.warmupOff} off</span> : null}</td> : null}
+                      {on("limit") ? <td className="is-num">{n0(c.avgLimit)}</td> : null}
+                      {on("capacity") ? <td className="is-num strong">{c.capacity ? int(c.capacity) : <span className="zero">0</span>}</td> : null}
+                      {on("today") ? <td className="is-num">{c.sentToday ? int(c.sentToday) : <span className="zero">0</span>}</td> : null}
+                      {on("gap") ? <td className="is-num">{c.avgWait != null ? `${Math.round(c.avgWait)}m` : <span className="zero">—</span>}</td> : null}
+                      {on("rep") ? <td className="is-num"><Rep value={c.avgRep} low={c.lowRep} /></td> : null}
+                      {on("age") ? <td /> : null}
+                      {on("dns") ? <td>{c.dnsBad ? <span className="ns-status tone-danger" title={`Missing: ${c.dns.missing.join(", ")}`}>{c.dnsBad} with gaps</span> : c.dns.state === "unknown" ? <span className="zero">—</span> : <Ok>Valid</Ok>}</td> : null}
+                      {on("warmupState") ? <td><WarmupCell blocked={c.blocked} paused={c.paused} total={c.count} /></td> : null}
+                      {on("blacklist") ? <td>{c.bl == null ? <span className="zero">—</span> : c.listed ? <span className="ns-status tone-danger" title={c.blListings.join(", ")}>{c.listed} listed</span> : <Ok>Clean</Ok>}</td> : null}
+                      {on("connection") ? <td>{c.disconnected ? <span className="ns-status tone-danger">{c.disconnected} disconnected</span> : <Ok title={`All ${c.count} inboxes connected`}>{c.count}/{c.count}</Ok>}</td> : null}
+                      {on("campaigns") ? <td className="is-num">{c.campaigns ? int(c.campaigns) : <span className="zero">0</span>}</td> : null}
+                      {on("sent7") ? <td className="is-num strong">{c.sent7 ? int(c.sent7) : <span className="zero">0</span>}</td> : null}
+                      {on("reply") ? <td className="is-num"><Metric value={rate(c.replies7, c.sent7)} digits={2} /></td> : null}
+                      {on("bounce") ? <td className="is-num"><Metric value={rate(c.bounces7, c.sent7)} warn={2} bad={3} /></td> : null}
+                    </tr>
+              {cOpen ? c.domains.map((g) => {
                 const isOpen = open.has(g.domainId);
                 const ids = g.inboxes.map((i) => i.id);
                 const gSel = ids.every((id) => selected.has(id));
@@ -392,12 +476,11 @@ export function InboxesView({ inboxes, clients, plans, smartleadConnected, dryRu
                       <td className="col-check" onClick={(e) => { e.stopPropagation(); toggleIds(ids); }}>
                         <input type="checkbox" className="checkbox" checked={gSel} ref={(el) => { if (el) el.indeterminate = !gSel && gSome; }} onChange={() => {}} aria-label={`Select inboxes on ${g.domain}`} tabIndex={-1} />
                       </td>
-                      <td className="col-first">
+                      <td className="col-first" style={{ paddingLeft: 30 }}>
                         <span className="flex items-center gap-1.5">
                           <ChevronRight size={14} className="flex-none text-faint transition-transform" style={{ transform: isOpen ? "rotate(90deg)" : undefined }} />
                           <Link href={`/domains?d=${g.domainId}&view=all`} className="strong hover:underline" onClick={(e) => e.stopPropagation()}>{g.domain}</Link>
                           <TagList tags={g.domainTags} graceDaysLeft={g.graceDaysLeft} />
-                          {g.pending ? <span className="badge tone-info">{g.pending} pending</span> : null}
                         </span>
                       </td>
                       {on("status") ? <td><StatusDot status={g.status} /></td> : null}
@@ -432,7 +515,7 @@ export function InboxesView({ inboxes, clients, plans, smartleadConnected, dryRu
                     {isOpen ? [...g.inboxes].sort(byValue((i: InboxListRow) => inboxValue(i, sort.key), (a, b) => a.email.localeCompare(b.email), sort.dir)).map((i) => (
                       <tr key={i.id} className="is-clickable" data-selected={selected.has(i.id)} style={{ background: "var(--surface-2)" }} onClick={() => toggleIds([i.id])}>
                         <td className="col-check"><input type="checkbox" className="checkbox" checked={selected.has(i.id)} onChange={() => {}} aria-label={`Select ${i.email}`} tabIndex={-1} /></td>
-                        <td className="col-first" style={{ paddingLeft: 34 }}>
+                        <td className="col-first" style={{ paddingLeft: 66 }}>
                           <span className="flex items-center gap-2" title={i.lastSyncedAt ? `Synced ${ago(i.lastSyncedAt)}` : undefined}>
                             <span className="text-ink-soft">{i.email}</span>
                             {i.status !== "connected" ? <span className="badge">{i.status}</span> : null}
@@ -466,6 +549,9 @@ export function InboxesView({ inboxes, clients, plans, smartleadConnected, dryRu
                         {on("bounce") ? <td className="is-num"><Metric value={rate(i.bounces7, i.sent7)} warn={2} bad={3} /></td> : null}
                       </tr>
                     )) : null}
+                  </Fragment>
+                );
+              }) : null}
                   </Fragment>
                 );
               })}

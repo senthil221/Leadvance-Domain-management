@@ -22,6 +22,6 @@ export default function RepliesPage() {
 
 async function RepliesData() {
   await getCurrentUser();
-  const { from, to } = await lastDays(7);
+  const { from, to } = await lastDays(1); // today; the date picker changes it
   return <EventsView kind="reply" initial={await getEvents("reply", from, to)} />;
 }

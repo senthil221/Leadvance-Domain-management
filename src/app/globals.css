@@ -884,3 +884,24 @@ a.stat:hover { background: var(--surface-2); }
 .rpl-facts > div { display: flex; gap: 8px; min-width: 0; }
 .rpl-facts dt { color: var(--faint); flex: none; width: 84px; }
 .rpl-facts dd { color: var(--ink-soft); min-width: 0; overflow-wrap: anywhere; }
+
+/* Stats: column groups (volume | replies | bounces | rates | health) */
+.data-table th.st-start, .data-table td.st-start { border-left: 1px solid var(--line); }
+.data-table thead th.st-vol { box-shadow: inset 0 2px 0 color-mix(in srgb, var(--ink) 35%, transparent); }
+.data-table thead th.st-rep { box-shadow: inset 0 2px 0 var(--info-solid); }
+.data-table thead th.st-bnc { box-shadow: inset 0 2px 0 var(--danger-solid); }
+.data-table thead th.st-rate { box-shadow: inset 0 2px 0 var(--violet-solid); }
+.data-table thead th.st-health { box-shadow: inset 0 2px 0 var(--success-solid); }
+.data-table tbody td.st-rep { background: color-mix(in srgb, var(--info-solid) 4%, transparent); }
+.data-table tbody td.st-bnc { background: color-mix(in srgb, var(--danger-solid) 4%, transparent); }
+.data-table tbody td.st-rate { background: color-mix(in srgb, var(--violet-solid) 3%, transparent); }
+.data-table tbody td.st-bar { background-image: linear-gradient(to left, color-mix(in srgb, var(--ink) 7%, transparent) var(--w, 0%), transparent var(--w, 0%)); }
+.st-v-rep { color: var(--info-ink); }
+.st-v-hum { color: var(--success-ink); font-weight: 600; }
+.st-v-bnc { color: var(--danger-ink); }
+.st-v-rep .zero, .st-v-hum .zero, .st-v-bnc .zero { font-weight: 400; }
+
+/* Inboxes: client rows above their domains */
+.data-table tbody tr.inb-client > td { background: color-mix(in srgb, var(--ink) 3%, var(--surface)); border-bottom-color: var(--line-strong); }
+.data-table tbody tr.inb-client:hover > td { background: var(--row-hover); }
+.data-table tbody tr.inb-client .client-cell { font-weight: 600; color: var(--ink); }

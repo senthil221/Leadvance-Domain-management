@@ -19,14 +19,17 @@ import { ReplaceDialog, type ReplaceTarget } from "./ReplaceDialog";
 import { SetupDialog } from "./SetupDialog";
 
 type ViewKey = "all" | "active" | "setup" | "draining" | "storage" | "retired" | "flagged";
-const VIEWS: { key: ViewKey; label: string; match: (d: DomainRow) => boolean }[] = [
+// Domains is for sending performance: active, flagged and replaced domains in
+// their grace period. The rest live in Inventory; those views stay reachable
+// from links (a tab shows only while it is the one open).
+const VIEWS: { key: ViewKey; label: string; match: (d: DomainRow) => boolean; hidden?: boolean }[] = [
   { key: "active", label: "Active", match: (d) => d.status === "active" },
   { key: "flagged", label: "Flagged", match: (d) => d.openAlerts > 0 && (d.status === "active" || d.status === "warming") },
-  { key: "setup", label: "Setting up", match: (d) => d.status === "provisioning" || d.status === "warming" },
-  { key: "draining", label: "Draining", match: (d) => d.status === "draining" },
-  { key: "storage", label: "Storage", match: (d) => d.status === "in_storage" },
-  { key: "retired", label: "Retired", match: (d) => d.status === "burned" || d.status === "resting" },
-  { key: "all", label: "All", match: () => true },
+  { key: "draining", label: "In grace", match: (d) => d.status === "draining" },
+  { key: "setup", label: "Setting up", match: (d) => d.status === "provisioning" || d.status === "warming", hidden: true },
+  { key: "storage", label: "Storage", match: (d) => d.status === "in_storage", hidden: true },
+  { key: "retired", label: "Retired", match: (d) => d.status === "burned" || d.status === "resting", hidden: true },
+  { key: "all", label: "All", match: () => true, hidden: true },
 ];
 
 const COLUMNS: ColumnDef[] = [
@@ -202,7 +205,7 @@ export function DomainsView({ domains, clients }: { domains: DomainRow[]; client
       <div className="flex flex-col gap-3">
         <div className="table-bar">
           <div className="view-tabs" role="tablist" aria-label="Views">
-            {VIEWS.map((v) => (
+            {VIEWS.filter((v) => !v.hidden || v.key === view).map((v) => (
               <button key={v.key} type="button" role="tab" aria-selected={view === v.key} className={view === v.key ? "is-on" : undefined} onClick={() => changeView(v.key)}>
                 {v.key === "flagged" && counts.flagged > 0 ? <TriangleAlert size={13} className="text-warning-ink" /> : null}
                 {v.label} <span>{int(counts[v.key])}</span>

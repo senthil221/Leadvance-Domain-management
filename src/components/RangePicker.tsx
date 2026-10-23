@@ -5,7 +5,7 @@ import { useState } from "react";
 import { PRESETS, daysBetween, nice, presetRange, type PresetKey } from "@/lib/range";
 
 /** A date range: a preset, or two dates and Apply. Calls onChange with the new range. */
-export function RangePicker({ from, to, today, loading, onChange, initial = "7d" }: {
+export function RangePicker({ from, to, today, loading, onChange, initial = from === to && to === today ? "today" : "7d" }: {
   from: string; to: string; today: string; loading?: boolean;
   onChange: (from: string, to: string) => void;
   initial?: PresetKey;

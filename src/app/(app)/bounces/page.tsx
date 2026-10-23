@@ -22,6 +22,6 @@ export default function BouncesPage() {
 
 async function BouncesData() {
   await getCurrentUser();
-  const { from, to } = await lastDays(7);
+  const { from, to } = await lastDays(1); // today; the date picker changes it
   return <EventsView kind="bounce" initial={await getEvents("bounce", from, to)} />;
 }

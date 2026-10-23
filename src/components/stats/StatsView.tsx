@@ -3,7 +3,7 @@
 import { BarChart3, CalendarDays, Download, Loader, Search } from "lucide-react";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
-import { Fragment, useMemo, useState, useTransition } from "react";
+import { type CSSProperties, Fragment, useMemo, useState, useTransition } from "react";
 import { toast } from "sonner";
 import { loadStats } from "@/app/actions";
 import { ColumnsMenu, useColumns, type ColumnDef } from "@/components/Columns";
@@ -57,6 +57,22 @@ function Delta({ now, before, points = false, invert = false }: { now: number | 
 
 const Z = ({ v }: { v: number }) => (v ? <>{int(v)}</> : <span className="zero">0</span>);
 
+// Columns come in groups, each with its own colour, so a row reads as
+// volume | replies | bounces | rates | health instead of a wall of numbers.
+const GROUPS: Record<string, string[]> = {
+  vol: ["inboxes", "usage", "sent"],
+  rep: ["replies", "human", "ooo", "negative"],
+  bnc: ["bounces"],
+  rate: ["replyRate", "humanRate", "bounceRate"],
+  health: ["reputation"],
+};
+const GROUP_OF = Object.fromEntries(Object.entries(GROUPS).flatMap(([g, keys]) => keys.map((k) => [k, g])));
+/** Class for a column: its group, plus a divider on the group's first visible column. */
+const gc = (key: string, on: (k: string) => boolean) => {
+  const g = GROUP_OF[key];
+  return `st-${g}${GROUPS[g].find(on) === key ? " st-start" : ""}`;
+};
+
 const COLUMNS: ColumnDef[] = [
   { key: "status", label: "Status" }, { key: "client", label: "Client" }, { key: "inboxes", label: "Inboxes" },
   { key: "usage", label: "Used" }, { key: "sent", label: "Sent" }, { key: "replies", label: "Replies" },
@@ -65,46 +81,47 @@ const COLUMNS: ColumnDef[] = [
   { key: "bounceRate", label: "Bounce %" }, { key: "reputation", label: "Reputation" },
 ];
 
-function Cells({ r, len, on }: { r: Totals; len: number; on: (k: string) => boolean }) {
+function Cells({ r, len, on, maxSent = 0 }: { r: Totals; len: number; on: (k: string) => boolean; maxSent?: number }) {
+  const c = (k: string, num = true) => `${num ? "is-num " : ""}${gc(k, on)}`;
   return (
     <>
       {on("inboxes") ? (
-      <td className="is-num"><Z v={r.inboxes} /></td>
+      <td className={c("inboxes")}><Z v={r.inboxes} /></td>
       ) : null}
       {on("usage") ? (
-      <td className="is-num" title={r.capacity ? `${int(r.sent)} of ${int(r.capacity * len)} possible` : undefined}>
+      <td className={c("usage")} title={r.capacity ? `${int(r.sent)} of ${int(r.capacity * len)} possible` : undefined}>
         {r.capacity ? <Metric value={(100 * r.sent) / (r.capacity * len)} digits={0} /> : <span className="zero">—</span>}
       </td>
       ) : null}
       {on("sent") ? (
-      <td className="is-num"><Z v={r.sent} /><Delta now={r.sent} before={r.prevSent} /></td>
+      <td className={`${c("sent")} st-bar`} style={maxSent ? ({ "--w": `${Math.round((100 * r.sent) / maxSent)}%` } as CSSProperties) : undefined}><span className="strong text-ink"><Z v={r.sent} /></span><Delta now={r.sent} before={r.prevSent} /></td>
       ) : null}
       {on("replies") ? (
-      <td className="is-num"><Z v={r.replies} /></td>
+      <td className={c("replies")}><span className="st-v-rep"><Z v={r.replies} /></span></td>
       ) : null}
       {on("human") ? (
-      <td className="is-num"><Z v={r.human} /></td>
+      <td className={c("human")}><span className="st-v-hum"><Z v={r.human} /></span></td>
       ) : null}
       {on("ooo") ? (
-      <td className="is-num"><Z v={r.ooo} /></td>
+      <td className={c("ooo")}><Z v={r.ooo} /></td>
       ) : null}
       {on("negative") ? (
-      <td className="is-num"><Z v={r.negative} /></td>
+      <td className={c("negative")}><Z v={r.negative} /></td>
       ) : null}
       {on("bounces") ? (
-      <td className="is-num"><Z v={r.bounces} /></td>
+      <td className={c("bounces")}><span className="st-v-bnc"><Z v={r.bounces} /></span></td>
       ) : null}
       {on("replyRate") ? (
-      <td className="is-num"><Metric value={rate(r.replies, r.sent)} digits={2} /><Delta now={rate(r.replies, r.sent)} before={rate(r.prevReplies, r.prevSent)} points /></td>
+      <td className={c("replyRate")}><Metric value={rate(r.replies, r.sent)} digits={2} /><Delta now={rate(r.replies, r.sent)} before={rate(r.prevReplies, r.prevSent)} points /></td>
       ) : null}
       {on("humanRate") ? (
-      <td className="is-num"><Metric value={rate(r.human, r.sent)} digits={2} /></td>
+      <td className={c("humanRate")}><Metric value={rate(r.human, r.sent)} digits={2} /></td>
       ) : null}
       {on("bounceRate") ? (
-      <td className="is-num"><Metric value={rate(r.bounces, r.sent)} warn={2} bad={3} /><Delta now={rate(r.bounces, r.sent)} before={rate(r.prevBounces, r.prevSent)} points invert /></td>
+      <td className={c("bounceRate")}><Metric value={rate(r.bounces, r.sent)} warn={2} bad={3} /><Delta now={rate(r.bounces, r.sent)} before={rate(r.prevBounces, r.prevSent)} points invert /></td>
       ) : null}
       {on("reputation") ? (
-      <td className="is-num">{r.reputation !== undefined ? <Rep value={r.reputation} /> : null}</td>
+      <td className={c("reputation")}>{r.reputation !== undefined ? <Rep value={r.reputation} /> : null}</td>
       ) : null}
     </>
   );
@@ -119,9 +136,11 @@ function download(name: string, head: string[], lines: unknown[][]) {
 
 // ---------------------------------------------------------------------------
 
+const all = () => true;
+
 export function StatsView({ initial, clients }: { initial: StatsData; clients: ClientRow[] }) {
   const [data, setData] = useState(initial);
-  const [preset, setPreset] = useState<PresetKey>("7d");
+  const [preset, setPreset] = useState<PresetKey>(initial.from === initial.to && initial.to === initial.today ? "today" : "7d");
   const [from, setFrom] = useState(initial.from);
   const [to, setTo] = useState(initial.to);
   const [view, setView] = useState<"domain" | "day">("domain");
@@ -197,6 +216,7 @@ export function StatsView({ initial, clients }: { initial: StatsData; clients: C
   }, [rows, byClient]);
 
   const t = total(rows);
+  const maxSent = Math.max(0, ...rows.map((r) => r.sent));
   const maxDay = Math.max(1, ...days.map((d) => d.sent));
   const sortBy = (key: SortKey) => setSort((s) => flip(s, key, key === "name" || key === "client" || key === "status"));
   const sortDay = (key: DayKey) => setDaySort((s) => flip(s, key, false));
@@ -270,18 +290,18 @@ export function StatsView({ initial, clients }: { initial: StatsData; clients: C
                   <SortTh k="name" sort={sort} onSort={sortBy}>Domain</SortTh>
                   {on("status") ? <SortTh k="status" sort={sort} onSort={sortBy}>Status</SortTh> : null}
                   {on("client") ? <SortTh k="client" sort={sort} onSort={sortBy}>Client</SortTh> : null}
-                  {on("inboxes") ? <SortTh k="inboxes" sort={sort} onSort={sortBy} num>Inboxes</SortTh> : null}
-                  {on("usage") ? <SortTh k="usage" sort={sort} onSort={sortBy} num title="Sent as a share of the inboxes' daily limits over the range">Used</SortTh> : null}
-                  {on("sent") ? <SortTh k="sent" sort={sort} onSort={sortBy} num>Sent</SortTh> : null}
-                  {on("replies") ? <SortTh k="replies" sort={sort} onSort={sortBy} num>Replies</SortTh> : null}
-                  {on("human") ? <SortTh k="human" sort={sort} onSort={sortBy} num>Human</SortTh> : null}
-                  {on("ooo") ? <SortTh k="ooo" sort={sort} onSort={sortBy} num>OOO</SortTh> : null}
-                  {on("negative") ? <SortTh k="negative" sort={sort} onSort={sortBy} num>Negative</SortTh> : null}
-                  {on("bounces") ? <SortTh k="bounces" sort={sort} onSort={sortBy} num>Bounces</SortTh> : null}
-                  {on("replyRate") ? <SortTh k="replyRate" sort={sort} onSort={sortBy} num>Reply %</SortTh> : null}
-                  {on("humanRate") ? <SortTh k="humanRate" sort={sort} onSort={sortBy} num>Human %</SortTh> : null}
-                  {on("bounceRate") ? <SortTh k="bounceRate" sort={sort} onSort={sortBy} num>Bounce %</SortTh> : null}
-                  {on("reputation") ? <SortTh k="reputation" sort={sort} onSort={sortBy} num>Reputation</SortTh> : null}
+                  {on("inboxes") ? <SortTh k="inboxes" sort={sort} onSort={sortBy} num className={gc("inboxes", on)}>Inboxes</SortTh> : null}
+                  {on("usage") ? <SortTh k="usage" sort={sort} onSort={sortBy} num className={gc("usage", on)} title="Sent as a share of the inboxes' daily limits over the range">Used</SortTh> : null}
+                  {on("sent") ? <SortTh k="sent" sort={sort} onSort={sortBy} num className={gc("sent", on)}>Sent</SortTh> : null}
+                  {on("replies") ? <SortTh k="replies" sort={sort} onSort={sortBy} num className={gc("replies", on)}>Replies</SortTh> : null}
+                  {on("human") ? <SortTh k="human" sort={sort} onSort={sortBy} num className={gc("human", on)}>Human</SortTh> : null}
+                  {on("ooo") ? <SortTh k="ooo" sort={sort} onSort={sortBy} num className={gc("ooo", on)}>OOO</SortTh> : null}
+                  {on("negative") ? <SortTh k="negative" sort={sort} onSort={sortBy} num className={gc("negative", on)}>Negative</SortTh> : null}
+                  {on("bounces") ? <SortTh k="bounces" sort={sort} onSort={sortBy} num className={gc("bounces", on)}>Bounces</SortTh> : null}
+                  {on("replyRate") ? <SortTh k="replyRate" sort={sort} onSort={sortBy} num className={gc("replyRate", on)}>Reply %</SortTh> : null}
+                  {on("humanRate") ? <SortTh k="humanRate" sort={sort} onSort={sortBy} num className={gc("humanRate", on)}>Human %</SortTh> : null}
+                  {on("bounceRate") ? <SortTh k="bounceRate" sort={sort} onSort={sortBy} num className={gc("bounceRate", on)}>Bounce %</SortTh> : null}
+                  {on("reputation") ? <SortTh k="reputation" sort={sort} onSort={sortBy} num className={gc("reputation", on)}>Reputation</SortTh> : null}
                 </tr>
               </thead>
               <tbody>
@@ -298,7 +318,7 @@ export function StatsView({ initial, clients }: { initial: StatsData; clients: C
                         <td className="col-first" style={byClient ? { paddingLeft: 28 } : undefined}><Link href={`/domains?d=${r.id}&view=all`} className="strong hover:underline">{r.name}</Link></td>
                         {on("status") ? <td><StatusDot status={r.status} /></td> : null}
                         {on("client") ? <td><ClientCell name={r.clientName} hue={r.clientHue} /></td> : null}
-                        <Cells r={r} len={len} on={on} />
+                        <Cells r={r} len={len} on={on} maxSent={maxSent} />
                       </tr>
                     ))}
                   </Fragment>
@@ -311,16 +331,16 @@ export function StatsView({ initial, clients }: { initial: StatsData; clients: C
                 <tr>
                   <SortTh k="day" sort={daySort} onSort={sortDay}>Day</SortTh>
                   <SortTh k="domains" sort={daySort} onSort={sortDay} num>Domains sending</SortTh>
-                  <SortTh k="sent" sort={daySort} onSort={sortDay} num>Sent</SortTh>
-                  <th style={{ width: 160 }}></th>
-                  <SortTh k="replies" sort={daySort} onSort={sortDay} num>Replies</SortTh>
-                  <SortTh k="human" sort={daySort} onSort={sortDay} num>Human</SortTh>
-                  <SortTh k="ooo" sort={daySort} onSort={sortDay} num>OOO</SortTh>
-                  <SortTh k="negative" sort={daySort} onSort={sortDay} num>Negative</SortTh>
-                  <SortTh k="bounces" sort={daySort} onSort={sortDay} num>Bounces</SortTh>
-                  <SortTh k="replyRate" sort={daySort} onSort={sortDay} num>Reply %</SortTh>
-                  <SortTh k="humanRate" sort={daySort} onSort={sortDay} num>Human %</SortTh>
-                  <SortTh k="bounceRate" sort={daySort} onSort={sortDay} num>Bounce %</SortTh>
+                  <SortTh k="sent" sort={daySort} onSort={sortDay} num className="st-vol st-start">Sent</SortTh>
+                  <th className="st-vol" style={{ width: 160 }}></th>
+                  <SortTh k="replies" sort={daySort} onSort={sortDay} num className={gc("replies", all)}>Replies</SortTh>
+                  <SortTh k="human" sort={daySort} onSort={sortDay} num className={gc("human", all)}>Human</SortTh>
+                  <SortTh k="ooo" sort={daySort} onSort={sortDay} num className={gc("ooo", all)}>OOO</SortTh>
+                  <SortTh k="negative" sort={daySort} onSort={sortDay} num className={gc("negative", all)}>Negative</SortTh>
+                  <SortTh k="bounces" sort={daySort} onSort={sortDay} num className={gc("bounces", all)}>Bounces</SortTh>
+                  <SortTh k="replyRate" sort={daySort} onSort={sortDay} num className={gc("replyRate", all)}>Reply %</SortTh>
+                  <SortTh k="humanRate" sort={daySort} onSort={sortDay} num className={gc("humanRate", all)}>Human %</SortTh>
+                  <SortTh k="bounceRate" sort={daySort} onSort={sortDay} num className={gc("bounceRate", all)}>Bounce %</SortTh>
                 </tr>
               </thead>
               <tbody>
@@ -328,16 +348,16 @@ export function StatsView({ initial, clients }: { initial: StatsData; clients: C
                   <tr key={d.day}>
                     <td className="col-first"><span className="strong">{nice(d.day)}</span> <span className="text-faint">{weekday(d.day)}</span></td>
                     <td className="is-num"><Z v={d.domains} /></td>
-                    <td className="is-num"><Z v={d.sent} /></td>
-                    <td><span className="progress" style={{ width: 140 }}><span style={{ width: `${(100 * d.sent) / maxDay}%`, background: "color-mix(in srgb, var(--ink) 24%, transparent)" }} /></span></td>
-                    <td className="is-num"><Z v={d.replies} /></td>
-                    <td className="is-num"><Z v={d.human} /></td>
-                    <td className="is-num"><Z v={d.ooo} /></td>
-                    <td className="is-num"><Z v={d.negative} /></td>
-                    <td className="is-num"><Z v={d.bounces} /></td>
-                    <td className="is-num"><Metric value={rate(d.replies, d.sent)} digits={2} /></td>
-                    <td className="is-num"><Metric value={rate(d.human, d.sent)} digits={2} /></td>
-                    <td className="is-num"><Metric value={rate(d.bounces, d.sent)} warn={2} bad={3} /></td>
+                    <td className="is-num st-vol st-start"><span className="strong text-ink"><Z v={d.sent} /></span></td>
+                    <td className="st-vol"><span className="progress" style={{ width: 140 }}><span style={{ width: `${(100 * d.sent) / maxDay}%`, background: "color-mix(in srgb, var(--ink) 24%, transparent)" }} /></span></td>
+                    <td className={`is-num ${gc("replies", all)}`}><span className="st-v-rep"><Z v={d.replies} /></span></td>
+                    <td className="is-num st-rep"><span className="st-v-hum"><Z v={d.human} /></span></td>
+                    <td className="is-num st-rep"><Z v={d.ooo} /></td>
+                    <td className="is-num st-rep"><Z v={d.negative} /></td>
+                    <td className={`is-num ${gc("bounces", all)}`}><span className="st-v-bnc"><Z v={d.bounces} /></span></td>
+                    <td className={`is-num ${gc("replyRate", all)}`}><Metric value={rate(d.replies, d.sent)} digits={2} /></td>
+                    <td className="is-num st-rate"><Metric value={rate(d.human, d.sent)} digits={2} /></td>
+                    <td className="is-num st-rate"><Metric value={rate(d.bounces, d.sent)} warn={2} bad={3} /></td>
                   </tr>
                 ))}
               </tbody>

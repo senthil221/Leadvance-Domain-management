@@ -23,10 +23,10 @@ export default function StatsPage() {
 
 async function StatsData() {
   await getCurrentUser();
-  // The last 7 days in the stats timezone, today included.
+  // Today in the stats timezone; the date picker changes it.
   const [{ from, to }] = await sql<{ from: string; to: string }[]>`
     with t as (select (now() at time zone coalesce((select value #>> '{}' from settings where key = 'stats_timezone'), 'UTC'))::date as d)
-    select to_char(d - 6, 'YYYY-MM-DD') as from, to_char(d, 'YYYY-MM-DD') as to from t`;
+    select to_char(d, 'YYYY-MM-DD') as from, to_char(d, 'YYYY-MM-DD') as to from t`;
   const [data, clients] = await Promise.all([getStats(from, to), listClients()]);
   return <StatsView initial={data} clients={clients} />;
 }
