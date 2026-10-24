@@ -903,6 +903,16 @@ a.stat:hover { background: var(--surface-2); }
 .st-v-rep { color: var(--info-ink); font-weight: 500; }
 .st-v-hum { color: var(--success-ink); font-weight: 600; }
 .st-v-bnc { color: var(--danger-ink); font-weight: 500; }
+/* Stats: a faint wash per column group, client summary rows with Sum / Avg captions, row numbers */
+.data-table tbody td.st-rep { background: color-mix(in srgb, var(--info-solid) 4%, transparent); }
+.data-table tbody td.st-bnc { background: color-mix(in srgb, var(--danger-solid) 3.5%, transparent); }
+.data-table tbody td.st-health { background: color-mix(in srgb, var(--success-solid) 4%, transparent); }
+.st-client-name { display: inline-flex; flex-direction: column; gap: 1px; line-height: 15px; min-width: 0; }
+.st-cap { font-size: 9.5px; line-height: 10px; letter-spacing: .07em; text-transform: uppercase; font-weight: 500; color: var(--faint); }
+.st-count { margin-left: auto; min-width: 22px; padding: 0 7px; border-radius: 999px; text-align: center; font-size: 11.5px; line-height: 18px; font-variant-numeric: tabular-nums; color: var(--muted); background: color-mix(in srgb, var(--ink) 7%, transparent); }
+.st-agg { margin-right: 8px; font-size: 10px; font-weight: 400; color: var(--faint); }
+.st-n { flex: none; width: 22px; text-align: right; font-size: 11px; font-variant-numeric: tabular-nums; color: var(--faint); }
+.data-table tbody tr.st-gap > td { height: 8px; padding: 0; background: var(--surface-2); border-bottom: 0; }
 .data-table tbody tr.st-idle > td { color: var(--faint); }
 .data-table tbody tr.st-idle .strong { color: var(--muted); font-weight: 400; }
 .data-table tbody tr.st-idle .zero { opacity: .6; }

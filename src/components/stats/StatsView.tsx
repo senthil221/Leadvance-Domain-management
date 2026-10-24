@@ -46,6 +46,21 @@ const sortValue = (r: Row, k: SortKey, len: number): string | number | null => {
     default: return r[k];
   }
 };
+/** A client's value for a sort key, taken from its domains' totals, so clicking a header orders the clients too. */
+const groupValue = (g: { name: string | null; rows: Row[] }, k: SortKey, len: number): string | number | null => {
+  const t = total(g.rows);
+  switch (k) {
+    case "name":
+    case "client": return g.name?.toLowerCase() ?? null;
+    case "status": return null;
+    case "replyRate": return rate(t.replies, t.sent);
+    case "humanRate": return rate(t.human, t.sent);
+    case "bounceRate": return rate(t.bounces, t.sent);
+    case "usage": return t.capacity ? t.sent / (t.capacity * len) : null;
+    case "reputation": return avgRep(g.rows);
+    default: return t[k];
+  }
+};
 type DayKey = "day" | "domains" | "sent" | "replies" | "human" | "ooo" | "negative" | "bounces" | "replyRate" | "humanRate" | "bounceRate";
 const flip = <K extends string>(s: { key: K; dir: 1 | -1 }, key: K, ascFirst: boolean) => (s.key === key ? { key, dir: (s.dir * -1) as 1 | -1 } : { key, dir: (ascFirst ? 1 : -1) as 1 | -1 });
 const cmp = (x: string | number | null, y: string | number | null, dir: number) => (x === y ? 0 : x === null ? 1 : y === null ? -1 : (x < y ? -1 : 1) * dir);
@@ -98,28 +113,30 @@ function Pair({ n, of, digits = 2, tone, warn, bad }: { n: number; of: number; d
   );
 }
 
-function Cells({ r, len, on, maxSent = 0 }: { r: Totals; len: number; on: (k: string) => boolean; maxSent?: number }) {
+/** `agg` marks a client's summary row: each figure gets a small Sum or Avg caption. */
+function Cells({ r, len, on, maxSent = 0, agg = false }: { r: Totals; len: number; on: (k: string) => boolean; maxSent?: number; agg?: boolean }) {
   const c = (k: string) => `is-num ${gc(k, on)}`;
+  const cap = (t: "Sum" | "Avg") => (agg ? <span className="st-agg">{t}</span> : null);
   const before = r.prevSent ? `${int(r.prevSent)} sent, ${int(r.prevReplies)} replies, ${int(r.prevBounces)} bounces the ${len} day${len === 1 ? "" : "s"} before` : undefined;
   return (
     <>
-      {on("inboxes") ? <td className={c("inboxes")}><Z v={r.inboxes} /></td> : null}
+      {on("inboxes") ? <td className={c("inboxes")}>{cap("Sum")}<Z v={r.inboxes} /></td> : null}
       {on("usage") ? (
         <td className={c("usage")} title={r.capacity ? `${int(r.sent)} of ${int(r.capacity * len)} possible` : undefined}>
-          {r.capacity ? <Metric value={(100 * r.sent) / (r.capacity * len)} digits={0} /> : <span className="zero">—</span>}
+          {cap("Avg")}{r.capacity ? <Metric value={(100 * r.sent) / (r.capacity * len)} digits={0} /> : <span className="zero">—</span>}
         </td>
       ) : null}
       {on("sent") ? (
         <td className={`${c("sent")} st-bar`} title={before} style={maxSent ? ({ "--w": `${Math.round((100 * r.sent) / maxSent)}%` } as CSSProperties) : undefined}>
-          {r.sent ? <span className="strong text-ink">{int(r.sent)}</span> : <span className="zero">0</span>}
+          {cap("Sum")}{r.sent ? <span className="strong text-ink">{int(r.sent)}</span> : <span className="zero">0</span>}
         </td>
       ) : null}
-      {on("replies") ? <td className={c("replies")}><Pair n={r.replies} of={r.sent} tone="st-v-rep" /></td> : null}
-      {on("human") ? <td className={c("human")}><Pair n={r.human} of={r.sent} tone="st-v-hum" /></td> : null}
-      {on("ooo") ? <td className={c("ooo")}><Z v={r.ooo} /></td> : null}
-      {on("negative") ? <td className={c("negative")}><Z v={r.negative} /></td> : null}
-      {on("bounces") ? <td className={c("bounces")}><Pair n={r.bounces} of={r.sent} digits={1} tone="st-v-bnc" warn={2} bad={3} /></td> : null}
-      {on("reputation") ? <td className={c("reputation")}>{r.reputation != null ? <Rep value={r.reputation} /> : <span className="zero">—</span>}</td> : null}
+      {on("replies") ? <td className={c("replies")}>{cap("Sum")}<Pair n={r.replies} of={r.sent} tone="st-v-rep" /></td> : null}
+      {on("human") ? <td className={c("human")}>{cap("Sum")}<Pair n={r.human} of={r.sent} tone="st-v-hum" /></td> : null}
+      {on("ooo") ? <td className={c("ooo")}>{cap("Sum")}<Z v={r.ooo} /></td> : null}
+      {on("negative") ? <td className={c("negative")}>{cap("Sum")}<Z v={r.negative} /></td> : null}
+      {on("bounces") ? <td className={c("bounces")}>{cap("Sum")}<Pair n={r.bounces} of={r.sent} digits={1} tone="st-v-bnc" warn={2} bad={3} /></td> : null}
+      {on("reputation") ? <td className={c("reputation")}>{cap("Avg")}{r.reputation != null ? <Rep value={r.reputation} /> : <span className="zero">—</span>}</td> : null}
     </>
   );
 }
@@ -210,12 +227,15 @@ export function StatsView({ initial, clients }: { initial: StatsData; clients: C
       g.rows.push(r);
       map.set(k, g);
     }
-    return [...map.values()].sort((a, b) => total(b.rows).sent - total(a.rows).sent);
-  }, [rows, byClient]);
+    return [...map.values()].sort((a, b) => cmp(groupValue(a, sort.key, len), groupValue(b, sort.key, len), sort.dir) || (a.name ?? "").localeCompare(b.name ?? ""));
+  }, [rows, byClient, sort, len]);
 
   const t = total(rows);
   const maxSent = Math.max(0, ...rows.map((r) => r.sent));
   const showClient = !byClient && on("client");
+  const colCount = 1 + (showClient ? 1 : 0) + COLUMNS.filter((c) => c.key !== "client" && on(c.key)).length;
+  const allOpen = byClient && groups.length > 0 && groups.every((g) => openClients.has(g.key));
+  const toggleAll = () => setOpenClients(allOpen ? new Set() : new Set(groups.map((g) => g.key)));
   const maxClientSent = Math.max(0, ...groups.map((g) => total(g.rows).sent));
   const maxDay = Math.max(1, ...days.map((d) => d.sent));
   const sortBy = (key: SortKey) => setSort((s) => flip(s, key, key === "name" || key === "client" || key === "status"));
@@ -270,6 +290,7 @@ export function StatsView({ initial, clients }: { initial: StatsData; clients: C
           <>
             <label className="flex items-center gap-1.5 text-[12.5px] text-muted"><input type="checkbox" className="checkbox" checked={onlySending} onChange={(e) => setOnlySending(e.target.checked)} /> Sending only</label>
             <label className="flex items-center gap-1.5 text-[12.5px] text-muted"><input type="checkbox" className="checkbox" checked={byClient} onChange={(e) => setByClient(e.target.checked)} /> By client</label>
+            {byClient ? <button type="button" className="btn btn-sm" onClick={toggleAll}>{allOpen ? "Collapse all" : "Expand all"}</button> : null}
           </>
         ) : null}
         <span className="spacer-auto" />
@@ -304,21 +325,25 @@ export function StatsView({ initial, clients }: { initial: StatsData; clients: C
                 {groups.map((g) => (
                   <Fragment key={g.key}>
                     {byClient ? (
-                      <tr className="is-clickable inb-client" aria-expanded={openClients.has(g.key)} onClick={() => toggleClient(g.key)}>
+                      <tr className="is-clickable inb-client st-client" aria-expanded={openClients.has(g.key)} onClick={() => toggleClient(g.key)}>
                         <td className="col-first" colSpan={showClient ? 2 : 1}>
                           <span className="flex items-center gap-2">
                             <ChevronRight size={14} className="flex-none text-faint transition-transform" style={{ transform: openClients.has(g.key) ? "rotate(90deg)" : undefined }} />
-                            <ClientCell name={g.name ?? "No client"} hue={g.hue} />
-                            <span className="text-faint">{g.rows.length} domain{g.rows.length === 1 ? "" : "s"}</span>
+                            <span className="st-client-name">
+                              <span className="st-cap">Client</span>
+                              <ClientCell name={g.name ?? "No client"} hue={g.hue} />
+                            </span>
+                            <span className="st-count" title={`${g.rows.length} domain${g.rows.length === 1 ? "" : "s"}`}>{g.rows.length}</span>
                           </span>
                         </td>
-                        <Cells r={{ ...total(g.rows), reputation: avgRep(g.rows) }} len={len} on={on} maxSent={maxClientSent} />
+                        <Cells r={{ ...total(g.rows), reputation: avgRep(g.rows) }} len={len} on={on} maxSent={maxClientSent} agg />
                       </tr>
                     ) : null}
-                    {(!byClient || openClients.has(g.key)) && g.rows.map((r) => (
+                    {(!byClient || openClients.has(g.key)) && g.rows.map((r, i) => (
                       <tr key={r.id} className={r.sent ? undefined : "st-idle"}>
-                        <td className="col-first" style={byClient ? { paddingLeft: 40 } : undefined}>
+                        <td className="col-first" style={byClient ? { paddingLeft: 14 } : undefined}>
                           <span className="flex items-center gap-2">
+                            <span className="st-n">{i + 1}</span>
                             <Link href={`/domains?d=${r.id}&view=all`} className="strong hover:underline">{r.name}</Link>
                             {/* Status only when it isn't the usual Active. */}
                             {r.status !== "active" ? <StatusDot status={r.status} /> : null}
@@ -328,6 +353,7 @@ export function StatsView({ initial, clients }: { initial: StatsData; clients: C
                         <Cells r={r} len={len} on={on} maxSent={maxSent} />
                       </tr>
                     ))}
+                    {byClient && openClients.has(g.key) ? <tr className="st-gap" aria-hidden><td colSpan={colCount} /></tr> : null}
                   </Fragment>
                 ))}
               </tbody>
