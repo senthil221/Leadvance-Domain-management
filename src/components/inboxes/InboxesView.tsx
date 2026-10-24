@@ -167,7 +167,7 @@ const n0 = (v: number | null, digits = 0) => (v == null ? <span className="zero"
 
 const COLUMNS: ColumnDef[] = [
   { key: "status", label: "Status" }, { key: "client", label: "Client / sender" }, { key: "esp", label: "ESP" }, { key: "tags", label: "Smartlead tags" },
-  { key: "count", label: "Inboxes" }, { key: "warmup", label: "Warmup / day" }, { key: "limit", label: "Limit / inbox", hidden: true },
+  { key: "count", label: "Inboxes" }, { key: "warmup", label: "Warmup" }, { key: "limit", label: "Limit", hidden: true },
   { key: "capacity", label: "Per day" }, { key: "today", label: "Sent today" }, { key: "gap", label: "Gap", hidden: true },
   { key: "rep", label: "Reputation" }, { key: "campaigns", label: "Campaigns", hidden: true }, { key: "sent7", label: "Sent 7d" },
   { key: "reply", label: "Reply rate" }, { key: "bounce", label: "Bounce rate" },
@@ -326,6 +326,7 @@ export function InboxesView({ inboxes, clients, plans, smartleadConnected, dryRu
   const allSel = allIds.length > 0 && allIds.every((id) => selected.has(id));
   const someSel = allIds.some((id) => selected.has(id));
 
+  const colCount = 2 + COLUMNS.filter((col) => on(col.key)).length;
   const allOpen = clientGroups.length > 0 && clientGroups.every((c) => openClients.has(c.key));
   const flip = (id: string) => (s: Set<string>) => { const n = new Set(s); if (n.has(id)) n.delete(id); else n.add(id); return n; };
   const toggle = (id: string) => setOpen(flip(id));
@@ -407,22 +408,22 @@ export function InboxesView({ inboxes, clients, plans, smartleadConnected, dryRu
                 {on("client") ? <SortTh k="client" sort={sort} onSort={sortBy}>Client / sender</SortTh> : null}
                 {on("esp") ? <SortTh k="esp" sort={sort} onSort={sortBy}>ESP</SortTh> : null}
                 {on("tags") ? <SortTh k="tags" sort={sort} onSort={sortBy}>Smartlead tags</SortTh> : null}
-                {on("count") ? <SortTh k="count" sort={sort} onSort={sortBy} num>Inboxes</SortTh> : null}
-                {on("warmup") ? <SortTh k="avgWarmup" sort={sort} onSort={sortBy} num>Warmup / day</SortTh> : null}
-                {on("limit") ? <SortTh k="avgLimit" sort={sort} onSort={sortBy} num>Limit / inbox</SortTh> : null}
-                {on("capacity") ? <SortTh k="capacity" sort={sort} onSort={sortBy} num>Per day</SortTh> : null}
-                {on("today") ? <SortTh k="sentToday" sort={sort} onSort={sortBy} num title="Campaign emails sent today, as Smartlead counts them">Today</SortTh> : null}
-                {on("gap") ? <SortTh k="avgWait" sort={sort} onSort={sortBy} num title="Minimum minutes between campaign emails">Gap</SortTh> : null}
-                {on("rep") ? <SortTh k="avgRep" sort={sort} onSort={sortBy} num>Reputation</SortTh> : null}
+                {on("count") ? <SortTh k="count" sort={sort} onSort={sortBy} num className="st-vol st-start">Inboxes</SortTh> : null}
+                {on("warmup") ? <SortTh k="avgWarmup" sort={sort} onSort={sortBy} num className="st-vol" title="Warmup emails a day, per inbox">Warmup</SortTh> : null}
+                {on("limit") ? <SortTh k="avgLimit" sort={sort} onSort={sortBy} num className="st-vol" title="Daily campaign limit, per inbox">Limit</SortTh> : null}
+                {on("capacity") ? <SortTh k="capacity" sort={sort} onSort={sortBy} num className="st-vol" title="Campaign emails a day, all inboxes together">Per day</SortTh> : null}
+                {on("today") ? <SortTh k="sentToday" sort={sort} onSort={sortBy} num className="st-vol" title="Campaign emails sent today, as Smartlead counts them">Today</SortTh> : null}
+                {on("gap") ? <SortTh k="avgWait" sort={sort} onSort={sortBy} num className="st-vol" title="Minimum minutes between campaign emails">Gap</SortTh> : null}
+                {on("rep") ? <SortTh k="avgRep" sort={sort} onSort={sortBy} num className="st-health st-start">Reputation</SortTh> : null}
                 {on("age") ? <SortTh k="age" sort={sort} onSort={sortBy} num>Age</SortTh> : null}
                 {on("dns") ? <SortTh k="dnsMissing" sort={sort} onSort={sortBy}>DNS</SortTh> : null}
-                {on("warmupState") ? <SortTh k="warmupState" sort={sort} onSort={sortBy}>Warmup</SortTh> : null}
+                {on("warmupState") ? <SortTh k="warmupState" sort={sort} onSort={sortBy}>Warmup status</SortTh> : null}
                 {on("blacklist") ? <SortTh k="blacklist" sort={sort} onSort={sortBy}>Blacklist</SortTh> : null}
                 {on("connection") ? <SortTh k="connection" sort={sort} onSort={sortBy}>Connection</SortTh> : null}
                 {on("campaigns") ? <SortTh k="campaigns" sort={sort} onSort={sortBy} num>Campaigns</SortTh> : null}
-                {on("sent7") ? <SortTh k="sent7" sort={sort} onSort={sortBy} num>Sent 7d</SortTh> : null}
-                {on("reply") ? <SortTh k="replyRate" sort={sort} onSort={sortBy} num>Reply</SortTh> : null}
-                {on("bounce") ? <SortTh k="bounceRate" sort={sort} onSort={sortBy} num>Bounce</SortTh> : null}
+                {on("sent7") ? <SortTh k="sent7" sort={sort} onSort={sortBy} num className="st-vol st-start">Sent 7d</SortTh> : null}
+                {on("reply") ? <SortTh k="replyRate" sort={sort} onSort={sortBy} num className="st-rep st-start">Reply</SortTh> : null}
+                {on("bounce") ? <SortTh k="bounceRate" sort={sort} onSort={sortBy} num className="st-bnc st-start">Bounce</SortTh> : null}
               </tr>
             </thead>
             <tbody>
@@ -438,34 +439,37 @@ export function InboxesView({ inboxes, clients, plans, smartleadConnected, dryRu
                         <input type="checkbox" className="checkbox" checked={cSel} ref={(el) => { if (el) el.indeterminate = !cSel && cSome; }} onChange={() => {}} aria-label={`Select every inbox of ${c.domain}`} tabIndex={-1} />
                       </td>
                       <td className="col-first">
-                        <span className="flex items-center gap-1.5">
+                        <span className="flex items-center gap-2">
                           <ChevronRight size={14} className="flex-none text-faint transition-transform" style={{ transform: cOpen ? "rotate(90deg)" : undefined }} />
-                          <ClientCell name={c.domain} hue={c.clientHue} />
-                          <span className="text-faint">{c.domains.length} domain{c.domains.length === 1 ? "" : "s"}</span>
+                          <span className="st-client-name">
+                            <span className="st-cap">Client</span>
+                            <ClientCell name={c.domain} hue={c.clientHue} />
+                          </span>
+                          <span className="st-count" title={`${c.domains.length} domain${c.domains.length === 1 ? "" : "s"}`}>{c.domains.length}</span>
                         </span>
                       </td>
                       {on("status") ? <td /> : null}
                       {on("client") ? <td /> : null}
                       {on("esp") ? <td>{c.esp ? <EspBadge type={c.esp} /> : <span className="zero">—</span>}</td> : null}
                       {on("tags") ? <td /> : null}
-                      {on("count") ? <td className="is-num strong">{int(c.count)}</td> : null}
-                      {on("warmup") ? <td className="is-num">{n0(c.avgWarmup)}{c.warmupOff ? <span className="text-faint"> · {c.warmupOff} off</span> : null}</td> : null}
-                      {on("limit") ? <td className="is-num">{n0(c.avgLimit)}</td> : null}
-                      {on("capacity") ? <td className="is-num strong">{c.capacity ? int(c.capacity) : <span className="zero">0</span>}</td> : null}
-                      {on("today") ? <td className="is-num">{c.sentToday ? int(c.sentToday) : <span className="zero">0</span>}</td> : null}
-                      {on("gap") ? <td className="is-num">{c.avgWait != null ? `${Math.round(c.avgWait)}m` : <span className="zero">—</span>}</td> : null}
-                      {on("rep") ? <td className="is-num"><Rep value={c.avgRep} low={c.lowRep} /></td> : null}
+                      {on("count") ? <td className="is-num st-vol st-start strong"><span className="st-agg">Sum</span>{int(c.count)}</td> : null}
+                      {on("warmup") ? <td className="is-num st-vol"><span className="st-agg">Avg</span>{n0(c.avgWarmup)}{c.warmupOff ? <span className="text-faint"> · {c.warmupOff} off</span> : null}</td> : null}
+                      {on("limit") ? <td className="is-num st-vol"><span className="st-agg">Avg</span>{n0(c.avgLimit)}</td> : null}
+                      {on("capacity") ? <td className="is-num st-vol strong"><span className="st-agg">Sum</span>{c.capacity ? int(c.capacity) : <span className="zero">0</span>}</td> : null}
+                      {on("today") ? <td className="is-num st-vol"><span className="st-agg">Sum</span>{c.sentToday ? int(c.sentToday) : <span className="zero">0</span>}</td> : null}
+                      {on("gap") ? <td className="is-num st-vol">{c.avgWait != null ? `${Math.round(c.avgWait)}m` : <span className="zero">—</span>}</td> : null}
+                      {on("rep") ? <td className="is-num st-health st-start"><span className="st-agg">Avg</span><Rep value={c.avgRep} low={c.lowRep} /></td> : null}
                       {on("age") ? <td /> : null}
                       {on("dns") ? <td>{c.dnsBad ? <span className="ns-status tone-danger" title={`Missing: ${c.dns.missing.join(", ")}`}>{c.dnsBad} with gaps</span> : c.dns.state === "unknown" ? <span className="zero">—</span> : <Ok>Valid</Ok>}</td> : null}
                       {on("warmupState") ? <td><WarmupCell blocked={c.blocked} paused={c.paused} total={c.count} /></td> : null}
                       {on("blacklist") ? <td>{c.bl == null ? <span className="zero">—</span> : c.listed ? <span className="ns-status tone-danger" title={c.blListings.join(", ")}>{c.listed} listed</span> : <Ok>Clean</Ok>}</td> : null}
                       {on("connection") ? <td>{c.disconnected ? <span className="ns-status tone-danger">{c.disconnected} disconnected</span> : <Ok title={`All ${c.count} inboxes connected`}>{c.count}/{c.count}</Ok>}</td> : null}
                       {on("campaigns") ? <td className="is-num">{c.campaigns ? int(c.campaigns) : <span className="zero">0</span>}</td> : null}
-                      {on("sent7") ? <td className="is-num strong">{c.sent7 ? int(c.sent7) : <span className="zero">0</span>}</td> : null}
-                      {on("reply") ? <td className="is-num"><Metric value={rate(c.replies7, c.sent7)} digits={2} /></td> : null}
-                      {on("bounce") ? <td className="is-num"><Metric value={rate(c.bounces7, c.sent7)} warn={2} bad={3} /></td> : null}
+                      {on("sent7") ? <td className="is-num st-vol st-start strong"><span className="st-agg">Sum</span>{c.sent7 ? int(c.sent7) : <span className="zero">0</span>}</td> : null}
+                      {on("reply") ? <td className="is-num st-rep st-start"><Metric value={rate(c.replies7, c.sent7)} digits={2} /></td> : null}
+                      {on("bounce") ? <td className="is-num st-bnc"><Metric value={rate(c.bounces7, c.sent7)} warn={2} bad={3} /></td> : null}
                     </tr>
-              {cOpen ? c.domains.map((g) => {
+              {cOpen ? c.domains.map((g, gi) => {
                 const isOpen = open.has(g.domainId);
                 const ids = g.inboxes.map((i) => i.id);
                 const gSel = ids.every((id) => selected.has(id));
@@ -476,8 +480,9 @@ export function InboxesView({ inboxes, clients, plans, smartleadConnected, dryRu
                       <td className="col-check" onClick={(e) => { e.stopPropagation(); toggleIds(ids); }}>
                         <input type="checkbox" className="checkbox" checked={gSel} ref={(el) => { if (el) el.indeterminate = !gSel && gSome; }} onChange={() => {}} aria-label={`Select inboxes on ${g.domain}`} tabIndex={-1} />
                       </td>
-                      <td className="col-first" style={{ paddingLeft: 30 }}>
+                      <td className="col-first" style={{ paddingLeft: 12 }}>
                         <span className="flex items-center gap-1.5">
+                          <span className="st-n">{gi + 1}</span>
                           <ChevronRight size={14} className="flex-none text-faint transition-transform" style={{ transform: isOpen ? "rotate(90deg)" : undefined }} />
                           <Link href={`/domains?d=${g.domainId}&view=all`} className="strong hover:underline" onClick={(e) => e.stopPropagation()}>{g.domain}</Link>
                           <TagList tags={g.domainTags} graceDaysLeft={g.graceDaysLeft} />
@@ -487,18 +492,18 @@ export function InboxesView({ inboxes, clients, plans, smartleadConnected, dryRu
                       {on("client") ? <td><ClientCell name={g.clientName} hue={g.clientHue} /></td> : null}
                       {on("esp") ? <td>{g.esp ? <EspBadge type={g.esp} /> : <span className="zero">—</span>}</td> : null}
                       {on("tags") ? <td><Tags tags={g.tags} graceDaysLeft={g.graceDaysLeft} /></td> : null}
-                      {on("count") ? <td className="is-num">{int(g.count)}</td> : null}
+                      {on("count") ? <td className="is-num st-vol st-start">{int(g.count)}</td> : null}
                       {on("warmup") ? (
-                        <td className="is-num" title={g.warmupOff ? `${g.warmupOff} with warmup off` : undefined}>
+                        <td className="is-num st-vol" title={g.warmupOff ? `${g.warmupOff} with warmup off` : undefined}>
                           {n0(g.avgWarmup)}{g.warmupOff ? <span className="text-faint"> · {g.warmupOff} off</span> : null}
                         </td>
                       ) : null}
-                      {on("limit") ? <td className="is-num">{n0(g.avgLimit)}</td> : null}
-                      {on("capacity") ? <td className="is-num">{g.capacity ? int(g.capacity) : <span className="zero">0</span>}</td> : null}
-                      {on("today") ? <td className="is-num">{g.sentToday ? int(g.sentToday) : <span className="zero">0</span>}</td> : null}
-                      {on("gap") ? <td className="is-num">{g.avgWait != null ? `${Math.round(g.avgWait)}m` : <span className="zero">—</span>}</td> : null}
+                      {on("limit") ? <td className="is-num st-vol">{n0(g.avgLimit)}</td> : null}
+                      {on("capacity") ? <td className="is-num st-vol">{g.capacity ? int(g.capacity) : <span className="zero">0</span>}</td> : null}
+                      {on("today") ? <td className="is-num st-vol">{g.sentToday ? int(g.sentToday) : <span className="zero">0</span>}</td> : null}
+                      {on("gap") ? <td className="is-num st-vol">{g.avgWait != null ? `${Math.round(g.avgWait)}m` : <span className="zero">—</span>}</td> : null}
                       {on("rep") ? (
-                        <td className="is-num" title={g.minRep != null ? `Lowest ${g.minRep.toFixed(0)}${g.lowRep ? `, ${g.lowRep} under 90` : ""}` : undefined}>
+                        <td className="is-num st-health st-start" title={g.minRep != null ? `Lowest ${g.minRep.toFixed(0)}${g.lowRep ? `, ${g.lowRep} under 90` : ""}` : undefined}>
                           <Rep value={g.avgRep} low={g.lowRep} />
                         </td>
                       ) : null}
@@ -508,9 +513,9 @@ export function InboxesView({ inboxes, clients, plans, smartleadConnected, dryRu
                       {on("blacklist") ? <td><BlacklistCell count={g.bl} listings={g.blListings} /></td> : null}
                       {on("connection") ? <td>{g.disconnected ? <span className="ns-status tone-danger">{g.disconnected} disconnected</span> : <Ok title={`All ${g.count} inboxes connected`}>{g.count}/{g.count}</Ok>}</td> : null}
                       {on("campaigns") ? <td className="is-num">{g.campaigns ? int(g.campaigns) : <span className="zero">0</span>}</td> : null}
-                      {on("sent7") ? <td className="is-num">{g.sent7 ? int(g.sent7) : <span className="zero">0</span>}</td> : null}
-                      {on("reply") ? <td className="is-num"><Metric value={rate(g.replies7, g.sent7)} digits={2} /></td> : null}
-                      {on("bounce") ? <td className="is-num"><Metric value={rate(g.bounces7, g.sent7)} warn={2} bad={3} /></td> : null}
+                      {on("sent7") ? <td className="is-num st-vol st-start">{g.sent7 ? int(g.sent7) : <span className="zero">0</span>}</td> : null}
+                      {on("reply") ? <td className="is-num st-rep st-start"><Metric value={rate(g.replies7, g.sent7)} digits={2} /></td> : null}
+                      {on("bounce") ? <td className="is-num st-bnc"><Metric value={rate(g.bounces7, g.sent7)} warn={2} bad={3} /></td> : null}
                     </tr>
                     {isOpen ? [...g.inboxes].sort(byValue((i: InboxListRow) => inboxValue(i, sort.key), (a, b) => a.email.localeCompare(b.email), sort.dir)).map((i) => (
                       <tr key={i.id} className="is-clickable" data-selected={selected.has(i.id)} style={{ background: "var(--surface-2)" }} onClick={() => toggleIds([i.id])}>
@@ -526,32 +531,33 @@ export function InboxesView({ inboxes, clients, plans, smartleadConnected, dryRu
                         {on("client") ? <td className="text-muted">{i.senderName ?? <span className="zero">—</span>}</td> : null}
                         {on("esp") ? <td>{i.providerType ? <EspBadge type={i.providerType} /> : <span className="zero">—</span>}</td> : null}
                         {on("tags") ? <td><Tags tags={i.smartleadTags} graceDaysLeft={i.domainGraceDaysLeft} /></td> : null}
-                        {on("count") ? <td className="is-num"><span className="zero">—</span></td> : null}
+                        {on("count") ? <td className="is-num st-vol st-start"><span className="zero">—</span></td> : null}
                         {on("warmup") ? (
-                          <td className="is-num" title={i.warmupMin != null ? `Smartlead sends ${i.warmupMin}–${i.warmupPerDay} a day${i.warmupReplyRate != null ? `, ${i.warmupReplyRate}% reply rate` : ""}` : undefined}>
+                          <td className="is-num st-vol" title={i.warmupMin != null ? `Smartlead sends ${i.warmupMin}–${i.warmupPerDay} a day${i.warmupReplyRate != null ? `, ${i.warmupReplyRate}% reply rate` : ""}` : undefined}>
                             {i.warmupEnabled ? (i.warmupMin != null && i.warmupMin !== i.warmupPerDay ? `${i.warmupMin}–${i.warmupPerDay}` : int(i.warmupPerDay)) : <span className="zero">off</span>}
                             {i.warmupRampup ? <span className="text-faint"> · +{i.warmupRampup}</span> : null}
                           </td>
                         ) : null}
-                        {on("limit") ? <td className="is-num">{i.dailyLimit ? int(i.dailyLimit) : <span className="zero">0</span>}</td> : null}
-                        {on("capacity") ? <td className="is-num">{i.dailyLimit ? int(i.dailyLimit) : <span className="zero">0</span>}</td> : null}
-                        {on("today") ? <td className="is-num">{i.dailySent ? int(i.dailySent) : <span className="zero">0</span>}</td> : null}
-                        {on("gap") ? <td className="is-num">{i.minWaitMins != null ? `${i.minWaitMins}m` : <span className="zero">—</span>}</td> : null}
-                        {on("rep") ? <td className="is-num"><Rep value={i.warmupReputation} low={0} /></td> : null}
+                        {on("limit") ? <td className="is-num st-vol">{i.dailyLimit ? int(i.dailyLimit) : <span className="zero">0</span>}</td> : null}
+                        {on("capacity") ? <td className="is-num st-vol">{i.dailyLimit ? int(i.dailyLimit) : <span className="zero">0</span>}</td> : null}
+                        {on("today") ? <td className="is-num st-vol">{i.dailySent ? int(i.dailySent) : <span className="zero">0</span>}</td> : null}
+                        {on("gap") ? <td className="is-num st-vol">{i.minWaitMins != null ? `${i.minWaitMins}m` : <span className="zero">—</span>}</td> : null}
+                        {on("rep") ? <td className="is-num st-health st-start"><Rep value={i.warmupReputation} low={0} /></td> : null}
                         {on("age") ? <td className="is-num text-muted" title="Inbox added to Smartlead">{i.smartleadCreatedAt ? ageLabel(Math.floor((Date.now() - new Date(i.smartleadCreatedAt).getTime()) / 86_400_000)) : <span className="zero">—</span>}</td> : null}
                         {on("dns") ? <td /> : null}
                         {on("warmupState") ? <td><WarmupCell blocked={warmupOf(i) === "blocked" ? 1 : 0} paused={warmupOf(i) === "paused" ? 1 : 0} total={1} reason={i.warmupBlockedReason} /></td> : null}
                         {on("blacklist") ? <td /> : null}
                         {on("connection") ? <td>{i.status === "disconnected" ? <span className="ns-status tone-danger" title={i.connectError ?? undefined}>{i.connectError ? i.connectError.slice(0, 32) : "Disconnected"}</span> : <Ok>Connected</Ok>}</td> : null}
                         {on("campaigns") ? <td className="is-num">{i.campaigns ? int(i.campaigns) : <span className="zero">0</span>}</td> : null}
-                        {on("sent7") ? <td className="is-num">{i.sent7 ? int(i.sent7) : <span className="zero">0</span>}</td> : null}
-                        {on("reply") ? <td className="is-num"><Metric value={rate(i.replies7, i.sent7)} digits={2} /></td> : null}
-                        {on("bounce") ? <td className="is-num"><Metric value={rate(i.bounces7, i.sent7)} warn={2} bad={3} /></td> : null}
+                        {on("sent7") ? <td className="is-num st-vol st-start">{i.sent7 ? int(i.sent7) : <span className="zero">0</span>}</td> : null}
+                        {on("reply") ? <td className="is-num st-rep st-start"><Metric value={rate(i.replies7, i.sent7)} digits={2} /></td> : null}
+                        {on("bounce") ? <td className="is-num st-bnc"><Metric value={rate(i.bounces7, i.sent7)} warn={2} bad={3} /></td> : null}
                       </tr>
                     )) : null}
                   </Fragment>
                 );
               }) : null}
+                    {cOpen ? <tr className="st-gap" aria-hidden><td colSpan={colCount} /></tr> : null}
                   </Fragment>
                 );
               })}
