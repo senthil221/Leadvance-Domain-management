@@ -7,6 +7,7 @@ import { requireActor } from "@/lib/auth";
 import { jobSql, sql } from "@/lib/db";
 import { hypertideAcceptsDomain } from "@/integrations/hypertide";
 import { getDomainDetail, listStorageCandidates } from "@/lib/queries";
+import { normTag, parseTagPairs } from "@/lib/tag-map";
 import { DOMAIN_STATUSES, REPLACEMENT_REASONS } from "@/lib/status";
 
 export type ActionResult<T = undefined> = { ok: true; data: T } | { ok: false; error: string };
@@ -233,6 +234,95 @@ export async function addDomains(
 
 // Hues spaced around the wheel so neighbouring clients never look alike.
 const HUES = [255, 150, 30, 300, 190, 345, 90, 220, 280, 60, 120, 10];
+
+// ---- Client assignment: which Smartlead tags belong to which client ----
+
+export async function setClientSource(source: "tags" | "mapped"): Promise<ActionResult> {
+  try {
+    await requireActor();
+    const v = z.enum(["tags", "mapped"]).parse(source);
+    await sql`insert into settings (key, value) values ('client_source', ${JSON.stringify(v)}::text::jsonb)
+      on conflict (key) do update set value = excluded.value, updated_at = now()`;
+    refresh();
+    return { ok: true, data: undefined };
+  } catch (e) {
+    return fail(e);
+  }
+}
+
+/** Saves "tag, client" pairs; a client that doesn't exist yet is created. */
+export async function saveTagPairs(text: string): Promise<ActionResult<{ saved: number; newClients: number; bad: string[] }>> {
+  try {
+    await requireActor();
+    const { pairs, bad } = parseTagPairs(z.string().max(50_000).parse(text));
+    if (!pairs.length) return { ok: false, error: "No pairs found. Write one per line: tag, client" };
+    let newClients = 0;
+    await sql.begin(async (tx) => {
+      for (const p of pairs) {
+        let [c] = await tx<{ id: string }[]>`select id from clients where lower(name) = lower(${p.client}) limit 1`;
+        if (!c) {
+          const [{ n }] = await tx<{ n: number }[]>`select count(*)::int as n from clients`;
+          [c] = await tx<{ id: string }[]>`insert into clients (name, hue) values (${p.client}, ${HUES[n % HUES.length]}) returning id`;
+          newClients++;
+        }
+        await tx`insert into client_tags (tag, display, client_id) values (${normTag(p.tag)}, ${p.tag}, ${c.id})
+          on conflict (tag) do update set client_id = excluded.client_id, display = excluded.display`;
+      }
+    });
+    refresh();
+    return { ok: true, data: { saved: pairs.length, newClients, bad } };
+  } catch (e) {
+    return fail(e);
+  }
+}
+
+export async function setTagClient(tag: string, clientId: string | null): Promise<ActionResult> {
+  try {
+    await requireActor();
+    const key = normTag(z.string().min(1).max(200).parse(tag));
+    if (!clientId) {
+      await sql`delete from client_tags where tag = ${key}`;
+    } else {
+      const id = z.uuid().parse(clientId);
+      await sql`insert into client_tags (tag, display, client_id) values (${key}, ${tag.trim()}, ${id})
+        on conflict (tag) do update set client_id = excluded.client_id`;
+    }
+    refresh();
+    return { ok: true, data: undefined };
+  } catch (e) {
+    return fail(e);
+  }
+}
+
+/** Puts every domain with mapped tags under the client those tags point to. */
+export async function applyTagClients(): Promise<ActionResult<{ moved: number }>> {
+  try {
+    await requireActor();
+    const { clientsFromMappedTags } = await import("@/jobs/smartlead-sync");
+    const r = await clientsFromMappedTags(jobSql, true);
+    refresh();
+    return { ok: true, data: { moved: r.domainsMapped } };
+  } catch (e) {
+    return fail(e);
+  }
+}
+
+/** Hides clients with no domains and no mapped tag (the ones made from tags before the mapping). */
+export async function archiveEmptyClients(): Promise<ActionResult<{ archived: number }>> {
+  try {
+    await requireActor();
+    const rows = await sql`
+      update clients c set archived_at = now()
+      where c.archived_at is null and c.smartlead_client_id is null
+        and not exists (select 1 from domains d where d.client_id = c.id)
+        and not exists (select 1 from client_tags t where t.client_id = c.id)
+      returning c.id`;
+    refresh();
+    return { ok: true, data: { archived: rows.length } };
+  } catch (e) {
+    return fail(e);
+  }
+}
 
 export async function createClient(name: string): Promise<ActionResult<{ id: string }>> {
   try {

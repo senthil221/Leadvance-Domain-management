@@ -1,13 +1,14 @@
 import type { Metadata } from "next";
 import { headers } from "next/headers";
 import { Suspense } from "react";
+import { ClientAssignment } from "@/components/settings/ClientAssignment";
 import { ClientsList, HypertideOrderForm, LifecycleForm } from "@/components/settings/SettingsForms";
 import { CopyUrl, SyncPanel, type SyncJob } from "@/components/settings/SyncPanel";
 import { Badge, PageHead, Skeleton } from "@/components/ui";
 import { JOBS } from "@/jobs";
 import { getCurrentUser } from "@/lib/auth";
 import { summarize } from "@/lib/format";
-import { getSettings, listClients, listJobState } from "@/lib/queries";
+import { getSettings, listClients, listJobState, listTags } from "@/lib/queries";
 
 export const metadata: Metadata = { title: "Settings" };
 
@@ -35,7 +36,7 @@ export default function SettingsPage() {
 
 async function SettingsContent() {
   await getCurrentUser();
-  const [settings, clients, jobState] = await Promise.all([getSettings(), listClients(), listJobState()]);
+  const [settings, clients, jobState, tags] = await Promise.all([getSettings(), listClients(), listJobState(), listTags()]);
   const dryRun = process.env.INTEGRATIONS_DRY_RUN !== "false";
   const token = process.env.SMARTLEAD_WEBHOOK_TOKEN;
   const webhookReady = Boolean(token);
@@ -108,6 +109,11 @@ async function SettingsContent() {
       <section className="card" aria-labelledby="ht-title">
         <div className="card-head"><h2 id="ht-title" className="card-title">Hypertide orders</h2><span className="card-sub">used when a replacement orders inboxes</span></div>
         <HypertideOrderForm template={settings.hypertideTemplate} />
+      </section>
+
+      <section className="card" aria-labelledby="assign-title">
+        <div className="card-head"><h2 id="assign-title" className="card-title">Client assignment</h2><span className="card-sub">how Smartlead tags become clients</span></div>
+        <ClientAssignment source={settings.clientSource} clients={clients} tags={tags} />
       </section>
 
       <section className="card" aria-labelledby="clients-title">

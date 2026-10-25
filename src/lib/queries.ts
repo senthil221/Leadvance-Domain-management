@@ -1,5 +1,6 @@
 import "server-only";
 import { attentionDomainCount } from "./attention";
+import { tagOverview } from "./tag-list";
 import { sql } from "./db";
 import type { DomainStatus, ReplacementReason, StepStatus } from "./status";
 
@@ -17,6 +18,13 @@ export async function listClients() {
     from clients c
     where c.archived_at is null
     order by c.name`;
+}
+
+export type { TagRow } from "./tag-list";
+
+/** Every Smartlead tag on the inboxes (except the New and Replaced marks) and the client it is mapped to, unmapped first. */
+export async function listTags() {
+  return tagOverview(sql);
 }
 
 export async function listVendors() {
@@ -745,6 +753,7 @@ export async function getSettings() {
   const map = Object.fromEntries(rows.map((r) => [r.key, JSON.parse(r.value) as unknown]));
   return {
     drainDays: Number(map.drain_days ?? 7),
+    clientSource: map.client_source === "mapped" ? ("mapped" as const) : ("tags" as const),
     storageLowThreshold: Number(map.storage_low_threshold ?? 20),
     hypertideNameservers: Array.isArray(map.hypertide_nameservers) ? (map.hypertide_nameservers as string[]) : [],
     hypertideTemplate: {

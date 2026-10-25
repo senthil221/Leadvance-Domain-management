@@ -132,7 +132,9 @@ export async function syncAccounts(sql: Sql, sl: Smartlead) {
       join clients c on c.smartlead_client_id = x.sl_client
       where d.name = x.domain and d.client_id is null and d.status <> 'in_storage'`;
 
-    const tagged = await clientsFromTags(tx);
+    // How this account tells its clients apart: a tag named like the client (the
+    // default), or a list of tags mapped to clients (Settings → Client assignment).
+    const tagged = (await clientSource(tx)) === "mapped" ? await clientsFromMappedTags(tx, true) : await clientsFromTags(tx);
     return { accounts: accounts.length, newDomains: newDomains.length, promoted: promoted.length, upserted: upserted.length, removed: removed.length, ...tagged };
   });
 }
@@ -161,6 +163,37 @@ export async function clientsFromTags(sql: postgres.Sql | postgres.TransactionSq
     where d.id = x.domain_id and d.client_id is null
     returning d.id`;
   return { clientsFromTags: created.length, domainsTagged: assigned.length };
+}
+
+/** "tags": a tag is a client of the same name. "mapped": only the tags in client_tags decide. */
+export async function clientSource(sql: postgres.Sql | postgres.TransactionSql): Promise<"tags" | "mapped"> {
+  const [r] = await sql<{ v: string | null }[]>`select value #>> '{}' as v from settings where key = 'client_source'`;
+  return r?.v === "mapped" ? "mapped" : "tags";
+}
+
+/**
+ * A domain belongs to the client most of its inboxes' mapped tags point to.
+ * Domains whose inboxes carry no mapped tag are left as they are. With
+ * `overwrite` the mapping replaces the client a domain already has; without,
+ * only domains with no client are filled in.
+ */
+export async function clientsFromMappedTags(sql: postgres.Sql | postgres.TransactionSql, overwrite = false) {
+  const assigned = await sql`
+    update domains d set client_id = x.client_id
+    from (
+      select distinct on (i.domain_id) i.domain_id, m.client_id
+      from inboxes i
+      cross join lateral unnest(i.smartlead_tags) as u(t)
+      join client_tags m on m.tag = regexp_replace(lower(trim(u.t)), '[[:space:]]+', ' ', 'g')
+      join clients c on c.id = m.client_id and c.archived_at is null
+      where i.status <> 'removed'
+      group by i.domain_id, m.client_id
+      order by i.domain_id, count(*) desc, m.client_id
+    ) x
+    where d.id = x.domain_id and d.status <> 'in_storage'
+      and (${overwrite} or d.client_id is null) and d.client_id is distinct from x.client_id
+    returning d.id`;
+  return { domainsMapped: assigned.length };
 }
 
 const LIVE_CAMPAIGN = new Set(["ACTIVE", "PAUSED", "START", "STARTED", "SCHEDULED"]);
