@@ -2,7 +2,9 @@
  * Domain Engine -> campaign volume sheet.
  *
  * Fills "No. of Email Accounts" and "Sending limit per email" for every client
- * and tag from the Domain Engine: connected inboxes on active domains only.
+ * and tag from the Domain Engine: connected inboxes on active domains only,
+ * never warmup. Limits are whole numbers; a client and tag whose inboxes have
+ * different limits gets one row per limit, so accounts x limit is exact.
  * Daily volume, weekly volume and prospects stay your own formulas.
  *
  * Setup (once): Extensions -> Apps Script, paste this file, save, reload the
@@ -62,12 +64,12 @@ function syncCapacity() {
   }
   if (head < 0) throw new Error("Could not find the header row (Client, Tag Name, No. of Email Accounts, Sending limit per email).");
 
-  // Existing rows by client and tag.
-  const rowOf = {};
+  // Existing rows by client and tag, in sheet order (a pair can have several rows, one per limit).
+  const rowsOf = {};
   let lastUsed = head;
   for (let r = head; r < values.length; r++) {
     const client = norm(values[r][col.client - 1]), tag = norm(values[r][col.tag - 1]);
-    if (client || tag) { rowOf[client + "|" + tag] = r + 1; lastUsed = r + 1; }
+    if (client || tag) { (rowsOf[client + "|" + tag] = rowsOf[client + "|" + tag] || []).push(r + 1); lastUsed = r + 1; }
   }
   // Formula cells to the right of the limit column (daily volume and so on), copied onto added rows.
   let formulaCols = 0;
@@ -75,19 +77,20 @@ function syncCapacity() {
   const formulaRow = formulaCols ? findFormulaRow(sheet, head, lastUsed, col.limit + 1, formulaCols) : 0;
 
   const known = new Set(feed.clients.map(norm));
-  const seen = {};
+  const used = {}; // how many rows of each client and tag the feed has filled so far
   let updated = 0, added = 0, zeroed = 0;
 
   for (const f of feed.rows) {
     const key = norm(f.client) + "|" + norm(f.tag);
-    seen[key] = true;
-    let row = rowOf[key];
+    const n = used[key] || 0;
+    used[key] = n + 1;
+    let row = (rowsOf[key] || [])[n];
     if (!row) {
       row = nextFreeRow(sheet, head, lastUsed, col);
       sheet.getRange(row, col.client).setValue(f.client);
       sheet.getRange(row, col.tag).setValue(f.tag);
       if (formulaRow) copyFormulas(sheet, formulaRow, row, col.limit + 1, formulaCols);
-      rowOf[key] = row;
+      (rowsOf[key] = rowsOf[key] || []).push(row);
       lastUsed = Math.max(lastUsed, row);
       added++;
     } else updated++;
@@ -95,13 +98,14 @@ function syncCapacity() {
     sheet.getRange(row, col.limit).setValue(f.limit);
   }
 
-  // A client the app knows, with nothing active under this tag any more: zero, so the volume isn't overstated.
-  for (const key in rowOf) {
-    if (seen[key]) continue;
+  // A client the app knows, with nothing active left in this row: zero, so the volume isn't overstated.
+  for (const key in rowsOf) {
     if (!known.has(key.split("|")[0])) continue; // rows for clients the app doesn't know are yours to keep
-    sheet.getRange(rowOf[key], col.accounts).setValue(0);
-    sheet.getRange(rowOf[key], col.limit).setValue(0);
-    zeroed++;
+    rowsOf[key].slice(used[key] || 0).forEach((row) => {
+      sheet.getRange(row, col.accounts).setValue(0);
+      sheet.getRange(row, col.limit).setValue(0);
+      zeroed++;
+    });
   }
   SpreadsheetApp.flush();
   SpreadsheetApp.getActive().toast(updated + " updated, " + added + " added, " + zeroed + " set to 0.", "Domain Engine", 6);
