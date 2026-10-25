@@ -1,5 +1,5 @@
 # Domain Engine app on the VPS. Joins:
-#  - n8n_default (Traefik from the n8n stack) for HTTPS on APP_HOST
+#  - the Traefik network (TRAEFIK_NETWORK in .env, n8n_default by default) for HTTPS on APP_HOST
 #  - supabase_default to reach Postgres (db) and Auth (api-gw)
 # Settings come from .env next to this file (see .env.example).
 
@@ -19,7 +19,7 @@ services:
       options: { max-size: "10m", max-file: "3" }
     labels:
       - traefik.enable=true
-      - traefik.docker.network=n8n_default
+      - traefik.docker.network=${TRAEFIK_NETWORK:-n8n_default}
       - traefik.http.routers.domainengine.rule=Host(`${APP_HOST:?set APP_HOST in .env}`)
       - traefik.http.routers.domainengine.entrypoints=web,websecure
       - traefik.http.routers.domainengine.tls=true
@@ -57,7 +57,7 @@ services:
 
 networks:
   traefik:
-    name: n8n_default
+    name: ${TRAEFIK_NETWORK:-n8n_default}
     external: true
   supabase:
     name: supabase_default

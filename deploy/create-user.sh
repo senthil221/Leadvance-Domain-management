@@ -24,7 +24,8 @@ EOF
 )
 
 if printf '%s' "$RES" | grep -q '"id"'; then
-  echo "Created login for $EMAIL. Sign in at https://domains.srv1826728.hstgr.cloud"
+  HOST=$(grep "^APP_HOST=" /docker/domain-engine/deploy/app/.env | cut -d= -f2)
+  echo "Created login for $EMAIL. Sign in at https://$HOST"
 else
   echo "Not created: $(printf '%s' "$RES" | grep -o '"msg":"[^"]*"\|"message":"[^"]*"\|"error_description":"[^"]*"' | head -1)"
   exit 1
