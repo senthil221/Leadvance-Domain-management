@@ -1,5 +1,6 @@
 "use client";
 
+import { DomainLink } from "@/components/domains/DomainLink";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { Fragment, useMemo, useState } from "react";
@@ -45,14 +46,12 @@ function statusText(r: ReplacementRow): { text: string; tone: "warning" | "dange
   return { text: s === "running" ? `${stepName(r, step)}…` : `Waiting: ${stepName(r, step).toLowerCase()}`, tone: "info" };
 }
 
-type View = "open" | "ready" | "warming" | "grace" | "live" | "all";
+type View = "open" | "ready" | "warming" | "grace";
 const VIEWS: { key: View; label: string; match: (r: ReplacementRow) => boolean }[] = [
   { key: "open", label: "In progress", match: (r) => !r.completedAt },
   { key: "ready", label: "Ready", match: (r) => stateOf(r) === "warming" && r.ready },
   { key: "warming", label: "Warming", match: (r) => stateOf(r) === "warming" },
   { key: "grace", label: "Old in grace", match: (r) => r.graceEndsAt != null },
-  { key: "live", label: "In campaigns", match: (r) => stateOf(r) === "live" },
-  { key: "all", label: "All", match: () => true },
 ];
 
 const dayFmt = new Intl.DateTimeFormat("en-GB", { day: "numeric", month: "short", timeZone: "UTC" });
@@ -72,7 +71,7 @@ export function ReplacementsView({ rows, now, smartleadLive, graceDays }: { rows
 
   const counts = useMemo(() => Object.fromEntries(VIEWS.map((v) => [v.key, rows.filter(v.match).length])) as Record<View, number>, [rows]);
   const attention = useMemo(() => rows.filter((r) => stateOf(r) === "attention").length, [rows]);
-  const active = view ?? (counts.open ? "open" : counts.ready ? "ready" : counts.warming ? "warming" : "all");
+  const active = view ?? (counts.open ? "open" : counts.ready ? "ready" : counts.warming ? "warming" : "grace");
 
   const shown = useMemo(() => {
     const needle = q.trim().toLowerCase();
@@ -85,8 +84,8 @@ export function ReplacementsView({ rows, now, smartleadLive, graceDays }: { rows
   if (!rows.length) {
     return (
       <div className="card">
-        <Empty icon={ArrowLeftRight} title="No replacements yet" action={<Link href="/domains?view=flagged" className="btn">Review flagged domains</Link>}>
-          Select domains in Domains and press Replace. Each swap is followed here from Hypertide to Smartlead.
+        <Empty icon={ArrowLeftRight} title="No replacements yet" action={<Link href="/inboxes?view=attention" className="btn">Domains that need attention</Link>}>
+          Pick domains in Smartlead (Needs attention) or Domains and press Replace. Each swap is followed here from Hypertide to Smartlead.
         </Empty>
       </div>
     );
@@ -162,13 +161,13 @@ function Row({ r, now, graceDays, smartleadLive, isOpen, onToggle }: {
         <td className="col-first">
           <span className="flex items-center gap-1.5">
             <ChevronRight size={13} className="flex-none text-faint transition-transform" style={{ transform: isOpen ? "rotate(90deg)" : undefined }} />
-            <Link href={`/domains?d=${r.newDomainId}`} className="strong hover:underline" onClick={(e) => e.stopPropagation()}>{r.newDomain}</Link>
+            <DomainLink id={r.newDomainId} tab="inboxes" className="strong hover:underline">{r.newDomain}</DomainLink>
             {state === "live" ? null : r.ready ? <span className="rpl-tag is-ready" title="Warmed up: ready to add to campaigns">Ready</span> : <span className="rpl-tag is-new">New</span>}
           </span>
         </td>
         <td>
           <span className="flex items-center gap-2">
-            <Link href={`/domains?d=${r.oldDomainId}`} className="text-muted hover:text-ink hover:underline" onClick={(e) => e.stopPropagation()}>{r.oldDomain}</Link>
+            <DomainLink id={r.oldDomainId} className="text-muted hover:text-ink hover:underline">{r.oldDomain}</DomainLink>
             <Grace r={r} now={now} graceDays={graceDays} />
           </span>
         </td>

@@ -1,8 +1,8 @@
 "use client";
 
+import { DomainLink } from "@/components/domains/DomainLink";
 import { Dialog, DropdownMenu } from "radix-ui";
 import { Check, ChevronDown, ChevronRight, Copy, ExternalLink, Filter, MailX, MessageSquareText, Search, X } from "lucide-react";
-import Link from "next/link";
 import { useEffect, useMemo, useOptimistic, useState, useTransition } from "react";
 import { toast } from "sonner";
 import { loadEventDetail, loadEvents, reclassifyReply } from "@/app/actions";
@@ -344,7 +344,7 @@ function EventPanel({ kind, row, onClose, onReclassify }: { kind: Kind; row: Row
                 )}
 
                 <dl className="ev-facts">
-                  <dt>Domain</dt><dd>{row.domainId ? <Link className="hover:underline" href={`/domains?d=${row.domainId}`}>{row.domain}</Link> : row.domain ?? "—"}</dd>
+                  <dt>Domain</dt><dd>{row.domainId ? <DomainLink id={row.domainId} tab="stats" className="hover:underline">{row.domain}</DomainLink> : row.domain ?? "—"}</dd>
                   <dt>Client</dt><dd><ClientCell name={row.clientName} hue={row.clientHue} /></dd>
                   <dt>Inbox</dt><dd className="truncate">{row.inboxEmail ?? "—"}</dd>
                   <dt>Campaign</dt><dd className="truncate">{row.campaignName ?? "—"}{row.sequence ? ` · email ${row.sequence}` : ""}</dd>

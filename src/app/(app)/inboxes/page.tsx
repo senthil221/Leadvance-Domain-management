@@ -7,12 +7,12 @@ import { jwtProblem } from "@/integrations/smartlead-app";
 import { sql } from "@/lib/db";
 import { listClients, listInboxes, listSendingPlans } from "@/lib/queries";
 
-export const metadata: Metadata = { title: "Inboxes" };
+export const metadata: Metadata = { title: "Smartlead" };
 
 export default function InboxesPage() {
   return (
     <>
-      <PageHead title="Inboxes" sub="Sending inboxes in Smartlead with their warmup and daily limits" />
+      <PageHead title="Smartlead" sub="Your sending setup: inboxes, warmup, daily limits, reputation and what needs attention" />
       <div className="page-body">
         <Suspense fallback={<TableSkeleton rows={12} />}>
           <InboxesData />

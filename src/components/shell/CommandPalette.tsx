@@ -3,7 +3,7 @@
 import { Command } from "cmdk";
 import { Dialog } from "radix-ui";
 import { CornerDownLeft, Globe, Moon, Plus, Search } from "lucide-react";
-import { useRouter } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useState, useTransition } from "react";
 import { loadSearchIndex } from "@/app/actions";
 import { STATUS_META, type DomainStatus } from "@/lib/status";
@@ -14,6 +14,7 @@ type Entry = { id: string; name: string; status: DomainStatus; client: string | 
 
 export function CommandPalette({ open, onOpenChange }: { open: boolean; onOpenChange: (open: boolean) => void }) {
   const router = useRouter();
+  const pathname = usePathname();
   const [index, setIndex] = useState<Entry[] | null>(null);
   const [query, setQuery] = useState("");
   const [, startTransition] = useTransition();
@@ -51,7 +52,7 @@ export function CommandPalette({ open, onOpenChange }: { open: boolean; onOpenCh
               {domainMatches.length > 0 && (
                 <Command.Group heading="Domains">
                   {domainMatches.map((d) => (
-                    <Command.Item key={d.id} value={`domain ${d.name}`} onSelect={() => go(`/domains?d=${d.id}`)}>
+                    <Command.Item key={d.id} value={`domain ${d.name}`} onSelect={() => go(`${pathname}?d=${d.id}`)}>
                       <Globe size={16} strokeWidth={1.5} />
                       <span>{d.name}</span>
                       <span className="cmdk-meta">{d.client ? `${d.client} · ` : ""}{STATUS_META[d.status].label}</span>
@@ -73,9 +74,9 @@ export function CommandPalette({ open, onOpenChange }: { open: boolean; onOpenCh
                   <Plus size={16} strokeWidth={1.5} />
                   <span>Add domains to inventory</span>
                 </Command.Item>
-                <Command.Item value="replace flagged domains" onSelect={() => go("/domains?view=flagged")}>
+                <Command.Item value="replace flagged domains" onSelect={() => go("/inboxes?view=attention")}>
                   <Globe size={16} strokeWidth={1.5} />
-                  <span>Review flagged domains</span>
+                  <span>Domains that need attention</span>
                 </Command.Item>
                 <Command.Item value="toggle dark light theme" onSelect={() => { toggleTheme(); onOpenChange(false); }}>
                   <Moon size={16} strokeWidth={1.5} />

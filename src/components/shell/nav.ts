@@ -1,4 +1,4 @@
-import { Activity, ArrowLeftRight, BarChart3, Boxes, Globe, Inbox, LayoutGrid, MailX, MessageSquareText, Settings2, type LucideIcon } from "lucide-react";
+import { Activity, ArrowLeftRight, BarChart3, Globe, Inbox, LayoutGrid, MailX, MessageSquareText, Settings2, type LucideIcon } from "lucide-react";
 
 export type NavItem = { href: string; label: string; icon: LucideIcon; key: string };
 export type NavGroup = NavItem & { pages: NavItem[] };
@@ -7,10 +7,9 @@ export type NavGroup = NavItem & { pages: NavItem[] };
 // command palette lists them all.
 export const PAGES = {
   overview: { href: "/", label: "Overview", icon: LayoutGrid, key: "o" },
-  domains: { href: "/domains", label: "Domains", icon: Globe, key: "d" },
-  inventory: { href: "/inventory", label: "Inventory", icon: Boxes, key: "v" },
+  inventory: { href: "/inventory", label: "Domains", icon: Globe, key: "d" },
   replacements: { href: "/replacements", label: "Replacements", icon: ArrowLeftRight, key: "r" },
-  inboxes: { href: "/inboxes", label: "Inboxes", icon: Inbox, key: "i" },
+  inboxes: { href: "/inboxes", label: "Smartlead", icon: Inbox, key: "i" },
   stats: { href: "/stats", label: "Stats", icon: BarChart3, key: "t" },
   replies: { href: "/activity", label: "Replies", icon: MessageSquareText, key: "a" },
   bounces: { href: "/bounces", label: "Bounces", icon: MailX, key: "b" },
@@ -20,15 +19,16 @@ export const PAGES = {
 
 const P = PAGES;
 
-// The sidebar: five places, related pages grouped behind one entry and
-// reached through the tabs in the page header.
+// The sidebar: Overview, Smartlead (the sending setup), Domains (what you own)
+// and Performance (what the emails did). Related pages sit behind one entry
+// and are reached through the tabs in the page header.
 export const NAV: { label: string; items: NavGroup[] }[] = [
   {
     label: "Workspace",
     items: [
       { ...P.overview, pages: [] },
-      { ...P.domains, pages: [{ ...P.domains, label: "Performance" }, P.inventory, P.replacements] },
       { ...P.inboxes, pages: [] },
+      { ...P.inventory, pages: [{ ...P.inventory, label: "Inventory" }, P.replacements] },
       { ...P.stats, label: "Performance", pages: [P.stats, P.replies, P.bounces, P.health] },
     ],
   },

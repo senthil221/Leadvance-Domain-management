@@ -1,7 +1,7 @@
 "use client";
 
+import { DomainLink } from "@/components/domains/DomainLink";
 import { BarChart3, CalendarDays, ChevronRight, Download, Loader, Search } from "lucide-react";
-import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { type CSSProperties, Fragment, useMemo, useState, useTransition } from "react";
 import { toast } from "sonner";
@@ -344,7 +344,7 @@ export function StatsView({ initial, clients }: { initial: StatsData; clients: C
                         <td className="col-first" style={byClient ? { paddingLeft: 14 } : undefined}>
                           <span className="flex items-center gap-2">
                             <span className="st-n">{i + 1}</span>
-                            <Link href={`/domains?d=${r.id}&view=all`} className="strong hover:underline">{r.name}</Link>
+                            <DomainLink id={r.id} tab="stats" className="strong hover:underline">{r.name}</DomainLink>
                             {/* Status only when it isn't the usual Active. */}
                             {r.status !== "active" ? <StatusDot status={r.status} /> : null}
                           </span>

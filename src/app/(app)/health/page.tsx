@@ -33,7 +33,7 @@ async function HealthContent() {
         <div className="card-head">
           <h2 id="alerts-title" className="card-title">Open alerts</h2>
           <span className="card-sub">{alerts.length} on sending domains</span>
-          <Link href="/domains?view=flagged" className="card-link">Select in Domains <ArrowRight size={13} strokeWidth={1.5} /></Link>
+          <Link href="/inboxes?view=attention" className="card-link">Domains that need attention <ArrowRight size={13} strokeWidth={1.5} /></Link>
         </div>
         <AttentionList rows={alerts} />
       </section>

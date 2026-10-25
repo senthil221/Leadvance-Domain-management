@@ -6,6 +6,14 @@ const nextConfig: NextConfig = {
   cacheComponents: true,
   partialPrefetching: true,
   poweredByHeader: false,
+  // The old domain list is gone: domains live in Domains (inventory) and the
+  // flagged ones in Smartlead. Old links and bookmarks keep working.
+  async redirects() {
+    return [
+      { source: "/domains", has: [{ type: "query" as const, key: "view", value: "flagged" }], destination: "/inboxes?view=attention", permanent: false },
+      { source: "/domains", destination: "/inventory", permanent: false },
+    ];
+  },
   turbopack: {
     rules: {
       "*.css": {

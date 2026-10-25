@@ -1,3 +1,4 @@
+import { DomainLink } from "@/components/domains/DomainLink";
 import type { Metadata } from "next";
 import Link from "next/link";
 import { Suspense } from "react";
@@ -42,9 +43,9 @@ function Delta({ now, before, points = false, invert = false }: { now: number | 
 function actions(i: Issues, weeksLeft: number | null): { tone: Tone; n: number; text: string; href: string }[] {
   const out: { tone: Tone; n: number; text: string; href: string }[] = [
     { tone: "danger", n: i.noZone, text: "domains with no DNS zone: nothing on them resolves", href: "/inventory" },
-    { tone: "danger", n: i.flagged, text: "sending domains breaking a health rule", href: "/domains?view=flagged" },
-    { tone: "danger", n: i.disconnected, text: "inboxes disconnected in Smartlead", href: "/inboxes" },
-    { tone: "warning", n: i.lowRep, text: "inboxes with warmup reputation under 90", href: "/inboxes" },
+    { tone: "danger", n: i.flagged, text: "sending domains breaking a health rule", href: "/inboxes?view=attention" },
+    { tone: "danger", n: i.disconnected, text: "inboxes disconnected in Smartlead", href: "/inboxes?view=disconnected" },
+    { tone: "warning", n: i.lowRep, text: "inboxes with warmup reputation under 90", href: "/inboxes?view=attention" },
     { tone: "warning", n: i.htCancelledLive, text: "domains in use whose Hypertide order is cancelled", href: "/inventory" },
     { tone: "warning", n: i.htUnpaid, text: "Hypertide orders not paid yet", href: "/inventory" },
     { tone: "warning", n: i.billedRetired, text: "retired domains still billed by Hypertide", href: "/inventory?view=replaced" },
@@ -177,7 +178,7 @@ async function OverviewContent() {
             {o.fleet.length ? (
               <div className="card-body flex flex-col border-t border-line">
                 {o.fleet.map((f) => (
-                  <Link key={f.clientId} href={`/domains?client=${f.clientId}&view=all`} className="fleet-row -mx-1 rounded-md px-1 hover:bg-surface-3">
+                  <Link key={f.clientId} href={`/inventory?client=${f.clientId}&view=all`} className="fleet-row -mx-1 rounded-md px-1 hover:bg-surface-3">
                     <span className="truncate text-ink-soft">{f.name}</span>
                     <span className="fleet-bar" style={{ width: `${Math.max(8, (f.total / fleetMax) * 100)}%` }}>
                       {FLEET_STATES.filter((s) => f.counts[s]).map((s) => (
@@ -207,7 +208,7 @@ async function OverviewContent() {
                 <Dot tone={STATUS_META[a.toStatus].tone} />
                 <div className="list-main">
                   <span className="truncate">
-                    <Link href={`/domains?d=${a.domainId}`} className="strong text-ink hover:underline">{a.domain}</Link>
+                    <DomainLink id={a.domainId} className="strong text-ink hover:underline">{a.domain}</DomainLink>
                     <span className="text-muted"> moved to </span>
                     <span className="text-ink">{STATUS_META[a.toStatus].label}</span>
                     {a.reason ? <span className="text-muted"> · {a.reason}</span> : null}

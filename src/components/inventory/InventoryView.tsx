@@ -1,12 +1,14 @@
 "use client";
 
+import { DomainLink } from "@/components/domains/DomainLink";
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { Archive, LifeBuoy, ArrowDown, ArrowRight, ArrowUp, Copy, Download, Globe, Search, Tag, X } from "lucide-react";
-import Link from "next/link";
+import { Archive, ArrowDown, ArrowLeftRight, ArrowRight, ArrowUp, CircleDot, Copy, Download, Globe, LifeBuoy, Search, Tag, X } from "lucide-react";
 import { useSearchParams } from "next/navigation";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { ColumnsMenu, useColumns, type ColumnDef } from "@/components/Columns";
+import { ChangeStatusDialog } from "@/components/domains/ChangeStatusDialog";
+import { ReplaceDialog } from "@/components/domains/ReplaceDialog";
 import { SetupDialog } from "@/components/domains/SetupDialog";
 import { MarkReplacedDialog } from "./MarkReplacedDialog";
 import { Badge, ClientCell, Empty, TagList } from "@/components/ui";
@@ -39,6 +41,8 @@ const sortValue = (d: DomainRow, k: SortKey): string | number | null => {
   }
 };
 
+const replaceable = (d: DomainRow) => d.status === "active" || d.status === "warming";
+
 export function InventoryView({ domains, clients }: { domains: DomainRow[]; clients: ClientRow[] }) {
   const params = useSearchParams();
   const viewOf = (v: string | null): Life | "all" => (v && (v === "all" || v in LIFE) ? (v as Life | "all") : "active");
@@ -51,12 +55,14 @@ export function InventoryView({ domains, clients }: { domains: DomainRow[]; clie
     setView(viewOf(urlView));
   }
   const [q, setQ] = useState("");
-  const [clientId, setClientId] = useState("");
+  const [clientId, setClientId] = useState(() => params.get("client") ?? "");
   const [tag, setTag] = useState("");
   const [registrar, setRegistrar] = useState("");
   const [sort, setSort] = useState<{ key: SortKey; dir: 1 | -1 }>({ key: "life", dir: 1 });
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [setupOpen, setSetupOpen] = useState(false);
+  const [replaceOpen, setReplaceOpen] = useState(false);
+  const [statusOpen, setStatusOpen] = useState(false);
   const [moveTo, setMoveTo] = useState<"replaced" | "recovery" | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const cols = useColumns("inventory", COLUMNS);
@@ -205,7 +211,7 @@ export function InventoryView({ domains, clients }: { domains: DomainRow[]; clie
                       <td className="col-check"><input type="checkbox" className="checkbox" checked={isSel} onChange={() => {}} aria-label={`Select ${d.name}`} tabIndex={-1} /></td>
                       <td className="col-first">
                         <span className="flex items-center gap-2">
-                          <Link href={`/domains?d=${d.id}&view=all`} className="strong hover:underline" onClick={(e) => e.stopPropagation()}>{d.name}</Link>
+                          <DomainLink id={d.id} className="strong hover:underline">{d.name}</DomainLink>
                           <TagList tags={d.tags} graceDaysLeft={d.graceDaysLeft} />
                         </span>
                       </td>
@@ -214,9 +220,9 @@ export function InventoryView({ domains, clients }: { domains: DomainRow[]; clie
                         <span className="flex items-center gap-1.5">
                           <span className={`status-dot tone-${life.tone}`}>{life.label}</span>
                           {d.replacedById ? (
-                            <Link href={`/domains?d=${d.replacedById}&view=all`} className="flex items-center gap-1 truncate text-muted hover:text-ink" onClick={(e) => e.stopPropagation()} title={`Replaced ${shortDate(d.replacedAt)}`}>
+                            <DomainLink id={d.replacedById} className="flex items-center gap-1 truncate text-muted hover:text-ink" title={`Replaced ${shortDate(d.replacedAt)}`}>
                               <ArrowRight size={12} />{d.replacedByName}
-                            </Link>
+                            </DomainLink>
                           ) : null}
                         </span>
                       </td>
@@ -287,8 +293,10 @@ export function InventoryView({ domains, clients }: { domains: DomainRow[]; clie
         <div className="bulk-bar" role="toolbar" aria-label="Selected domains">
           <span className="bulk-count">{selected.size} selected</span>
           <button type="button" className="btn btn-primary btn-sm" onClick={() => setSetupOpen(true)}><Tag size={14} /> Set up</button>
+          <button type="button" className="btn btn-sm" disabled={!selectedRows.some(replaceable)} title="Swap the selected active or warming domains for free ones" onClick={() => setReplaceOpen(true)}><ArrowLeftRight size={14} /> Replace</button>
           <button type="button" className="btn btn-sm" disabled={!selectedRows.some((d) => lifeOf(d) !== "replaced")} onClick={() => setMoveTo("replaced")}><Archive size={14} /> Mark as replaced</button>
           <button type="button" className="btn btn-sm" disabled={!selectedRows.some((d) => lifeOf(d) !== "recovery")} onClick={() => setMoveTo("recovery")}><LifeBuoy size={14} /> Move to recovery</button>
+          <button type="button" className="btn btn-sm" onClick={() => setStatusOpen(true)}><CircleDot size={14} /> Status</button>
           <button type="button" className="btn btn-sm" onClick={exportCsv}><Download size={14} /> Export</button>
           <span className="sep" />
           <button type="button" className="btn btn-sm" aria-label="Clear selection" onClick={() => setSelected(new Set())}><X size={14} /></button>
@@ -298,6 +306,18 @@ export function InventoryView({ domains, clients }: { domains: DomainRow[]; clie
       <MarkReplacedDialog to={moveTo ?? "replaced"} open={moveTo !== null} onOpenChange={(o) => { if (!o) setMoveTo(null); }}
         targets={selectedRows.filter((d) => lifeOf(d) !== moveTo).map((d) => ({ id: d.id, name: d.name }))}
         onDone={() => setSelected(new Set())} />
+      <ReplaceDialog
+        open={replaceOpen}
+        onOpenChange={setReplaceOpen}
+        targets={selectedRows.filter(replaceable).map((d) => ({ id: d.id, name: d.name, tld: d.tld, clientName: d.clientName, clientHue: d.clientHue }))}
+        onDone={() => setSelected(new Set())}
+      />
+      <ChangeStatusDialog
+        open={statusOpen}
+        onOpenChange={setStatusOpen}
+        targets={selectedRows.map((d) => ({ id: d.id, status: d.status }))}
+        onDone={() => setSelected(new Set())}
+      />
       <SetupDialog
         open={setupOpen}
         onOpenChange={setSetupOpen}

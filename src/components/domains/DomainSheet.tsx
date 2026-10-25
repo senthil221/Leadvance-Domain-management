@@ -16,7 +16,9 @@ export function DomainSheet({
   onOpenDomain,
   onReplace,
   reloadKey,
+  initialTab = "overview",
 }: {
+  initialTab?: string;
   domainId: string | null;
   onClose: () => void;
   onOpenDomain: (id: string) => void;
@@ -68,7 +70,7 @@ export function DomainSheet({
           ) : !d ? (
             <div className="sheet-body"><p className="zero">This domain no longer exists.</p></div>
           ) : (
-            <Tabs.Root defaultValue="overview" className="sheet-body" style={{ paddingTop: 0 }}>
+            <Tabs.Root key={`${d.domain.id}:${initialTab}`} defaultValue={initialTab} className="sheet-body" style={{ paddingTop: 0 }}>
               <Tabs.List className="tabs-list" aria-label="Domain details">
                 <Tabs.Trigger value="overview">Overview</Tabs.Trigger>
                 <Tabs.Trigger value="inboxes">Inboxes <span className="zero num">{d.inboxes.length}</span></Tabs.Trigger>

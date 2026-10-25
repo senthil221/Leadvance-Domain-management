@@ -1,4 +1,5 @@
 import { Suspense } from "react";
+import { DomainPanel } from "@/components/domains/DomainPanel";
 import { AppShell } from "@/components/shell/AppShell";
 import { NavLinks } from "@/components/shell/NavLinks";
 import { Monogram } from "@/components/ui";
@@ -21,6 +22,9 @@ export default function AppLayout({ children }: LayoutProps<"/">) {
       }
     >
       {children}
+      <Suspense fallback={null}>
+        <DomainPanel />
+      </Suspense>
     </AppShell>
   );
 }
@@ -31,9 +35,9 @@ async function NavWithCounts() {
   return (
     <NavLinks
       badges={{
-        "/domains": { value: c.byStatus.active ?? 0 },
+        "/inventory": { value: c.byStatus.active ?? 0 },
         "/replacements": { value: c.runningBatches, warning: true },
-        "/health": { value: c.openAlerts, warning: true },
+        "/inboxes": { value: c.openAlerts, warning: true },
       }}
     />
   );

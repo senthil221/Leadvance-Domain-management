@@ -1,7 +1,7 @@
 "use client";
 
+import { DomainLink } from "@/components/domains/DomainLink";
 import { BellOff, Check, CircleCheck } from "lucide-react";
-import Link from "next/link";
 import { useOptimistic, useState, useTransition } from "react";
 import { toast } from "sonner";
 import { updateAlert } from "@/app/actions";
@@ -46,7 +46,7 @@ export function AttentionList({ rows }: { rows: AttentionRow[] }) {
           <div key={r.alertId} className="list-row">
             <Dot tone={r.severity === "critical" ? "danger" : "warning"} />
             <div className="list-main">
-              <Link href={`/domains?d=${r.domainId}`} className="list-title hover:underline">{r.domain}</Link>
+              <DomainLink id={r.domainId} className="list-title hover:underline">{r.domain}</DomainLink>
               <span className="list-meta">{describe(r)} · {ago(r.openedAt)}</span>
             </div>
             <span className="hidden sm:inline-flex"><ClientCell name={r.clientName} hue={r.clientHue} /></span>

@@ -529,7 +529,7 @@ export async function listOpenAlerts() {
 
 export type InboxListRow = InboxRow & {
   domainId: string; domain: string; domainStatus: DomainStatus; clientName: string | null; clientHue: number | null;
-  domainTags: string[]; domainGraceDaysLeft: number | null;
+  domainTags: string[]; domainGraceDaysLeft: number | null; domainTld: string | null; domainAlerts: number;
   sent7: number; replies7: number; human7: number; bounces7: number; campaigns: number;
   smartleadTags: string[]; providerType: string | null; minWaitMins: number | null; dailySent: number | null;
   warmupMin: number | null; warmupReplyRate: number | null; warmupStatus: string | null;
@@ -556,7 +556,8 @@ export async function listInboxes() {
     select i.id, i.email, i.sender_name, i.status, i.warmup_enabled, i.warmup_per_day, i.warmup_rampup, i.daily_limit,
       i.warmup_reputation::float8 as warmup_reputation, i.smartlead_account_id, i.last_synced_at,
       d.id as domain_id, d.name as domain, d.status as domain_status, c.name as client_name, c.hue as client_hue,
-      d.tags as domain_tags, grace_days_left(d.status, d.draining_since) as domain_grace_days_left,
+      d.tags as domain_tags, grace_days_left(d.status, d.draining_since) as domain_grace_days_left, d.tld as domain_tld,
+      (select count(*)::int from alerts a where a.domain_id = d.id and a.status = 'open') as domain_alerts,
       coalesce(ev.sent7, 0) as sent7, coalesce(ev.replies7, 0) as replies7, coalesce(ev.human7, 0) as human7,
       coalesce(ev.bounces7, 0) as bounces7, coalesce(camp.n, i.campaign_count, 0) as campaigns,
       i.smartlead_tags, i.provider_type, i.min_wait_mins, i.daily_sent, i.warmup_min, i.warmup_reply_rate, i.warmup_status,

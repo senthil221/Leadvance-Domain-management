@@ -1,3 +1,4 @@
+import { DomainLink } from "@/components/domains/DomainLink";
 import type { Metadata } from "next";
 import Link from "next/link";
 import { Suspense } from "react";
@@ -130,7 +131,7 @@ async function InventoryContent() {
                 <tbody>
                   {renewals.map((r) => (
                     <tr key={r.id}>
-                      <td><Link href={`/domains?d=${r.id}&view=all`} className="strong hover:underline">{r.name}</Link></td>
+                      <td><DomainLink id={r.id} className="strong hover:underline">{r.name}</DomainLink></td>
                       <td><StatusDot status={r.status} /></td>
                       <td><ClientCell name={r.clientName} hue={r.clientHue} /></td>
                       <td>{r.registrar ?? <span className="zero">—</span>}</td>
