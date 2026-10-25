@@ -79,23 +79,6 @@ export function DomainSheet({
               </Tabs.List>
 
               <Tabs.Content value="overview" className="flex flex-col gap-5">
-                <div className="stats" style={{ gridTemplateColumns: "repeat(3, minmax(0,1fr))" }}>
-                  <div className="stat"><span className="stat-label">Sent · 7d</span><span className="stat-value" style={{ fontSize: 20 }}>{int(d.domain.sent)}</span></div>
-                  <div className="stat"><span className="stat-label">Human replies</span><span className="stat-value" style={{ fontSize: 20 }}><Metric value={d.domain.humanReplyRate} digits={2} /></span><span className="stat-foot">{int(d.domain.humanReplies)} replies</span></div>
-                  <div className="stat"><span className="stat-label">Bounce rate</span><span className="stat-value" style={{ fontSize: 20 }}><Metric value={d.domain.bounceRate} warn={2} bad={3} /></span><span className="stat-foot">{int(d.domain.bounces)} bounces</span></div>
-                </div>
-
-                {d.domain.sl7Sent != null ? (
-                  <p className="text-[12.5px] text-muted">
-                    Smartlead reports <span className="num text-ink">{int(d.domain.sl7Sent)}</span> sent,{" "}
-                    <span className="num text-ink">{int(d.domain.sl7Replies)}</span> replies and{" "}
-                    <span className="num text-ink">{int(d.domain.sl7Bounces)}</span> bounces over the last 7 days
-                    {d.domain.sent ? (Math.abs(d.domain.sent - d.domain.sl7Sent) > Math.max(20, d.domain.sl7Sent * 0.1)
-                      ? <span className="text-warning-ink">; that differs from the app&apos;s {int(d.domain.sent)} sent</span>
-                      : "; it matches the app's count") : "."}
-                  </p>
-                ) : null}
-
                 {d.alerts.length > 0 ? (
                   <div className="flex flex-col gap-2">
                     {d.alerts.map((a) => (
@@ -185,6 +168,22 @@ export function DomainSheet({
               </Tabs.Content>
 
               <Tabs.Content value="stats" className="flex flex-col gap-4">
+                <div className="stats" style={{ gridTemplateColumns: "repeat(3, minmax(0,1fr))" }}>
+                  <div className="stat"><span className="stat-label">Sent · 7d</span><span className="stat-value" style={{ fontSize: 20 }}>{int(d.domain.sent)}</span></div>
+                  <div className="stat"><span className="stat-label">Human replies</span><span className="stat-value" style={{ fontSize: 20 }}><Metric value={d.domain.humanReplyRate} digits={2} /></span><span className="stat-foot">{int(d.domain.humanReplies)} replies</span></div>
+                  <div className="stat"><span className="stat-label">Bounce rate</span><span className="stat-value" style={{ fontSize: 20 }}><Metric value={d.domain.bounceRate} warn={2} bad={3} /></span><span className="stat-foot">{int(d.domain.bounces)} bounces</span></div>
+                </div>
+
+                {d.domain.sl7Sent != null ? (
+                  <p className="text-[12.5px] text-muted">
+                    Smartlead reports <span className="num text-ink">{int(d.domain.sl7Sent)}</span> sent,{" "}
+                    <span className="num text-ink">{int(d.domain.sl7Replies)}</span> replies and{" "}
+                    <span className="num text-ink">{int(d.domain.sl7Bounces)}</span> bounces over the last 7 days
+                    {d.domain.sent ? (Math.abs(d.domain.sent - d.domain.sl7Sent) > Math.max(20, d.domain.sl7Sent * 0.1)
+                      ? <span className="text-warning-ink">; that differs from the app&apos;s {int(d.domain.sent)} sent</span>
+                      : "; it matches the app's count") : "."}
+                  </p>
+                ) : null}
                 <DailyChart daily={d.daily} />
                 <div className="fleet-legend">
                   <span><span className="dot" style={{ background: "var(--surface-4)" }} />Sent</span>

@@ -37,7 +37,7 @@ async function NavWithCounts() {
       badges={{
         "/inventory": { value: c.byStatus.active ?? 0 },
         "/replacements": { value: c.runningBatches, warning: true },
-        "/inboxes": { value: c.openAlerts, warning: true },
+        "/inboxes": { value: c.attention, warning: true },
       }}
     />
   );

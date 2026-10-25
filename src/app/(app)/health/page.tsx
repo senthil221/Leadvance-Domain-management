@@ -13,7 +13,7 @@ export const metadata: Metadata = { title: "Health" };
 export default function HealthPage() {
   return (
     <>
-      <PageHead title="Performance" sub="Rules that flag a domain for replacement, and the domains they have flagged" />
+      <PageHead title="Settings" sub="Health rules: what flags a domain for replacement, and the domains they have flagged" />
       <div className="page-body">
         <Suspense fallback={<HealthSkeleton />}>
           <HealthContent />

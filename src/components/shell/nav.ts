@@ -29,10 +29,10 @@ export const NAV: { label: string; items: NavGroup[] }[] = [
       { ...P.overview, pages: [] },
       { ...P.inboxes, pages: [] },
       { ...P.inventory, pages: [{ ...P.inventory, label: "Inventory" }, P.replacements] },
-      { ...P.stats, label: "Performance", pages: [P.stats, P.replies, P.bounces, P.health] },
+      { ...P.stats, label: "Performance", pages: [P.stats, P.replies, P.bounces] },
     ],
   },
-  { label: "Manage", items: [{ ...P.settings, pages: [] }] },
+  { label: "Manage", items: [{ ...P.settings, pages: [P.settings, P.health] }] },
 ];
 
 export const NAV_ITEMS: NavItem[] = Object.values(PAGES);

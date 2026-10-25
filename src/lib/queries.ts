@@ -1,4 +1,5 @@
 import "server-only";
+import { attentionDomainCount } from "./attention";
 import { sql } from "./db";
 import type { DomainStatus, ReplacementReason, StepStatus } from "./status";
 
@@ -22,18 +23,19 @@ export async function listVendors() {
   return sql<VendorRow[]>`select id, name, kind, api_supported from vendors order by kind, name`;
 }
 
-export type NavCounts = { byStatus: Record<DomainStatus, number>; openAlerts: number; runningBatches: number };
+export type NavCounts = { byStatus: Record<DomainStatus, number>; openAlerts: number; runningBatches: number; attention: number };
 
 export async function getNavCounts(): Promise<NavCounts> {
-  const [statusRows, [extra]] = await Promise.all([
+  const [statusRows, [extra], attention] = await Promise.all([
     sql<{ status: DomainStatus; n: number }[]>`select status, count(*)::int as n from domains group by status`,
     sql<{ openAlerts: number; runningBatches: number }[]>`
       select
         (select count(*)::int from alerts where status = 'open') as open_alerts,
         (select count(*)::int from replacement_batches where status = 'running') as running_batches`,
+    attentionDomainCount(sql),
   ]);
   const byStatus = Object.fromEntries(statusRows.map((r) => [r.status, r.n])) as Record<DomainStatus, number>;
-  return { byStatus, ...extra };
+  return { byStatus, ...extra, attention };
 }
 
 // ---------------------------------------------------------------------------
