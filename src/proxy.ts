@@ -28,6 +28,6 @@ export async function proxy(request: NextRequest) {
 }
 
 export const config = {
-  // Everything except static files, the webhook and the health check.
-  matcher: ["/((?!_next/|api/webhooks/|api/health|favicon.ico|.*\.(?:svg|png|jpg|ico|webp)$).*)"],
+  // Everything except static files, the webhook, the sheet feed and the health check.
+  matcher: ["/((?!_next/|api/webhooks/|api/sheet/|api/health|favicon.ico|.*\.(?:svg|png|jpg|ico|webp)$).*)"],
 };
