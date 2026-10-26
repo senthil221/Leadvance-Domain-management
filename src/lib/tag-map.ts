@@ -26,25 +26,14 @@ export function parseTagPairs(text: string) {
 }
 
 /**
- * The tag to client list for the second Smartlead account, where inboxes are
- * tagged with a person's name and several tags belong to one client. Settings →
- * Client assignment → "Use the built-in list" saves it and applies it.
+ * A server's saved tag to client list (settings key client_tag_list): for an
+ * account where inboxes are tagged with a person's name and several tags belong
+ * to one client. Settings → Client assignment → "Use the saved list" applies it.
  */
-export const BUILT_IN_TAG_PAIRS: { tag: string; client: string }[] = [
-  { tag: "Prateek Batra", client: "Beebee" },
-  { tag: "Raghav Bansal", client: "Beebee" },
-  { tag: "Steve Kloosterman", client: "Westshore" },
-  { tag: "George Vellios", client: "Straxo" },
-  { tag: "Shawn Hooper", client: "Salesdraft" },
-  { tag: "Neil Cornelius", client: "B2bdrive" },
-  { tag: "Gene Nguyen", client: "Mvinix" },
-  // Qualifi has the most tags; the spellings of Edward DeAngelis count as one.
-  { tag: "Amelia Wren", client: "Qualifi" },
-  { tag: "Sophia Lark", client: "Qualifi" },
-  { tag: "Edward DeAngelis", client: "Qualifi" },
-  { tag: "Eddie Deangelis", client: "Qualifi" },
-  { tag: "Isabella Cove", client: "Qualifi" },
-  { tag: "Michael Reynolds", client: "Qualifi" },
-  { tag: "Gia DeAngelis", client: "Qualifi" },
-  { tag: "Emma Soleil", client: "Qualifi" },
-];
+export function parseSavedPairs(v: unknown): { tag: string; client: string }[] {
+  if (!Array.isArray(v)) return [];
+  return v.flatMap((x) => {
+    const o = (x && typeof x === "object" ? x : {}) as Record<string, unknown>;
+    return typeof o.tag === "string" && typeof o.client === "string" && o.tag.trim() && o.client.trim() ? [{ tag: o.tag.trim(), client: o.client.trim() }] : [];
+  });
+}

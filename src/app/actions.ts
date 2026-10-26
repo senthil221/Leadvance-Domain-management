@@ -7,7 +7,7 @@ import { requireActor } from "@/lib/auth";
 import { jobSql, sql } from "@/lib/db";
 import { hypertideAcceptsDomain } from "@/integrations/hypertide";
 import { getDomainDetail, listStorageCandidates } from "@/lib/queries";
-import { BUILT_IN_TAG_PAIRS, MARK_CHOICES, normTag, parseTagPairs } from "@/lib/tag-map";
+import { MARK_CHOICES, normTag, parseSavedPairs, parseTagPairs } from "@/lib/tag-map";
 import { DOMAIN_STATUSES, REPLACEMENT_REASONS } from "@/lib/status";
 
 export type ActionResult<T = undefined> = { ok: true; data: T } | { ok: false; error: string };
@@ -269,17 +269,20 @@ async function storePairs(pairs: { tag: string; client: string }[]) {
   return newClients;
 }
 
-/** Switches to mapped tags, saves the built-in list and puts every domain under its client. */
+/** Switches to mapped tags, saves this server's tag list and puts every domain under its client. */
 export async function applyBuiltInTagMap(): Promise<ActionResult<{ saved: number; newClients: number; moved: number }>> {
   try {
     await requireActor();
-    const newClients = await storePairs(BUILT_IN_TAG_PAIRS);
+    const [row] = await sql<{ v: string }[]>`select value::text as v from settings where key = 'client_tag_list'`;
+    const pairs = parseSavedPairs(row ? JSON.parse(row.v) : null);
+    if (!pairs.length) return { ok: false, error: "This server has no saved tag list. Paste your pairs under Map tags to clients instead." };
+    const newClients = await storePairs(pairs);
     await sql`insert into settings (key, value) values ('client_source', '"mapped"'::jsonb)
       on conflict (key) do update set value = excluded.value, updated_at = now()`;
     const { clientsFromMappedTags } = await import("@/jobs/smartlead-sync");
     const r = await clientsFromMappedTags(jobSql, true);
     refresh();
-    return { ok: true, data: { saved: BUILT_IN_TAG_PAIRS.length, newClients, moved: r.domainsMapped } };
+    return { ok: true, data: { saved: pairs.length, newClients, moved: r.domainsMapped } };
   } catch (e) {
     return fail(e);
   }

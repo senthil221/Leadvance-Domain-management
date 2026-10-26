@@ -1,3 +1,4 @@
+import { parseSavedPairs } from "@/lib/tag-map";
 import { parseWarmupProgram } from "@/lib/warmup-program";
 import "server-only";
 import { attentionDomainCount } from "./attention";
@@ -758,6 +759,7 @@ export async function getSettings() {
     drainDays: Number(map.drain_days ?? 7),
     clientSource: map.client_source === "mapped" ? ("mapped" as const) : ("tags" as const),
     warmupProgram: parseWarmupProgram(map.warmup_program),
+    clientTagList: parseSavedPairs(map.client_tag_list),
     storageLowThreshold: Number(map.storage_low_threshold ?? 20),
     hypertideNameservers: Array.isArray(map.hypertide_nameservers) ? (map.hypertide_nameservers as string[]) : [],
     hypertideTemplate: {

@@ -118,7 +118,7 @@ async function SettingsContent() {
 
       <section className="card" aria-labelledby="assign-title">
         <div className="card-head"><h2 id="assign-title" className="card-title">Client assignment</h2><span className="card-sub">how Smartlead tags become clients</span></div>
-        <ClientAssignment source={settings.clientSource} clients={clients} tags={tags} />
+        <ClientAssignment source={settings.clientSource} clients={clients} tags={tags} savedList={settings.clientTagList} />
       </section>
 
       <section className="card" aria-labelledby="clients-title">

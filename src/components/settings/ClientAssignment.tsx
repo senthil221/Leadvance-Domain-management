@@ -11,7 +11,7 @@ import type { ClientRow, TagRow } from "@/lib/queries";
  * of the same name, or you list which tags belong to which client (several
  * tags can share one client, for example one tag per sender).
  */
-export function ClientAssignment({ source, clients, tags }: { source: "tags" | "mapped"; clients: ClientRow[]; tags: TagRow[] }) {
+export function ClientAssignment({ source, clients, tags, savedList }: { source: "tags" | "mapped"; clients: ClientRow[]; tags: TagRow[]; savedList: { tag: string; client: string }[] }) {
   const [pending, startTransition] = useTransition();
   const [text, setText] = useState("");
   const run = (fn: () => Promise<void>) => startTransition(fn);
@@ -32,15 +32,17 @@ export function ClientAssignment({ source, clients, tags }: { source: "tags" | "
         ))}
       </div>
 
-      <div className="flex flex-wrap items-center gap-2">
-        <button type="button" className="btn btn-primary" disabled={pending}
-          onClick={() => run(async () => {
-            const r = await applyBuiltInTagMap();
-            if (!r.ok) return void toast.error(r.error);
-            toast.success(`Built-in list saved: ${r.data.saved} tags${r.data.newClients ? `, ${r.data.newClients} new client${r.data.newClients === 1 ? "" : "s"}` : ""}, ${r.data.moved} domain${r.data.moved === 1 ? "" : "s"} moved`);
-          })}>Use the built-in list</button>
-        <span className="field-hint">15 tags to 7 clients. Switches to mapped tags and applies it. Existing clients are kept.</span>
-      </div>
+      {savedList.length ? (
+        <div className="flex flex-wrap items-center gap-2">
+          <button type="button" className="btn btn-primary" disabled={pending}
+            onClick={() => run(async () => {
+              const r = await applyBuiltInTagMap();
+              if (!r.ok) return void toast.error(r.error);
+              toast.success(`Saved list applied: ${r.data.saved} tags${r.data.newClients ? `, ${r.data.newClients} new client${r.data.newClients === 1 ? "" : "s"}` : ""}, ${r.data.moved} domain${r.data.moved === 1 ? "" : "s"} moved`);
+            })}>Use the saved list</button>
+          <span className="field-hint">{savedList.length} tags to {new Set(savedList.map((p) => p.client.toLowerCase())).size} clients. Switches to mapped tags and applies it. Existing clients are kept.</span>
+        </div>
+      ) : null}
 
       <div className="flex flex-wrap items-center gap-2">
         <button type="button" className="btn" disabled={pending}
