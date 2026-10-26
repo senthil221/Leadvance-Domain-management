@@ -3,9 +3,10 @@
 import { Plus } from "lucide-react";
 import { useState, useTransition } from "react";
 import { toast } from "sonner";
-import { createClient, saveHypertideTemplate, saveSettings } from "@/app/actions";
+import { createClient, saveHypertideTemplate, saveSettings, saveWarmupProgram } from "@/app/actions";
 import { ClientCell } from "@/components/ui";
 import type { ClientRow } from "@/lib/queries";
+import type { WarmupProgram } from "@/lib/warmup-program";
 
 export function LifecycleForm({ drainDays, storageLowThreshold, hypertideNameservers }: { drainDays: number; storageLowThreshold: number; hypertideNameservers: string[] }) {
   const [drain, setDrain] = useState(String(drainDays));
@@ -50,6 +51,55 @@ export function LifecycleForm({ drainDays, storageLowThreshold, hypertideNameser
         <textarea className="textarea mono" rows={2} style={{ minHeight: 60, maxWidth: 420 }} value={ns} onChange={(e) => setNs(e.target.value)} placeholder={"ns1.example.com\nns2.example.com"} />
         <span className="field-hint">Only used when Hypertide isn&apos;t connected; with it, each domain gets its own pair. One per line.</span>
       </label>
+      <div><button type="submit" className="btn" disabled={!dirty || pending}>{pending ? "Saving…" : "Save"}</button></div>
+    </form>
+  );
+}
+
+/** Warm-up for new domains: switched on automatically when a young domain connects to Smartlead. */
+export function WarmupProgramForm({ program }: { program: WarmupProgram }) {
+  const [on, setOn] = useState(program.enabled);
+  const [v, setV] = useState({ days: String(program.days), maxAgeDays: String(program.maxAgeDays), perDay: String(program.perDay), rampup: String(program.rampup), replyRate: String(program.replyRate) });
+  const [pending, startTransition] = useTransition();
+  const set = (k: keyof typeof v) => (e: React.ChangeEvent<HTMLInputElement>) => setV((x) => ({ ...x, [k]: e.target.value }));
+  const num = Object.fromEntries(Object.entries(v).map(([k, x]) => [k, Number(x)])) as Record<keyof typeof v, number>;
+  const dirty = on !== program.enabled || (Object.keys(v) as (keyof typeof v)[]).some((k) => v[k] !== String(program[k]));
+  const field = (k: keyof typeof v, label: string, unit: string, hint: string) => (
+    <label className="field">
+      <span className="field-label">{label}</span>
+      <div className="flex items-center gap-2">
+        <input className="input num" style={{ width: 90 }} inputMode="numeric" value={v[k]} onChange={set(k)} />
+        <span className="text-muted">{unit}</span>
+      </div>
+      <span className="field-hint">{hint}</span>
+    </label>
+  );
+  return (
+    <form
+      className="card-body flex flex-col gap-4"
+      onSubmit={(e) => {
+        e.preventDefault();
+        startTransition(async () => {
+          const r = await saveWarmupProgram({ enabled: on, ...num });
+          if (!r.ok) toast.error(r.error);
+          else toast.success(on ? "Saved. New domains are warmed up automatically" : "Saved. Automatic warm-up is off");
+        });
+      }}
+    >
+      <label className="flex cursor-pointer items-start gap-2.5">
+        <input type="checkbox" className="checkbox mt-1" checked={on} onChange={(e) => setOn(e.target.checked)} />
+        <span className="flex flex-col">
+          <span className="strong">Warm up new domains automatically</span>
+          <span className="field-hint">When a new domain connects to Smartlead, warmup is switched on with the values below and the domain shows under Smartlead → Warming up.</span>
+        </span>
+      </label>
+      <div className="grid gap-4 sm:grid-cols-2">
+        {field("days", "Warm up for", "days", "How long a domain stays in Warming up. 12 to 14 is usual.")}
+        {field("maxAgeDays", "New means at most", "days old", "Age counts from the first inbox added to Smartlead. 0 is only today's.")}
+        {field("perDay", "Warmup emails a day", "per inbox", "Smartlead's total warmup per day.")}
+        {field("rampup", "Ramp-up", "per day", "How much the daily warmup grows each day.")}
+        {field("replyRate", "Reply rate", "%", "Share of warmup emails that get a reply.")}
+      </div>
       <div><button type="submit" className="btn" disabled={!dirty || pending}>{pending ? "Saving…" : "Save"}</button></div>
     </form>
   );

@@ -9,6 +9,7 @@ import { syncHypertideOrders } from "./hypertide-sync";
 import { processInboxChanges, runDuePlans } from "./inbox-settings";
 import { checkNameservers, processNameserverRequests } from "./nameservers";
 import { advanceReplacements, trackHypertideOrders } from "./replacements";
+import { enrolNewDomains } from "./warmup-program";
 import { syncAccounts, syncCampaigns, syncClients, syncDomainStats, dayIn } from "./smartlead-sync";
 
 // The worker's jobs and how often each runs. A job that needs an integration
@@ -80,6 +81,12 @@ export const JOBS: Job[] = [
       const clients = await syncClients(sql, smartlead).catch((e: Error) => ({ clientsError: e.message }));
       return { ...clients, ...(await syncAccounts(sql, smartlead)) };
     }),
+  },
+  {
+    name: "warmup-new-domains",
+    label: "Warm up new domains",
+    everyMinutes: 30,
+    run: ({ sql }) => enrolNewDomains(sql),
   },
   {
     name: "smartlead-campaigns",

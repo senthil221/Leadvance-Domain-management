@@ -1,6 +1,6 @@
 "use client";
 
-import { ArrowLeftRight, ChevronDown, ChevronRight, ChevronsDownUp, ChevronsUpDown, Inbox, Info, PlugZap, Search, Settings2, ShieldCheck, Shuffle, Tag, X } from "lucide-react";
+import { ArrowLeftRight, ChevronDown, ChevronRight, ChevronsDownUp, ChevronsUpDown, Inbox, Info, PlugZap, Search, Settings2, ShieldCheck, Shuffle, Tag, Tags as TagsIcon, X } from "lucide-react";
 import { useSearchParams } from "next/navigation";
 import { DropdownMenu } from "radix-ui";
 import { type ReactNode, useTransition } from "react";
@@ -11,26 +11,32 @@ import { Fragment, useEffect, useMemo, useState } from "react";
 import { ColumnsMenu, useColumns, type ColumnDef } from "@/components/Columns";
 import { SortTh } from "@/components/SortTh";
 import { DomainLink } from "@/components/domains/DomainLink";
-import { MARK_CHOICES, MARK_TAGS, normTag } from "@/lib/tag-map";
+import { MARK_CHOICES, MARK_TAGS, isMark, normTag } from "@/lib/tag-map";
+import { warmupProgress } from "@/lib/warmup-program";
 import { ReplaceDialog } from "@/components/domains/ReplaceDialog";
 import { ClientCell, Empty, Rep, StatusDot, TagList } from "@/components/ui";
 import { InboxSettingsDialog } from "./InboxSettingsDialog";
+import { MoveToTagDialog } from "./MoveToTagDialog";
 import { PlansCard } from "./PlansCard";
 import { ago, int } from "@/lib/format";
 import type { ClientRow, InboxListRow, PlanRow } from "@/lib/queries";
 import { DOMAIN_STATUSES, type DomainStatus } from "@/lib/status";
 
-// Four views of the sending setup. Active and Disconnected list inboxes under
-// their client and domain; Needs attention and All domains list one line per domain.
+// Five views of the sending setup. Active and Disconnected list inboxes under
+// their client and domain; Warming up, Needs attention and All domains list one line per domain.
+// Domains in the warm-up programme (enrolled, not yet moved to a tag) live under Warming up only.
+const warmingUp = (i: InboxListRow) => i.domainWarmupStartedAt != null && i.domainWarmupDoneAt == null;
 const TABS = [
-  { key: "active", label: "Active", match: (i: InboxListRow) => i.status === "connected" && i.domainStatus === "active" },
-  { key: "attention", label: "Needs attention", match: (i: InboxListRow) => i.domainStatus === "active" || i.domainStatus === "warming" },
+  { key: "active", label: "Active", match: (i: InboxListRow) => i.status === "connected" && i.domainStatus === "active" && !warmingUp(i) },
+  { key: "warming", label: "Warming up", match: (i: InboxListRow) => warmingUp(i) && i.status !== "removed" },
+  { key: "attention", label: "Needs attention", match: (i: InboxListRow) => (i.domainStatus === "active" || i.domainStatus === "warming") && !warmingUp(i) },
   { key: "disconnected", label: "Disconnected", match: (i: InboxListRow) => i.status === "disconnected" },
   { key: "all", label: "All domains", match: () => true },
 ] as const;
 type TabKey = (typeof TABS)[number]["key"];
 const tabOf = (v: string | null): TabKey => (TABS.find((t) => t.key === v)?.key ?? "active");
-const FLAT: TabKey[] = ["attention", "all"];
+const FLAT: TabKey[] = ["warming", "attention", "all"];
+const tabMatch = (k: TabKey) => TABS.find((t) => t.key === k)!.match;
 
 /** Why a domain is on the Needs attention list: everything wrong with its sending setup. */
 type Reason = { label: string; tone: "danger" | "warning" };
@@ -55,6 +61,7 @@ type Group = {
   sent7: number; replies7: number; human7: number; bounces7: number;
   sentToday: number; avgWait: number | null; pending: number; tags: string[]; esp: string | null;
   domainTags: string[]; graceDaysLeft: number | null; alerts: number;
+  warm: { day: number; days: number; ready: boolean; left: number; pct: number } | null;
   ageDays: number | null; dns: Dns; bl: number | null; blListings: string[]; blocked: number; paused: number; disconnected: number;
 };
 
@@ -90,6 +97,7 @@ function group(rows: InboxListRow[]): Group[] {
       domainTags: f.domainTags.filter((t) => MARK_TAGS.includes(t.toLowerCase())),
       graceDaysLeft: f.domainGraceDaysLeft,
       alerts: f.domainAlerts,
+      warm: f.domainWarmupDoneAt ? null : warmupProgress(f.domainWarmupStartedAt, f.domainWarmupDays),
       ageDays: (() => {
         // Age counts from the first inbox added to Smartlead; registration only when no inbox has a date.
         const t = list.map((i) => (i.smartleadCreatedAt ? new Date(i.smartleadCreatedAt).getTime() : NaN)).filter((x) => !Number.isNaN(x));
@@ -129,6 +137,7 @@ function roll(key: string, label: string, clientName: string | null, domains: Gr
     ageDays: null,
     domainTags: [],
     graceDaysLeft: null,
+    warm: null,
     campaigns: Math.max(0, ...domains.map((d) => d.campaigns)),
     dns: { state: domains.some((d) => d.dns.state === "nozone") ? "nozone" : missing.length ? "missing" : domains.every((d) => d.dns.state === "unknown") ? "unknown" : "ok", missing, checks: [] },
     dnsBad: domains.filter((d) => d.dns.state === "missing" || d.dns.state === "nozone").length,
@@ -171,10 +180,11 @@ function byClient(groups: Group[]): ClientGroup[] {
   });
 }
 
-type SortKey = "reasons" | "domain" | "status" | "client" | "esp" | "tags" | "age" | "dnsMissing" | "warmupState" | "blacklist" | "connection" | "count" | "avgWarmup" | "avgLimit" | "capacity" | "sentToday" | "avgWait" | "avgRep" | "campaigns" | "sent7" | "replyRate" | "bounceRate";
+type SortKey = "progress" | "reasons" | "domain" | "status" | "client" | "esp" | "tags" | "age" | "dnsMissing" | "warmupState" | "blacklist" | "connection" | "count" | "avgWarmup" | "avgLimit" | "capacity" | "sentToday" | "avgWait" | "avgRep" | "campaigns" | "sent7" | "replyRate" | "bounceRate";
 const sortValue = (g: Group, k: SortKey): string | number | null => {
   switch (k) {
     case "status": return DOMAIN_STATUSES.indexOf(g.status);
+    case "progress": return g.warm ? g.warm.pct : null;
     case "reasons": return reasonsOf(g).length;
     case "client": return g.clientName?.toLowerCase() ?? null;
     case "esp": return g.esp;
@@ -276,6 +286,16 @@ function BlacklistCell({ count, listings }: { count: number | null; listings: st
   return <span className="ns-status tone-danger" title={listings.join(", ") || undefined}>Listed on {count}</span>;
 }
 
+/** Warming up: the day the domain is on, a bar, and when it is ready to move to a tag. */
+function WarmProgress({ warm }: { warm: NonNullable<Group["warm"]> }) {
+  return (
+    <span className="wu-progress" title={warm.ready ? "Warm-up days are up: ready to move to a tag" : `${warm.left} day${warm.left === 1 ? "" : "s"} left`}>
+      <span className="wu-bar"><span className={warm.ready ? "is-ready" : undefined} style={{ width: `${warm.pct}%` }} /></span>
+      <span className="wu-label">{warm.ready ? "Ready" : `Day ${warm.day} of ${warm.days}`}</span>
+    </span>
+  );
+}
+
 function ChangeBadge({ change }: { change: InboxListRow["change"] }) {
   if (!change) return null;
   const what = Object.entries(change.changes).map(([k, v]) => `${k.replace(/_/g, " ")} ${v}`).join(", ");
@@ -301,6 +321,7 @@ export function InboxesView({ inboxes, clients, plans, smartleadConnected, dryRu
     setTab(tabOf(urlView));
   }
   const [replaceOpen, setReplaceOpen] = useState(false);
+  const [moveOpen, setMoveOpen] = useState(false);
   const [q, setQ] = useState("");
   const [clientId, setClientId] = useState("");
   const [sort, setSort] = useState<{ key: SortKey; dir: 1 | -1 }>({ key: "domain", dir: 1 });
@@ -319,12 +340,12 @@ export function InboxesView({ inboxes, clients, plans, smartleadConnected, dryRu
     const client = clients.find((c) => c.id === clientId)?.name;
     return inboxes.filter((i) => (!client || i.clientName === client) && (!esp || i.providerType === esp));
   }, [inboxes, clients, clientId, esp]);
-  const attentionCount = useMemo(() => group(base.filter(TABS[1].match)).filter((g) => reasonsOf(g).length > 0).length, [base]);
+  const attentionCount = useMemo(() => group(base.filter(tabMatch("attention"))).filter((g) => reasonsOf(g).length > 0).length, [base]);
   const lowRepInboxes = useMemo(() => base.filter((i) => i.status === "connected" && i.warmupReputation != null && i.warmupReputation < 90).length, [base]);
   // Domains in every view but Disconnected, which counts inboxes.
   const counts = useMemo(() => {
-    const domains = (t: (typeof TABS)[number]) => new Set(base.filter(t.match).map((i) => i.domainId)).size;
-    return { active: domains(TABS[0]), attention: attentionCount, disconnected: base.filter(TABS[2].match).length, all: domains(TABS[3]) } as Record<TabKey, number>;
+    const domains = (k: TabKey) => new Set(base.filter(tabMatch(k)).map((i) => i.domainId)).size;
+    return { active: domains("active"), warming: domains("warming"), attention: attentionCount, disconnected: base.filter(tabMatch("disconnected")).length, all: domains("all") } as Record<TabKey, number>;
   }, [base, attentionCount]);
 
   const groups = useMemo(() => {
@@ -577,7 +598,8 @@ export function InboxesView({ inboxes, clients, plans, smartleadConnected, dryRu
                   </th>
                   <SortTh k="domain" sort={sort} onSort={sortBy}>Domain</SortTh>
                   <SortTh k="client" sort={sort} onSort={sortBy}>Client</SortTh>
-                  <SortTh k="status" sort={sort} onSort={sortBy}>Status</SortTh>
+                  <SortTh k="tags" sort={sort} onSort={sortBy}>Tag</SortTh>
+                  {tab === "warming" ? <SortTh k="progress" sort={sort} onSort={sortBy}>Warm-up</SortTh> : <SortTh k="status" sort={sort} onSort={sortBy}>Status</SortTh>}
                   {tab === "attention" ? <SortTh k="reasons" sort={sort} onSort={sortBy}>What needs attention</SortTh> : null}
                   <SortTh k="count" sort={sort} onSort={sortBy} num>Inboxes</SortTh>
                   <SortTh k="age" sort={sort} onSort={sortBy} num>Age</SortTh>
@@ -603,7 +625,8 @@ export function InboxesView({ inboxes, clients, plans, smartleadConnected, dryRu
                         </span>
                       </td>
                       <td><ClientCell name={g.clientName} hue={g.clientHue} /></td>
-                      <td><StatusDot status={g.status} /></td>
+                      <td><Tags tags={g.tags.filter((t) => !isMark(t))} /></td>
+                      <td>{tab === "warming" && g.warm ? <WarmProgress warm={g.warm} /> : <StatusDot status={g.status} />}</td>
                       {tab === "attention" ? (
                         <td>
                           <span className="flex flex-wrap gap-1">
@@ -708,7 +731,7 @@ export function InboxesView({ inboxes, clients, plans, smartleadConnected, dryRu
             </tbody>
           </table>
           )}
-          {groups.length === 0 ? <Empty icon={Inbox} title={tab === "attention" ? "Nothing needs attention" : "No inboxes here"}>{tab === "attention" ? "Every active domain is connected, warmed and clean." : "Inboxes appear once a domain is set up on Hypertide and connected to Smartlead."}</Empty> : null}
+          {groups.length === 0 ? <Empty icon={Inbox} title={tab === "attention" ? "Nothing needs attention" : tab === "warming" ? "No domains are warming up" : "No inboxes here"}>{tab === "attention" ? "Every active domain is connected, warmed and clean." : tab === "warming" ? "New domains that connect to Smartlead appear here and warm up for the days set in Settings → Warming up." : "Inboxes appear once a domain is set up on Hypertide and connected to Smartlead."}</Empty> : null}
         </div>
         <div className="table-footer">
           <span><b>{int(groups.length)}</b> domains</span>
@@ -725,6 +748,7 @@ export function InboxesView({ inboxes, clients, plans, smartleadConnected, dryRu
         <div className="bulk-bar" role="toolbar" aria-label="Selected inboxes">
           <span className="bulk-count">{selected.size} inbox{selected.size === 1 ? "" : "es"} · {selectedDomains.length} domain{selectedDomains.length === 1 ? "" : "s"}</span>
           <button type="button" className="btn btn-primary btn-sm" disabled={!smartleadConnected} onClick={() => setEditOpen(true)}><Settings2 size={14} /> Configure settings</button>
+          <button type="button" className="btn btn-sm" disabled={!smartleadConnected} title="Move the selected domains to a Smartlead tag" onClick={() => setMoveOpen(true)}><TagsIcon size={14} /> Move to tag</button>
           <button type="button" className="btn btn-sm" disabled={!replaceTargets.length} title="Swap the selected domains for free ones" onClick={() => setReplaceOpen(true)}><ArrowLeftRight size={14} /> Replace{replaceTargets.length ? ` (${replaceTargets.length})` : ""}</button>
           <button type="button" className="btn btn-sm" onClick={() => document.getElementById("plans-title")?.scrollIntoView({ behavior: "smooth" })}><Shuffle size={14} /> Daily plan</button>
           <DropdownMenu.Root>
@@ -749,6 +773,7 @@ export function InboxesView({ inboxes, clients, plans, smartleadConnected, dryRu
           <button type="button" className="btn btn-sm" aria-label="Clear selection" onClick={() => setSelected(new Set())}><X size={14} /></button>
         </div>
       ) : null}
+      <MoveToTagDialog open={moveOpen} onOpenChange={setMoveOpen} domainIds={selectedDomains} inboxes={inboxes} dryRun={dryRun} appProblem={appProblem} onDone={() => setSelected(new Set())} />
       <ReplaceDialog open={replaceOpen} onOpenChange={setReplaceOpen} targets={replaceTargets} onDone={() => setSelected(new Set())} />
       <InboxSettingsDialog open={editOpen} onOpenChange={setEditOpen} inboxIds={[...selected]} domains={selectedDomains.length} current={current} selectedTags={selectedTags} knownTags={knownTags} dryRun={dryRun} appProblem={appProblem} />
     </div>

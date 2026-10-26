@@ -2,7 +2,7 @@ import type { Metadata } from "next";
 import { headers } from "next/headers";
 import { Suspense } from "react";
 import { ClientAssignment } from "@/components/settings/ClientAssignment";
-import { ClientsList, HypertideOrderForm, LifecycleForm } from "@/components/settings/SettingsForms";
+import { ClientsList, HypertideOrderForm, LifecycleForm, WarmupProgramForm } from "@/components/settings/SettingsForms";
 import { CopyUrl, SyncPanel, type SyncJob } from "@/components/settings/SyncPanel";
 import { Badge, PageHead, Skeleton } from "@/components/ui";
 import { JOBS } from "@/jobs";
@@ -104,6 +104,11 @@ async function SettingsContent() {
       <section className="card" aria-labelledby="life-title">
         <div className="card-head"><h2 id="life-title" className="card-title">Lifecycle</h2></div>
         <LifecycleForm drainDays={settings.drainDays} storageLowThreshold={settings.storageLowThreshold} hypertideNameservers={settings.hypertideNameservers} />
+      </section>
+
+      <section className="card" aria-labelledby="warm-title">
+        <div className="card-head"><h2 id="warm-title" className="card-title">Warming up</h2><span className="card-sub">new domains connected to Smartlead</span></div>
+        <WarmupProgramForm program={settings.warmupProgram} />
       </section>
 
       <section className="card" aria-labelledby="ht-title">

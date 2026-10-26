@@ -960,6 +960,106 @@ export async function markInboxes(input: { inboxIds: string[]; mark: string; on:
   }
 }
 
+const warmupProgramInput = z.object({
+  enabled: z.boolean(),
+  days: z.number().int().min(1).max(60),
+  maxAgeDays: z.number().int().min(0).max(30),
+  perDay: z.number().int().min(1).max(1000),
+  rampup: z.number().int().min(0).max(1000),
+  replyRate: z.number().int().min(0).max(100),
+});
+
+/** Settings → Warming up: the values new domains are warmed with. */
+export async function saveWarmupProgram(input: z.input<typeof warmupProgramInput>): Promise<ActionResult> {
+  try {
+    await requireActor();
+    const v = warmupProgramInput.parse(input);
+    await sql`insert into settings (key, value) values ('warmup_program', ${JSON.stringify(v)}::text::jsonb)
+      on conflict (key) do update set value = excluded.value, updated_at = now()`;
+    refresh();
+    return { ok: true, data: undefined };
+  } catch (e) {
+    return fail(e);
+  }
+}
+
+/**
+ * Moves whole domains onto a Smartlead tag, before or after their warm-up days
+ * are up. Their inboxes take the tag (and lose their other tags), copy the
+ * sending limit and warmup of the inboxes already on it, and the domain leaves
+ * the Warming up view for its client.
+ */
+export async function moveDomainsToTag(input: { domainIds: string[]; tag: string }): Promise<ActionResult<{ message: string }>> {
+  try {
+    const actor = await requireActor();
+    const v = z.object({
+      domainIds: z.array(z.uuid()).min(1, "Select at least one domain").max(2000),
+      tag: z.string().trim().min(1, "Choose a tag").max(100),
+    }).parse(input);
+    const app = await smartleadAppOrError("Moving to a tag");
+    const rows = await sql`
+      select id, smartlead_account_id as account, smartlead_tags as tags from inboxes
+      where domain_id in ${sql(v.domainIds)} and status = 'connected' and smartlead_account_id is not null`;
+    if (!rows.length) return { ok: false, error: "None of these domains has a connected Smartlead inbox" };
+
+    // What the tag's current inboxes run on: the most common value of each setting.
+    const [profile] = await sql<{ n: number; dailyLimit: number | null; wait: number | null; perDay: number | null; reply: number | null }[]>`
+      select count(*)::int as n, mode() within group (order by i.daily_limit) as daily_limit,
+        mode() within group (order by i.min_wait_mins) as wait, mode() within group (order by i.warmup_per_day) as per_day,
+        mode() within group (order by i.warmup_reply_rate) as reply
+      from inboxes i join domains d on d.id = i.domain_id
+      where i.status = 'connected' and d.id <> all(${v.domainIds}::uuid[]) and (d.warmup_started_at is null or d.warmup_done_at is not null)
+        and exists (select 1 from unnest(i.smartlead_tags) t where lower(trim(t)) = ${v.tag.toLowerCase()})`;
+
+    let known = await app.tags();
+    const tagId = async (name: string) => {
+      let t = known.find((k) => k.name.toLowerCase() === name.toLowerCase());
+      if (!t) {
+        const made = await app.createTag(name);
+        if (!made) return null;
+        known = [...known, made];
+        t = made;
+      }
+      return t;
+    };
+    const { retagRows } = await import("@/jobs/replacements");
+    const { isMark } = await import("@/lib/tag-map");
+    const target = v.tag.toLowerCase();
+    const remove = [...new Set(rows.flatMap((r) => (r.tags as string[]) ?? []).filter((t) => !isMark(t) && t.toLowerCase() !== target))];
+    const retagged = app.dryRun ? 0 : await retagRows(jobSql, app, rows, [v.tag], remove, tagId, () => known);
+
+    const copied = Object.fromEntries(Object.entries({
+      daily_limit: profile?.dailyLimit, min_wait_mins: profile?.wait, warmup_per_day: profile?.perDay, warmup_reply_rate: profile?.reply,
+    }).filter(([, x]) => x != null && Number(x) > 0));
+    if (profile?.n && Object.keys(copied).length) {
+      await sql`
+        insert into inbox_setting_changes (inbox_id, changes, source, actor)
+        select x.id, ${sql.json(copied)}, 'move-to-tag', ${actor}
+        from unnest(${rows.map((r) => r.id as string)}::uuid[]) as x(id)`;
+      kickJob("inbox-settings");
+    }
+
+    // The domain leaves Warming up, takes the client of the tag, and goes live.
+    await sql`update domains set warmup_done_at = now(), warmup_moved_to = ${v.tag}
+      where id in ${sql(v.domainIds)} and warmup_started_at is not null and warmup_done_at is null`;
+    const [map] = await sql<{ clientId: string }[]>`
+      select m.client_id from client_tags m join clients c on c.id = m.client_id and c.archived_at is null
+      where m.tag = ${normTag(v.tag)}`;
+    if (map) await sql`update domains set client_id = ${map.clientId} where id in ${sql(v.domainIds)} and status <> 'in_storage'`;
+    await sql`select transition_domain(d.id, 'active', ${"moved to tag " + v.tag}, ${actor})
+      from domains d where d.id in ${sql(v.domainIds)} and d.status = 'warming'`;
+    refresh();
+
+    const doms = `${v.domainIds.length} domain${v.domainIds.length === 1 ? "" : "s"}`;
+    const like = profile?.n && Object.keys(copied).length
+      ? `, copying ${[copied.daily_limit ? `${copied.daily_limit} a day sending` : null, copied.warmup_per_day ? `${copied.warmup_per_day} a day warmup` : null].filter(Boolean).join(" and ")} from the ${profile.n} inboxes already on it`
+      : ". No other inbox has this tag yet, so limits were left as they are";
+    return { ok: true, data: { message: app.dryRun ? `Dry run: ${doms} moved to "${v.tag}" in the app only, Smartlead wasn't changed${like}` : `Moved ${doms} to "${v.tag}" (${retagged} inboxes retagged)${like}` } };
+  } catch (e) {
+    return appError(e);
+  }
+}
+
 const warmupConfigInput = z.object({
   inboxIds: z.array(z.uuid()).min(1, "Select at least one inbox").max(5000),
   min: count(1000),

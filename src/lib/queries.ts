@@ -1,3 +1,4 @@
+import { parseWarmupProgram } from "@/lib/warmup-program";
 import "server-only";
 import { attentionDomainCount } from "./attention";
 import { tagOverview } from "./tag-list";
@@ -540,6 +541,7 @@ export async function listOpenAlerts() {
 export type InboxListRow = InboxRow & {
   domainId: string; domain: string; domainStatus: DomainStatus; clientName: string | null; clientHue: number | null;
   domainTags: string[]; domainGraceDaysLeft: number | null; domainTld: string | null; domainAlerts: number;
+  domainWarmupStartedAt: Date | null; domainWarmupDays: number | null; domainWarmupDoneAt: Date | null;
   sent7: number; replies7: number; human7: number; bounces7: number; campaigns: number;
   smartleadTags: string[]; providerType: string | null; minWaitMins: number | null; dailySent: number | null;
   warmupMin: number | null; warmupReplyRate: number | null; warmupStatus: string | null;
@@ -567,6 +569,7 @@ export async function listInboxes() {
       i.warmup_reputation::float8 as warmup_reputation, i.smartlead_account_id, i.last_synced_at,
       d.id as domain_id, d.name as domain, d.status as domain_status, c.name as client_name, c.hue as client_hue,
       d.tags as domain_tags, grace_days_left(d.status, d.draining_since) as domain_grace_days_left, d.tld as domain_tld,
+      d.warmup_started_at as domain_warmup_started_at, d.warmup_days as domain_warmup_days, d.warmup_done_at as domain_warmup_done_at,
       (select count(*)::int from alerts a where a.domain_id = d.id and a.status = 'open') as domain_alerts,
       coalesce(ev.sent7, 0) as sent7, coalesce(ev.replies7, 0) as replies7, coalesce(ev.human7, 0) as human7,
       coalesce(ev.bounces7, 0) as bounces7, coalesce(camp.n, i.campaign_count, 0) as campaigns,
@@ -754,6 +757,7 @@ export async function getSettings() {
   return {
     drainDays: Number(map.drain_days ?? 7),
     clientSource: map.client_source === "mapped" ? ("mapped" as const) : ("tags" as const),
+    warmupProgram: parseWarmupProgram(map.warmup_program),
     storageLowThreshold: Number(map.storage_low_threshold ?? 20),
     hypertideNameservers: Array.isArray(map.hypertide_nameservers) ? (map.hypertide_nameservers as string[]) : [],
     hypertideTemplate: {
