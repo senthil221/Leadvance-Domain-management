@@ -250,20 +250,30 @@ export async function setClientSource(source: "tags" | "mapped"): Promise<Action
   }
 }
 
-/** Saves "tag, client" pairs; a client that doesn't exist yet is created. */
-/** Saves the pairs, creating clients that don't exist; existing clients and their domains are left as they are. */
-async function storePairs(pairs: { tag: string; client: string }[]) {
+/**
+ * Saves "tag, client" pairs (or "sender name, client" pairs with `senders`),
+ * creating clients that don't exist and bringing back archived ones; existing
+ * clients and their domains are left as they are.
+ */
+async function storePairs(pairs: { tag: string; client: string }[], senders = false) {
   let newClients = 0;
   await sql.begin(async (tx) => {
     for (const p of pairs) {
-      let [c] = await tx<{ id: string }[]>`select id from clients where lower(name) = lower(${p.client}) limit 1`;
+      let [c] = await tx<{ id: string }[]>`select id from clients where lower(name) = lower(${p.client}) order by archived_at nulls first limit 1`;
       if (!c) {
         const [{ n }] = await tx<{ n: number }[]>`select count(*)::int as n from clients`;
         [c] = await tx<{ id: string }[]>`insert into clients (name, hue) values (${p.client}, ${HUES[n % HUES.length]}) returning id`;
         newClients++;
+      } else if (senders) {
+        await tx`update clients set archived_at = null where id = ${c.id} and archived_at is not null`;
       }
-      await tx`insert into client_tags (tag, display, client_id) values (${normTag(p.tag)}, ${p.tag}, ${c.id})
-        on conflict (tag) do update set client_id = excluded.client_id, display = excluded.display`;
+      if (senders) {
+        await tx`insert into client_senders (sender, display, client_id) values (${normTag(p.tag)}, ${p.tag}, ${c.id})
+          on conflict (sender) do update set client_id = excluded.client_id, display = excluded.display`;
+      } else {
+        await tx`insert into client_tags (tag, display, client_id) values (${normTag(p.tag)}, ${p.tag}, ${c.id})
+          on conflict (tag) do update set client_id = excluded.client_id, display = excluded.display`;
+      }
     }
   });
   return newClients;
@@ -332,6 +342,58 @@ export async function applyTagClients(): Promise<ActionResult<{ moved: number }>
   }
 }
 
+// ---- Sender names: which client an inbox's From name belongs to ----
+
+/** Saves "sender name, client" pairs and puts the domains they decide under their client. */
+export async function saveSenderPairs(text: string): Promise<ActionResult<{ saved: number; newClients: number; moved: number; bad: string[] }>> {
+  try {
+    await requireActor();
+    const { pairs, bad } = parseTagPairs(z.string().max(50_000).parse(text));
+    if (!pairs.length) return { ok: false, error: "No pairs found. Write one per line: sender name, client" };
+    const newClients = await storePairs(pairs, true);
+    const { clientsFromSenders } = await import("@/jobs/smartlead-sync");
+    const r = await clientsFromSenders(jobSql);
+    refresh();
+    return { ok: true, data: { saved: pairs.length, newClients, moved: r.domainsFromSenders, bad } };
+  } catch (e) {
+    return fail(e);
+  }
+}
+
+export async function setSenderClient(sender: string, clientId: string | null): Promise<ActionResult<{ moved: number }>> {
+  try {
+    await requireActor();
+    const key = normTag(z.string().min(1).max(200).parse(sender));
+    if (!clientId) {
+      await sql`delete from client_senders where sender = ${key}`;
+    } else {
+      const id = z.uuid().parse(clientId);
+      await sql`insert into client_senders (sender, display, client_id) values (${key}, ${sender.trim()}, ${id})
+        on conflict (sender) do update set client_id = excluded.client_id`;
+    }
+    const { clientsFromSenders } = await import("@/jobs/smartlead-sync");
+    const r = await clientsFromSenders(jobSql);
+    refresh();
+    return { ok: true, data: { moved: r.domainsFromSenders } };
+  } catch (e) {
+    return fail(e);
+  }
+}
+
+/** Domains with more inboxes than this are listed under Smartlead → Cleanup. */
+export async function saveInboxLimit(limit: number): Promise<ActionResult> {
+  try {
+    await requireActor();
+    const n = z.number().int().min(1).max(1000).parse(limit);
+    await sql`insert into settings (key, value) values ('inbox_limit', ${JSON.stringify(n)}::text::jsonb)
+      on conflict (key) do update set value = excluded.value, updated_at = now()`;
+    refresh();
+    return { ok: true, data: undefined };
+  } catch (e) {
+    return fail(e);
+  }
+}
+
 /** Hides clients with no domains and no mapped tag (the ones made from tags before the mapping). */
 export async function archiveEmptyClients(): Promise<ActionResult<{ archived: number }>> {
   try {
@@ -341,6 +403,7 @@ export async function archiveEmptyClients(): Promise<ActionResult<{ archived: nu
       where c.archived_at is null and c.smartlead_client_id is null
         and not exists (select 1 from domains d where d.client_id = c.id)
         and not exists (select 1 from client_tags t where t.client_id = c.id)
+        and not exists (select 1 from client_senders s where s.client_id = c.id)
       returning c.id`;
     refresh();
     return { ok: true, data: { archived: rows.length } };

@@ -25,13 +25,15 @@ export default function InboxesPage() {
 
 async function InboxesData() {
   await getCurrentUser();
-  const [inboxes, clients, plans, [tz], [warm]] = await Promise.all([
+  const [inboxes, clients, plans, [tz], [warm], [limit]] = await Promise.all([
     listInboxes(), listClients(), listSendingPlans(),
     sql<{ tz: string | null }[]>`select value #>> '{}' as tz from settings where key = 'stats_timezone'`,
     sql<{ v: string }[]>`select value::text as v from settings where key = 'warmup_program'`,
+    sql<{ v: string | null }[]>`select value #>> '{}' as v from settings where key = 'inbox_limit'`,
   ]);
   return (
     <InboxesView inboxes={inboxes} clients={clients} plans={plans} timezone={tz?.tz || "UTC"} newMaxAgeDays={parseWarmupProgram(warm ? JSON.parse(warm.v) : null).maxAgeDays}
+      inboxLimit={Number(limit?.v) || 60}
       smartleadConnected={Boolean(process.env.SMARTLEAD_API_KEY)} dryRun={process.env.INTEGRATIONS_DRY_RUN !== "false"}
       appProblem={process.env.SMARTLEAD_JWT ? jwtProblem(process.env.SMARTLEAD_JWT.trim().replace(/^bearer\s+/i, "")) : "Reconnecting needs a Smartlead token: save SMARTLEAD_JWT on the server."} />
   );

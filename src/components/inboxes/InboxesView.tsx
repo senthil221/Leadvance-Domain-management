@@ -1,11 +1,11 @@
 "use client";
 
-import { ArrowLeftRight, ChevronDown, Flame, ChevronRight, ChevronsDownUp, ChevronsUpDown, Inbox, Info, PlugZap, Search, Settings2, ShieldCheck, Shuffle, Tag, Tags as TagsIcon, X } from "lucide-react";
+import { ArrowLeftRight, ChevronDown, Copy, Flame, ChevronRight, ChevronsDownUp, ChevronsUpDown, Inbox, Info, PlugZap, Search, Settings2, ShieldCheck, Shuffle, Tag, Tags as TagsIcon, X } from "lucide-react";
 import { useSearchParams } from "next/navigation";
 import { DropdownMenu } from "radix-ui";
 import { type ReactNode, useTransition } from "react";
 import { toast } from "sonner";
-import { markInboxes, reconnectInboxes, startWarmupNow, validateDns } from "@/app/actions";
+import { markInboxes, reconnectInboxes, saveInboxLimit, startWarmupNow, validateDns } from "@/app/actions";
 import Link from "next/link";
 import { Fragment, useEffect, useMemo, useState } from "react";
 import { ColumnsMenu, useColumns, type ColumnDef } from "@/components/Columns";
@@ -22,19 +22,34 @@ import { ago, int } from "@/lib/format";
 import type { ClientRow, InboxListRow, PlanRow } from "@/lib/queries";
 import { DOMAIN_STATUSES, type DomainStatus } from "@/lib/status";
 
-// Five views of the sending setup. Active and Disconnected list inboxes under
-// their client and domain; Warming up, Needs attention and All domains list one line per domain.
+// Six views of the sending setup. Active and Disconnected list inboxes under
+// their client and domain; the others list one line per domain.
 // Domains in the warm-up programme (enrolled, not yet moved to a tag) live under
 // Warming up only, and so do new domains that haven't started it yet (`fresh`).
+// Cleanup lists domains with too many inboxes or several sender names (`crowded`),
+// usually old inboxes left behind when a domain was renamed.
 const warmingUp = (i: InboxListRow) => i.domainWarmupStartedAt != null && i.domainWarmupDoneAt == null;
-type Match = (i: InboxListRow, fresh: Set<string>) => boolean;
-const TABS: readonly { key: "active" | "warming" | "attention" | "disconnected" | "all"; label: string; match: Match }[] = [
-  { key: "active", label: "Active", match: (i, fresh) => i.status === "connected" && i.domainStatus === "active" && !warmingUp(i) && !fresh.has(i.domainId) },
-  { key: "warming", label: "Warming up", match: (i, fresh) => (warmingUp(i) || fresh.has(i.domainId)) && i.status !== "removed" },
-  { key: "attention", label: "Needs attention", match: (i, fresh) => (i.domainStatus === "active" || i.domainStatus === "warming") && !warmingUp(i) && !fresh.has(i.domainId) },
+type Sets = { fresh: Set<string>; crowded: Set<string> };
+type Match = (i: InboxListRow, s: Sets) => boolean;
+const TABS: readonly { key: "active" | "warming" | "attention" | "cleanup" | "disconnected" | "all"; label: string; match: Match }[] = [
+  { key: "active", label: "Active", match: (i, s) => i.status === "connected" && i.domainStatus === "active" && !warmingUp(i) && !s.fresh.has(i.domainId) },
+  { key: "warming", label: "Warming up", match: (i, s) => (warmingUp(i) || s.fresh.has(i.domainId)) && i.status !== "removed" },
+  { key: "attention", label: "Needs attention", match: (i, s) => (i.domainStatus === "active" || i.domainStatus === "warming") && !warmingUp(i) && !s.fresh.has(i.domainId) },
+  { key: "cleanup", label: "Cleanup", match: (i, s) => s.crowded.has(i.domainId) && i.status !== "removed" },
   { key: "disconnected", label: "Disconnected", match: (i) => i.status === "disconnected" },
   { key: "all", label: "All domains", match: () => true },
 ];
+
+const senderKey = (n: string | null) => (n ?? "").trim().toLowerCase().replace(/\s+/g, " ");
+
+/** Domains with more inboxes than `limit`, or inboxes under more than one sender name. */
+function crowdedDomains(inboxes: InboxListRow[], limit: number) {
+  const ids = new Set<string>();
+  for (const g of group(inboxes.filter((i) => i.status !== "removed"))) {
+    if (g.count > limit || g.senders.length > 1) ids.add(g.domainId);
+  }
+  return ids;
+}
 
 /**
  * New domains that haven't started warming: connected, at most `maxAgeDays`
@@ -53,8 +68,8 @@ function freshDomains(inboxes: InboxListRow[], maxAgeDays: number) {
 }
 type TabKey = (typeof TABS)[number]["key"];
 const tabOf = (v: string | null): TabKey => (TABS.find((t) => t.key === v)?.key ?? "active");
-const FLAT: TabKey[] = ["warming", "attention", "all"];
-const tabMatch = (k: TabKey, fresh: Set<string>) => (i: InboxListRow) => TABS.find((t) => t.key === k)!.match(i, fresh);
+const FLAT: TabKey[] = ["warming", "attention", "cleanup", "all"];
+const tabMatch = (k: TabKey, sets: Sets) => (i: InboxListRow) => TABS.find((t) => t.key === k)!.match(i, sets);
 
 /** Why a domain is on the Needs attention list: everything wrong with its sending setup. */
 type Reason = { label: string; tone: "danger" | "warning" };
@@ -81,6 +96,8 @@ type Group = {
   domainTags: string[]; graceDaysLeft: number | null; alerts: number;
   warm: { day: number; days: number; ready: boolean; left: number; pct: number } | null;
   ageDays: number | null; dns: Dns; bl: number | null; blListings: string[]; blocked: number; paused: number; disconnected: number;
+  /** Inboxes by sender name, most first; `added` is the earliest inbox's age in days. */
+  senders: { name: string; ids: string[]; added: number | null }[];
 };
 
 const avg = (xs: number[]) => (xs.length ? xs.reduce((a, b) => a + b, 0) / xs.length : null);
@@ -128,6 +145,18 @@ function group(rows: InboxListRow[]): Group[] {
       blocked: list.filter((i) => warmupOf(i) === "blocked").length,
       paused: list.filter((i) => warmupOf(i) === "paused").length,
       disconnected: list.filter((i) => i.status === "disconnected").length,
+      senders: (() => {
+        const by = new Map<string, { name: string; ids: string[]; born: number }>();
+        for (const i of list) {
+          const k = senderKey(i.senderName);
+          const e = by.get(k) ?? { name: i.senderName?.trim() || "No sender name", ids: [], born: Infinity };
+          e.ids.push(i.id);
+          if (i.smartleadCreatedAt) e.born = Math.min(e.born, new Date(i.smartleadCreatedAt).getTime());
+          by.set(k, e);
+        }
+        return [...by.values()].sort((a, b) => b.ids.length - a.ids.length)
+          .map((e) => ({ name: e.name, ids: e.ids, added: Number.isFinite(e.born) ? Math.floor((Date.now() - e.born) / 86_400_000) : null }));
+      })(),
       esp: (() => { const t = [...new Set(list.map((i) => i.providerType).filter(Boolean))]; return t.length === 1 ? t[0] : t.length ? "MIXED" : null; })(),
     };
   });
@@ -198,12 +227,13 @@ function byClient(groups: Group[]): ClientGroup[] {
   });
 }
 
-type SortKey = "progress" | "reasons" | "domain" | "status" | "client" | "esp" | "tags" | "age" | "dnsMissing" | "warmupState" | "blacklist" | "connection" | "count" | "avgWarmup" | "avgLimit" | "capacity" | "sentToday" | "avgWait" | "avgRep" | "campaigns" | "sent7" | "replyRate" | "bounceRate";
+type SortKey = "progress" | "reasons" | "senders" | "domain" | "status" | "client" | "esp" | "tags" | "age" | "dnsMissing" | "warmupState" | "blacklist" | "connection" | "count" | "avgWarmup" | "avgLimit" | "capacity" | "sentToday" | "avgWait" | "avgRep" | "campaigns" | "sent7" | "replyRate" | "bounceRate";
 const sortValue = (g: Group, k: SortKey): string | number | null => {
   switch (k) {
     case "status": return DOMAIN_STATUSES.indexOf(g.status);
     case "progress": return g.warm ? 100 + g.warm.pct : stageOf(g) === "ready" ? 1 : 0;
     case "reasons": return reasonsOf(g).length;
+    case "senders": return g.senders.length;
     case "client": return g.clientName?.toLowerCase() ?? null;
     case "esp": return g.esp;
     case "tags": return g.tags.join(", ").toLowerCase() || null;
@@ -350,10 +380,12 @@ function ChangeBadge({ change }: { change: InboxListRow["change"] }) {
   return null;
 }
 
-export function InboxesView({ inboxes, clients, plans, smartleadConnected, dryRun, timezone, appProblem, newMaxAgeDays }: {
+export function InboxesView({ inboxes, clients, plans, smartleadConnected, dryRun, timezone, appProblem, newMaxAgeDays, inboxLimit }: {
   inboxes: InboxListRow[]; clients: ClientRow[]; plans: PlanRow[]; smartleadConnected: boolean; dryRun: boolean; timezone: string;
   /** Settings → Warming up: how young a domain counts as new. */
   newMaxAgeDays: number;
+  /** Domains with more inboxes than this are listed under Cleanup. */
+  inboxLimit: number;
   /** Why the Smartlead token can't be used, or null when it can. */
   appProblem: string | null;
 }) {
@@ -389,13 +421,14 @@ export function InboxesView({ inboxes, clients, plans, smartleadConnected, dryRu
     const client = clients.find((c) => c.id === clientId)?.name;
     return inboxes.filter((i) => (!client || i.clientName === client) && (!esp || i.providerType === esp));
   }, [inboxes, clients, clientId, esp]);
-  const fresh = useMemo(() => freshDomains(inboxes, newMaxAgeDays), [inboxes, newMaxAgeDays]);
+  const [limitText, setLimitText] = useState(String(inboxLimit));
+  const fresh = useMemo<Sets>(() => ({ fresh: freshDomains(inboxes, newMaxAgeDays), crowded: crowdedDomains(inboxes, inboxLimit) }), [inboxes, newMaxAgeDays, inboxLimit]);
   const attentionCount = useMemo(() => group(base.filter(tabMatch("attention", fresh))).filter((g) => reasonsOf(g).length > 0).length, [base, fresh]);
   const lowRepInboxes = useMemo(() => base.filter((i) => i.status === "connected" && i.warmupReputation != null && i.warmupReputation < 90).length, [base]);
   // Domains in every view but Disconnected, which counts inboxes.
   const counts = useMemo(() => {
     const domains = (k: TabKey) => new Set(base.filter(tabMatch(k, fresh)).map((i) => i.domainId)).size;
-    return { active: domains("active"), warming: domains("warming"), attention: attentionCount, disconnected: base.filter(tabMatch("disconnected", fresh)).length, all: domains("all") } as Record<TabKey, number>;
+    return { active: domains("active"), warming: domains("warming"), attention: attentionCount, cleanup: domains("cleanup"), disconnected: base.filter(tabMatch("disconnected", fresh)).length, all: domains("all") } as Record<TabKey, number>;
   }, [base, attentionCount, fresh]);
 
   const groups = useMemo(() => {
@@ -653,6 +686,19 @@ export function InboxesView({ inboxes, clients, plans, smartleadConnected, dryRu
         {FLAT.includes(tab) ? null : <ColumnsMenu cols={cols} />}
       </div>
 
+      {tab === "cleanup" ? (
+        <div className="cl-bar">
+          <span className="cl-bar-text">
+            Domains with more than
+            <input className="input num cl-limit" inputMode="numeric" value={limitText} aria-label="Inbox limit per domain"
+              onChange={(e) => setLimitText(e.target.value)}
+              onBlur={() => { const n = Number(limitText); if (n && n !== inboxLimit) act(async () => { const r = await saveInboxLimit(n); return r.ok ? { ok: true as const, data: { message: `Limit set to ${n} inboxes a domain` } } : r; }); }}
+              onKeyDown={(e) => { if (e.key === "Enter") e.currentTarget.blur(); }} />
+            inboxes, or inboxes under more than one sender name. Click a sender to select its inboxes, then copy their addresses.
+          </span>
+        </div>
+      ) : null}
+
       {tab === "warming" ? (
         <div className="wu-summary" role="group" aria-label="Warm-up stages">
           {STAGES.map((s) => (
@@ -716,6 +762,70 @@ export function InboxesView({ inboxes, clients, plans, smartleadConnected, dryRu
                       <td className="is-num">{int(g.count)}</td>
                       <td className="is-num" title={g.minRep != null ? `Lowest ${g.minRep.toFixed(0)}` : undefined}><Rep value={g.avgRep} low={g.lowRep} /></td>
                       <td><Tags tags={g.tags.filter((t) => !isMark(t))} /></td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          ) : tab === "cleanup" ? (
+            <table className="data-table is-main cl-table">
+              <thead>
+                <tr>
+                  <th className="col-check">
+                    <input type="checkbox" className="checkbox" aria-label="Select all shown domains" checked={allSel}
+                      ref={(el) => { if (el) el.indeterminate = !allSel && someSel; }}
+                      onChange={() => setSelected((s0) => { const n = new Set(s0); for (const id of allIds) if (allSel) n.delete(id); else n.add(id); return n; })} />
+                  </th>
+                  <SortTh k="domain" sort={sort} onSort={sortBy}>Domain</SortTh>
+                  <SortTh k="count" sort={sort} onSort={sortBy} num title={`Inboxes on the domain; more than ${inboxLimit} is listed here`}>Inboxes</SortTh>
+                  <SortTh k="senders" sort={sort} onSort={sortBy} title="Click a sender to select its inboxes on that domain">Sender names</SortTh>
+                  <SortTh k="age" sort={sort} onSort={sortBy} num>Age</SortTh>
+                  <SortTh k="tags" sort={sort} onSort={sortBy}>Tag</SortTh>
+                  <SortTh k="status" sort={sort} onSort={sortBy}>Status</SortTh>
+                </tr>
+              </thead>
+              <tbody>
+                {groups.map((g) => {
+                  const ids = g.inboxes.map((x) => x.id);
+                  const gSel = ids.every((id) => selected.has(id));
+                  const gSome = ids.some((id) => selected.has(id));
+                  const over = g.count - inboxLimit;
+                  return (
+                    <tr key={g.domainId} data-selected={gSel}>
+                      <td className="col-check" onClick={() => toggleIds(ids)}>
+                        <input type="checkbox" className="checkbox" checked={gSel} ref={(el) => { if (el) el.indeterminate = !gSel && gSome; }} onChange={() => {}} aria-label={`Select inboxes on ${g.domain}`} tabIndex={-1} />
+                      </td>
+                      <td className="col-first">
+                        <span className="flex flex-col gap-0.5">
+                          <DomainLink id={g.domainId} tab="inboxes" className="strong hover:underline">{g.domain}</DomainLink>
+                          <span className="wu-sub">{g.clientName ?? "No client"}{g.esp ? ` · ${espLabel(g.esp)}` : ""}</span>
+                        </span>
+                      </td>
+                      <td className="is-num">
+                        <span className="cl-count">
+                          <span className={over > 0 ? "strong" : undefined}>{int(g.count)}</span>
+                          {over > 0 ? <span className="ns-status tone-danger">+{over}</span> : null}
+                        </span>
+                      </td>
+                      <td>
+                        <span className="cl-senders">
+                          {g.senders.map((s) => {
+                            const sOn = s.ids.every((id) => selected.has(id));
+                            return (
+                              <button key={s.name} type="button" className="cl-sender" aria-pressed={sOn}
+                                title={`Select the ${s.ids.length} inbox${s.ids.length === 1 ? "" : "es"} sending as ${s.name}${s.added != null ? `, first added ${s.added} days ago` : ""}`}
+                                onClick={() => toggleIds(s.ids)}>
+                                <span className="cl-sender-name">{s.name}</span>
+                                <span className="cl-sender-n">{int(s.ids.length)}</span>
+                                {s.added != null ? <span className="cl-sender-age">{s.added}d</span> : null}
+                              </button>
+                            );
+                          })}
+                        </span>
+                      </td>
+                      <td className="is-num" title={g.ageDays != null ? `${g.ageDays} days since the first inbox was added to Smartlead` : "Not known yet"}>{ageLabel(g.ageDays) ?? <span className="zero">—</span>}</td>
+                      <td><Tags tags={g.tags.filter((t) => !isMark(t))} /></td>
+                      <td><StatusDot status={g.status} /></td>
                     </tr>
                   );
                 })}
@@ -865,7 +975,7 @@ export function InboxesView({ inboxes, clients, plans, smartleadConnected, dryRu
             </tbody>
           </table>
           )}
-          {groups.length === 0 ? <Empty icon={Inbox} title={tab === "attention" ? "Nothing needs attention" : tab === "warming" ? "No domains are warming up" : "No inboxes here"}>{tab === "attention" ? "Every active domain is connected, warmed and clean." : tab === "warming" ? "New domains that connect to Smartlead appear here and warm up for the days set in Settings → Warming up." : "Inboxes appear once a domain is set up on Hypertide and connected to Smartlead."}</Empty> : null}
+          {groups.length === 0 ? <Empty icon={Inbox} title={tab === "attention" ? "Nothing needs attention" : tab === "warming" ? "No domains are warming up" : tab === "cleanup" ? "Nothing to clean up" : "No inboxes here"}>{tab === "attention" ? "Every active domain is connected, warmed and clean." : tab === "cleanup" ? `Every domain has at most ${inboxLimit} inboxes, all under one sender name.` : tab === "warming" ? "New domains that connect to Smartlead appear here and warm up for the days set in Settings → Warming up." : "Inboxes appear once a domain is set up on Hypertide and connected to Smartlead."}</Empty> : null}
         </div>
         <div className="table-footer">
           <span><b>{int(groups.length)}</b> domains</span>
@@ -903,6 +1013,10 @@ export function InboxesView({ inboxes, clients, plans, smartleadConnected, dryRu
               </DropdownMenu.Content>
             </DropdownMenu.Portal>
           </DropdownMenu.Root>
+          <button type="button" className="btn btn-sm" title="Copy the selected inboxes' addresses, one per line"
+            onClick={() => { void navigator.clipboard.writeText(selectedRows.map((i) => i.email).join("\n")).then(() => toast.success(`Copied ${selectedRows.length} address${selectedRows.length === 1 ? "" : "es"}`)); }}>
+            <Copy size={14} /> Copy emails
+          </button>
           <span className="sep" />
           <button type="button" className="btn btn-sm" aria-label="Clear selection" onClick={() => setSelected(new Set())}><X size={14} /></button>
         </div>

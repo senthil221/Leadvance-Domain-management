@@ -2,9 +2,9 @@ import { PGlite } from "@electric-sql/pglite";
 import { PGLiteSocketServer } from "@electric-sql/pglite-socket";
 import postgres from "postgres";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { clientSource, clientsFromMappedTags } from "../src/jobs/smartlead-sync";
+import { clientSource, clientsFromMappedTags, clientsFromSenders } from "../src/jobs/smartlead-sync";
 import { normTag, parseTagPairs } from "../src/lib/tag-map";
-import { tagOverview } from "../src/lib/tag-list";
+import { senderOverview, tagOverview } from "../src/lib/tag-list";
 import { loadMigrations } from "../scripts/migrations";
 
 describe("parseTagPairs", () => {
@@ -59,8 +59,8 @@ async function domain(name: string, clientId: string | null = null) {
   const [d] = await sql`insert into domains (name, status, client_id) values (${name}, 'active', ${clientId}) returning id`;
   return d.id as string;
 }
-async function inbox(domainId: string, email: string, tags: string[]) {
-  await sql`insert into inboxes (domain_id, email, status, smartlead_tags) values (${domainId}, ${email}, 'connected', ${tags})`;
+async function inbox(domainId: string, email: string, tags: string[], sender: string | null = null) {
+  await sql`insert into inboxes (domain_id, email, status, smartlead_tags, sender_name) values (${domainId}, ${email}, 'connected', ${tags}, ${sender})`;
 }
 const clientOf = async (name: string) => (await sql`select c.name from domains d join clients c on c.id = d.client_id where d.name = ${name}`)[0]?.name ?? null;
 
@@ -113,5 +113,43 @@ describe("clientsFromMappedTags", () => {
     expect(await clientSource(sql)).toBe("tags");
     await sql`update settings set value = '"mapped"'::jsonb where key = 'client_source'`;
     expect(await clientSource(sql)).toBe("mapped");
+  });
+});
+
+describe("clientsFromSenders", () => {
+  it("puts domains no tag decides under the client most sender names point to, and leaves tagged ones alone", async () => {
+    const qualifi = (await sql`select id from clients where name = 'Qualifi'`)[0].id as string;
+    const straxo = await client("Straxo");
+    await sql`insert into client_senders (sender, display, client_id) values ('sophia lark', 'Sophia Lark', ${qualifi}), ('george vellios', 'George Vellios', ${straxo})`;
+
+    // Two senders, Sophia Lark has more inboxes: Qualifi, even over the client it had.
+    const e = await domain("e.com", straxo);
+    await inbox(e, "1@e.com", [], "Sophia  Lark");
+    await inbox(e, "2@e.com", [], "sophia lark");
+    await inbox(e, "3@e.com", [], "George Vellios");
+    // A mapped tag decides this one, whatever the sender.
+    const f = await domain("f.com");
+    await inbox(f, "1@f.com", ["Prateek Batra"], "Sophia Lark");
+    // A tag naming a client decides too.
+    const g = await domain("g.com");
+    await inbox(g, "1@g.com", ["Straxo"], "Sophia Lark");
+    // An unmapped sender changes nothing.
+    const h = await domain("h.com");
+    await inbox(h, "1@h.com", [], "Nobody Mapped");
+
+    expect(await clientsFromSenders(sql)).toEqual({ domainsFromSenders: 1 });
+    expect(await clientOf("e.com")).toBe("Qualifi");
+    expect(await clientOf("f.com")).toBeNull();
+    expect(await clientOf("g.com")).toBeNull();
+    expect(await clientOf("h.com")).toBeNull();
+    // Running again moves nothing.
+    expect(await clientsFromSenders(sql)).toEqual({ domainsFromSenders: 0 });
+  });
+
+  it("lists sender names with their client and the clients their domains are under", async () => {
+    const rows = await senderOverview(sql);
+    expect(rows.find((r) => r.key === "sophia lark")).toMatchObject({ clientName: "Qualifi", domains: 3, inboxes: 4 });
+    expect(rows.find((r) => r.key === "sophia lark")?.current).toEqual(["Qualifi"]);
+    expect(rows.find((r) => r.key === "nobody mapped")).toMatchObject({ clientId: null, domains: 1 });
   });
 });

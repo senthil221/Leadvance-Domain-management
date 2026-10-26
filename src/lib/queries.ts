@@ -2,7 +2,7 @@ import { parseSavedPairs } from "@/lib/tag-map";
 import { parseWarmupProgram } from "@/lib/warmup-program";
 import "server-only";
 import { attentionDomainCount } from "./attention";
-import { tagOverview } from "./tag-list";
+import { senderOverview, tagOverview } from "./tag-list";
 import { sql } from "./db";
 import type { DomainStatus, ReplacementReason, StepStatus } from "./status";
 
@@ -27,6 +27,13 @@ export type { TagRow } from "./tag-list";
 /** Every Smartlead tag on the inboxes (except the New and Replaced marks) and the client it is mapped to, unmapped first. */
 export async function listTags() {
   return tagOverview(sql);
+}
+
+export type SenderRow = Awaited<ReturnType<typeof senderOverview>>[number];
+
+/** Every sender name on the inboxes, the client it is mapped to and the clients its domains are under now. */
+export async function listSenders() {
+  return senderOverview(sql);
 }
 
 export async function listVendors() {
@@ -761,6 +768,7 @@ export async function getSettings() {
     warmupProgram: parseWarmupProgram(map.warmup_program),
     clientTagList: parseSavedPairs(map.client_tag_list),
     storageLowThreshold: Number(map.storage_low_threshold ?? 20),
+    inboxLimit: Number(map.inbox_limit ?? 60) || 60,
     hypertideNameservers: Array.isArray(map.hypertide_nameservers) ? (map.hypertide_nameservers as string[]) : [],
     hypertideTemplate: {
       plan: (map.hypertide_order_template as { plan?: string })?.plan === "google" ? ("google" as const) : ("entra" as const),
