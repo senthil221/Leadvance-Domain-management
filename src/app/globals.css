@@ -919,6 +919,8 @@ a.stat:hover { background: var(--surface-2); }
 
 /* Inboxes: client rows above their domains */
 .data-table tbody tr.inb-client > td { background: color-mix(in srgb, var(--ink) 3%, var(--surface)); border-bottom-color: var(--line-strong); }
+.data-table tbody tr.inb-tag > td { background: color-mix(in srgb, var(--ink) 1.5%, var(--surface)); }
+.data-table tbody tr.inb-tag:hover > td { background: var(--row-hover); }
 .data-table tbody tr.inb-client:hover > td { background: var(--row-hover); }
 .data-table tbody tr.inb-client .client-cell { font-weight: 600; color: var(--ink); }
 .rpl-tag.is-ready { background: var(--success-soft-2); color: var(--success-ink); box-shadow: inset 0 0 0 1px var(--success-line); }

@@ -2,7 +2,7 @@
 
 import { useState, useTransition } from "react";
 import { toast } from "sonner";
-import { applyTagClients, archiveEmptyClients, saveTagPairs, setClientSource, setTagClient } from "@/app/actions";
+import { applyTagClients, archiveEmptyClients, saveTagPairs, setClientSource, setTagClient, applyBuiltInTagMap } from "@/app/actions";
 import { int } from "@/lib/format";
 import type { ClientRow, TagRow } from "@/lib/queries";
 
@@ -30,6 +30,16 @@ export function ClientAssignment({ source, clients, tags }: { source: "tags" | "
             <span className="flex flex-col"><span className="strong">{label}</span><span className="field-hint">{hint}</span></span>
           </label>
         ))}
+      </div>
+
+      <div className="flex flex-wrap items-center gap-2">
+        <button type="button" className="btn btn-primary" disabled={pending}
+          onClick={() => run(async () => {
+            const r = await applyBuiltInTagMap();
+            if (!r.ok) return void toast.error(r.error);
+            toast.success(`Built-in list saved: ${r.data.saved} tags${r.data.newClients ? `, ${r.data.newClients} new client${r.data.newClients === 1 ? "" : "s"}` : ""}, ${r.data.moved} domain${r.data.moved === 1 ? "" : "s"} moved`);
+          })}>Use the built-in list</button>
+        <span className="field-hint">18 tags to 10 clients. Switches to mapped tags and applies it. Existing clients are kept.</span>
       </div>
 
       {source === "mapped" ? (

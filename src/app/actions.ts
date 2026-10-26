@@ -7,7 +7,7 @@ import { requireActor } from "@/lib/auth";
 import { jobSql, sql } from "@/lib/db";
 import { hypertideAcceptsDomain } from "@/integrations/hypertide";
 import { getDomainDetail, listStorageCandidates } from "@/lib/queries";
-import { normTag, parseTagPairs } from "@/lib/tag-map";
+import { BUILT_IN_TAG_PAIRS, normTag, parseTagPairs } from "@/lib/tag-map";
 import { DOMAIN_STATUSES, REPLACEMENT_REASONS } from "@/lib/status";
 
 export type ActionResult<T = undefined> = { ok: true; data: T } | { ok: false; error: string };
@@ -251,24 +251,46 @@ export async function setClientSource(source: "tags" | "mapped"): Promise<Action
 }
 
 /** Saves "tag, client" pairs; a client that doesn't exist yet is created. */
+/** Saves the pairs, creating clients that don't exist; existing clients and their domains are left as they are. */
+async function storePairs(pairs: { tag: string; client: string }[]) {
+  let newClients = 0;
+  await sql.begin(async (tx) => {
+    for (const p of pairs) {
+      let [c] = await tx<{ id: string }[]>`select id from clients where lower(name) = lower(${p.client}) limit 1`;
+      if (!c) {
+        const [{ n }] = await tx<{ n: number }[]>`select count(*)::int as n from clients`;
+        [c] = await tx<{ id: string }[]>`insert into clients (name, hue) values (${p.client}, ${HUES[n % HUES.length]}) returning id`;
+        newClients++;
+      }
+      await tx`insert into client_tags (tag, display, client_id) values (${normTag(p.tag)}, ${p.tag}, ${c.id})
+        on conflict (tag) do update set client_id = excluded.client_id, display = excluded.display`;
+    }
+  });
+  return newClients;
+}
+
+/** Switches to mapped tags, saves the built-in list and puts every domain under its client. */
+export async function applyBuiltInTagMap(): Promise<ActionResult<{ saved: number; newClients: number; moved: number }>> {
+  try {
+    await requireActor();
+    const newClients = await storePairs(BUILT_IN_TAG_PAIRS);
+    await sql`insert into settings (key, value) values ('client_source', '"mapped"'::jsonb)
+      on conflict (key) do update set value = excluded.value, updated_at = now()`;
+    const { clientsFromMappedTags } = await import("@/jobs/smartlead-sync");
+    const r = await clientsFromMappedTags(jobSql, true);
+    refresh();
+    return { ok: true, data: { saved: BUILT_IN_TAG_PAIRS.length, newClients, moved: r.domainsMapped } };
+  } catch (e) {
+    return fail(e);
+  }
+}
+
 export async function saveTagPairs(text: string): Promise<ActionResult<{ saved: number; newClients: number; bad: string[] }>> {
   try {
     await requireActor();
     const { pairs, bad } = parseTagPairs(z.string().max(50_000).parse(text));
     if (!pairs.length) return { ok: false, error: "No pairs found. Write one per line: tag, client" };
-    let newClients = 0;
-    await sql.begin(async (tx) => {
-      for (const p of pairs) {
-        let [c] = await tx<{ id: string }[]>`select id from clients where lower(name) = lower(${p.client}) limit 1`;
-        if (!c) {
-          const [{ n }] = await tx<{ n: number }[]>`select count(*)::int as n from clients`;
-          [c] = await tx<{ id: string }[]>`insert into clients (name, hue) values (${p.client}, ${HUES[n % HUES.length]}) returning id`;
-          newClients++;
-        }
-        await tx`insert into client_tags (tag, display, client_id) values (${normTag(p.tag)}, ${p.tag}, ${c.id})
-          on conflict (tag) do update set client_id = excluded.client_id, display = excluded.display`;
-      }
-    });
+    const newClients = await storePairs(pairs);
     refresh();
     return { ok: true, data: { saved: pairs.length, newClients, bad } };
   } catch (e) {

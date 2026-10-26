@@ -10,6 +10,7 @@ import { Fragment, useEffect, useMemo, useState } from "react";
 import { ColumnsMenu, useColumns, type ColumnDef } from "@/components/Columns";
 import { SortTh } from "@/components/SortTh";
 import { DomainLink } from "@/components/domains/DomainLink";
+import { normTag } from "@/lib/tag-map";
 import { ReplaceDialog } from "@/components/domains/ReplaceDialog";
 import { ClientCell, Empty, Rep, StatusDot, TagList } from "@/components/ui";
 import { InboxSettingsDialog } from "./InboxSettingsDialog";
@@ -106,36 +107,66 @@ function group(rows: InboxListRow[]): Group[] {
 }
 
 /**
- * A client's domains rolled up into one row with the same columns: sums for
- * counts, averages over inboxes for rates, and how many domains have a problem.
+ * Domains rolled up into one row with the same columns: sums for counts,
+ * averages over inboxes for rates, and how many domains have a problem. Used
+ * for a client and for a tag inside a client.
  */
-type ClientGroup = Group & { key: string; domains: Group[]; dnsBad: number; listed: number };
+type ClientGroup = Group & { key: string; domains: Group[]; dnsBad: number; listed: number; tagGroups: ClientGroup[] | null };
+function roll(key: string, label: string, clientName: string | null, domains: Group[]): ClientGroup {
+  const list = domains.flatMap((d) => d.inboxes);
+  const [s] = group(list.map((i) => ({ ...i, domainId: `roll:${key}` })));
+  const missing = [...new Set(domains.flatMap((d) => d.dns.missing))];
+  return {
+    ...s,
+    key,
+    domains,
+    domainId: `roll:${key}`,
+    domain: label,
+    clientName,
+    clientHue: domains[0].clientHue,
+    inboxes: list,
+    ageDays: null,
+    domainTags: [],
+    graceDaysLeft: null,
+    campaigns: Math.max(0, ...domains.map((d) => d.campaigns)),
+    dns: { state: domains.some((d) => d.dns.state === "nozone") ? "nozone" : missing.length ? "missing" : domains.every((d) => d.dns.state === "unknown") ? "unknown" : "ok", missing, checks: [] },
+    dnsBad: domains.filter((d) => d.dns.state === "missing" || d.dns.state === "nozone").length,
+    bl: domains.some((d) => d.bl != null) ? domains.reduce((a, d) => a + (d.bl ?? 0), 0) : null,
+    listed: domains.filter((d) => (d.bl ?? 0) > 0).length,
+    blListings: [...new Set(domains.flatMap((d) => (d.bl ? [d.domain] : [])))],
+    tagGroups: null,
+  };
+}
+
+/**
+ * The tags inside a client, each with its own domains and only the inboxes that
+ * carry that tag. Null when the client has just one tag named like itself (or
+ * none), so those clients keep going straight from client to domain.
+ */
+function tagGroupsOf(c: ClientGroup): ClientGroup[] | null {
+  const byTag = new Map<string, { shown: string; inboxes: InboxListRow[] }>();
+  for (const i of c.inboxes) {
+    const tags = i.smartleadTags.filter((t) => t.trim() && !["new", "replaced"].includes(t.trim().toLowerCase()));
+    for (const t of tags.length ? tags : [""]) {
+      const k = normTag(t);
+      const e = byTag.get(k) ?? { shown: t.trim(), inboxes: [] };
+      e.inboxes.push(i);
+      byTag.set(k, e);
+    }
+  }
+  const keys = [...byTag.keys()];
+  if (keys.length === 0 || (keys.length === 1 && (keys[0] === "" || keys[0] === normTag(c.clientName ?? "")))) return null;
+  return [...byTag.entries()]
+    .map(([k, e]) => roll(`${c.key}|${k}`, e.shown || "No tag", c.clientName, group(e.inboxes)))
+    .sort((a, b) => b.count - a.count || a.domain.localeCompare(b.domain));
+}
+
 function byClient(groups: Group[]): ClientGroup[] {
   const map = new Map<string, Group[]>();
   for (const g of groups) map.set(g.clientName ?? "", [...(map.get(g.clientName ?? "") ?? []), g]);
   return [...map.entries()].map(([key, domains]) => {
-    const list = domains.flatMap((d) => d.inboxes);
-    const [s] = group(list.map((i) => ({ ...i, domainId: `client:${key}` })));
-    const missing = [...new Set(domains.flatMap((d) => d.dns.missing))];
-    return {
-      ...s,
-      key,
-      domains,
-      domainId: `client:${key}`,
-      domain: key || "No client",
-      clientName: key || null,
-      clientHue: domains[0].clientHue,
-      inboxes: list,
-      ageDays: null,
-      domainTags: [],
-      graceDaysLeft: null,
-      campaigns: Math.max(0, ...domains.map((d) => d.campaigns)),
-      dns: { state: domains.some((d) => d.dns.state === "nozone") ? "nozone" : missing.length ? "missing" : domains.every((d) => d.dns.state === "unknown") ? "unknown" : "ok", missing, checks: [] },
-      dnsBad: domains.filter((d) => d.dns.state === "missing" || d.dns.state === "nozone").length,
-      bl: domains.some((d) => d.bl != null) ? domains.reduce((a, d) => a + (d.bl ?? 0), 0) : null,
-      listed: domains.filter((d) => (d.bl ?? 0) > 0).length,
-      blListings: [...new Set(domains.flatMap((d) => (d.bl ? [d.domain] : [])))],
-    };
+    const c = roll(key, key || "No client", key || null, domains);
+    return { ...c, tagGroups: tagGroupsOf(c) };
   });
 }
 
@@ -274,6 +305,7 @@ export function InboxesView({ inboxes, clients, plans, smartleadConnected, dryRu
   const [sort, setSort] = useState<{ key: SortKey; dir: 1 | -1 }>({ key: "domain", dir: 1 });
   const [open, setOpen] = useState<Set<string>>(new Set());
   const [openClients, setOpenClients] = useState<Set<string>>(new Set());
+  const [openTags, setOpenTags] = useState<Set<string>>(new Set());
   const [esp, setEsp] = useState("");
   const [acting, startAct] = useTransition();
   const act = (fn: () => Promise<{ ok: true; data: { message: string } } | { ok: false; error: string }>) =>
@@ -371,7 +403,113 @@ export function InboxesView({ inboxes, clients, plans, smartleadConnected, dryRu
   const flip = (id: string) => (s: Set<string>) => { const n = new Set(s); if (n.has(id)) n.delete(id); else n.add(id); return n; };
   const toggle = (id: string) => setOpen(flip(id));
   const toggleClient = (key: string) => setOpenClients(flip(key));
+  const toggleTag = (key: string) => setOpenTags(flip(key));
   const sortBy = (key: SortKey) => setSort((s) => (s.key === key ? { key, dir: (s.dir * -1) as 1 | -1 } : { key, dir: key === "domain" || key === "client" ? 1 : -1 }));
+
+  // The cells a client or tag row shares: totals for the group, each marked Sum or Avg.
+  const summaryCells = (c: ClientGroup) => (
+    <>
+      {on("status") ? <td /> : null}
+      {on("client") ? <td /> : null}
+      {on("esp") ? <td>{c.esp ? <EspBadge type={c.esp} /> : <span className="zero">—</span>}</td> : null}
+      {on("tags") ? <td /> : null}
+      {on("count") ? <td className="is-num st-vol st-start strong"><span className="st-agg">Sum</span>{int(c.count)}</td> : null}
+      {on("warmup") ? <td className="is-num st-vol"><span className="st-agg">Avg</span>{n0(c.avgWarmup)}{c.warmupOff ? <span className="text-faint"> · {c.warmupOff} off</span> : null}</td> : null}
+      {on("limit") ? <td className="is-num st-vol"><span className="st-agg">Avg</span>{n0(c.avgLimit)}</td> : null}
+      {on("capacity") ? <td className="is-num st-vol strong"><span className="st-agg">Sum</span>{c.capacity ? int(c.capacity) : <span className="zero">0</span>}</td> : null}
+      {on("today") ? <td className="is-num st-vol"><span className="st-agg">Sum</span>{c.sentToday ? int(c.sentToday) : <span className="zero">0</span>}</td> : null}
+      {on("gap") ? <td className="is-num st-vol">{c.avgWait != null ? `${Math.round(c.avgWait)}m` : <span className="zero">—</span>}</td> : null}
+      {on("rep") ? <td className="is-num st-health st-start"><span className="st-agg">Avg</span><Rep value={c.avgRep} low={c.lowRep} /></td> : null}
+      {on("age") ? <td /> : null}
+      {on("dns") ? <td>{c.dnsBad ? <span className="ns-status tone-danger" title={`Missing: ${c.dns.missing.join(", ")}`}>{c.dnsBad} with gaps</span> : c.dns.state === "unknown" ? <span className="zero">—</span> : <Ok>Valid</Ok>}</td> : null}
+      {on("warmupState") ? <td><WarmupCell blocked={c.blocked} paused={c.paused} total={c.count} /></td> : null}
+      {on("blacklist") ? <td>{c.bl == null ? <span className="zero">—</span> : c.listed ? <span className="ns-status tone-danger" title={c.blListings.join(", ")}>{c.listed} listed</span> : <Ok>Clean</Ok>}</td> : null}
+      {on("connection") ? <td>{c.disconnected ? <span className="ns-status tone-danger">{c.disconnected} disconnected</span> : <Ok title={`All ${c.count} inboxes connected`}>{c.count}/{c.count}</Ok>}</td> : null}
+    </>
+  );
+
+  // A list of domains, each opening onto its inboxes. `prefix` keeps a domain that sits under two tags apart.
+  const domainRows = (domains: Group[], prefix: string, pad: number) => domains.map((g, gi) => {
+    const dKey = prefix + g.domainId;
+    const isOpen = open.has(dKey);
+    const ids = g.inboxes.map((i) => i.id);
+    const gSel = ids.every((id) => selected.has(id));
+    const gSome = ids.some((id) => selected.has(id));
+    return (
+      <Fragment key={dKey}>
+        <tr className="is-clickable" aria-expanded={isOpen} data-selected={gSel} onClick={() => toggle(dKey)}>
+          <td className="col-check" onClick={(e) => { e.stopPropagation(); toggleIds(ids); }}>
+            <input type="checkbox" className="checkbox" checked={gSel} ref={(el) => { if (el) el.indeterminate = !gSel && gSome; }} onChange={() => {}} aria-label={`Select inboxes on ${g.domain}`} tabIndex={-1} />
+          </td>
+          <td className="col-first" style={{ paddingLeft: pad }}>
+            <span className="flex items-center gap-1.5">
+              <span className="st-n">{gi + 1}</span>
+              <ChevronRight size={14} className="flex-none text-faint transition-transform" style={{ transform: isOpen ? "rotate(90deg)" : undefined }} />
+              <DomainLink id={g.domainId} tab="inboxes" className="strong hover:underline">{g.domain}</DomainLink>
+              <TagList tags={g.domainTags} graceDaysLeft={g.graceDaysLeft} />
+            </span>
+          </td>
+          {on("status") ? <td><StatusDot status={g.status} /></td> : null}
+          {on("client") ? <td><ClientCell name={g.clientName} hue={g.clientHue} /></td> : null}
+          {on("esp") ? <td>{g.esp ? <EspBadge type={g.esp} /> : <span className="zero">—</span>}</td> : null}
+          {on("tags") ? <td><Tags tags={g.tags} graceDaysLeft={g.graceDaysLeft} /></td> : null}
+          {on("count") ? <td className="is-num st-vol st-start">{int(g.count)}</td> : null}
+          {on("warmup") ? (
+            <td className="is-num st-vol" title={g.warmupOff ? `${g.warmupOff} with warmup off` : undefined}>
+              {n0(g.avgWarmup)}{g.warmupOff ? <span className="text-faint"> · {g.warmupOff} off</span> : null}
+            </td>
+          ) : null}
+          {on("limit") ? <td className="is-num st-vol">{n0(g.avgLimit)}</td> : null}
+          {on("capacity") ? <td className="is-num st-vol">{g.capacity ? int(g.capacity) : <span className="zero">0</span>}</td> : null}
+          {on("today") ? <td className="is-num st-vol">{g.sentToday ? int(g.sentToday) : <span className="zero">0</span>}</td> : null}
+          {on("gap") ? <td className="is-num st-vol">{g.avgWait != null ? `${Math.round(g.avgWait)}m` : <span className="zero">—</span>}</td> : null}
+          {on("rep") ? (
+            <td className="is-num st-health st-start" title={g.minRep != null ? `Lowest ${g.minRep.toFixed(0)}${g.lowRep ? `, ${g.lowRep} under 90` : ""}` : undefined}>
+              <Rep value={g.avgRep} low={g.lowRep} />
+            </td>
+          ) : null}
+          {on("age") ? <td className="is-num" title={g.ageDays != null ? `${g.ageDays} days since the first inbox was added to Smartlead` : "Not known yet"}>{ageLabel(g.ageDays) ?? <span className="zero">—</span>}</td> : null}
+          {on("dns") ? <td><DnsCell dns={g.dns} /></td> : null}
+          {on("warmupState") ? <td><WarmupCell blocked={g.blocked} paused={g.paused} total={g.count} /></td> : null}
+          {on("blacklist") ? <td><BlacklistCell count={g.bl} listings={g.blListings} /></td> : null}
+          {on("connection") ? <td>{g.disconnected ? <span className="ns-status tone-danger">{g.disconnected} disconnected</span> : <Ok title={`All ${g.count} inboxes connected`}>{g.count}/{g.count}</Ok>}</td> : null}
+        </tr>
+        {isOpen ? [...g.inboxes].sort(byValue((i: InboxListRow) => inboxValue(i, sort.key), (a, b) => a.email.localeCompare(b.email), sort.dir)).map((i) => (
+          <tr key={i.id} className="is-clickable" data-selected={selected.has(i.id)} style={{ background: "var(--surface-2)" }} onClick={() => toggleIds([i.id])}>
+            <td className="col-check"><input type="checkbox" className="checkbox" checked={selected.has(i.id)} onChange={() => {}} aria-label={`Select ${i.email}`} tabIndex={-1} /></td>
+            <td className="col-first" style={{ paddingLeft: pad + 54 }}>
+              <span className="flex items-center gap-2" title={i.lastSyncedAt ? `Synced ${ago(i.lastSyncedAt)}` : undefined}>
+                <span className="text-ink-soft">{i.email}</span>
+                {i.status !== "connected" ? <span className="badge">{i.status}</span> : null}
+                <ChangeBadge change={i.change} />
+              </span>
+            </td>
+            {on("status") ? <td /> : null}
+            {on("client") ? <td className="text-muted">{i.senderName ?? <span className="zero">—</span>}</td> : null}
+            {on("esp") ? <td>{i.providerType ? <EspBadge type={i.providerType} /> : <span className="zero">—</span>}</td> : null}
+            {on("tags") ? <td><Tags tags={i.smartleadTags} graceDaysLeft={i.domainGraceDaysLeft} /></td> : null}
+            {on("count") ? <td className="is-num st-vol st-start"><span className="zero">—</span></td> : null}
+            {on("warmup") ? (
+              <td className="is-num st-vol" title={i.warmupMin != null ? `Smartlead sends ${i.warmupMin}–${i.warmupPerDay} a day${i.warmupReplyRate != null ? `, ${i.warmupReplyRate}% reply rate` : ""}` : undefined}>
+                {i.warmupEnabled ? (i.warmupMin != null && i.warmupMin !== i.warmupPerDay ? `${i.warmupMin}–${i.warmupPerDay}` : int(i.warmupPerDay)) : <span className="zero">off</span>}
+                {i.warmupRampup ? <span className="text-faint"> · +{i.warmupRampup}</span> : null}
+              </td>
+            ) : null}
+            {on("limit") ? <td className="is-num st-vol">{i.dailyLimit ? int(i.dailyLimit) : <span className="zero">0</span>}</td> : null}
+            {on("capacity") ? <td className="is-num st-vol">{i.dailyLimit ? int(i.dailyLimit) : <span className="zero">0</span>}</td> : null}
+            {on("today") ? <td className="is-num st-vol">{i.dailySent ? int(i.dailySent) : <span className="zero">0</span>}</td> : null}
+            {on("gap") ? <td className="is-num st-vol">{i.minWaitMins != null ? `${i.minWaitMins}m` : <span className="zero">—</span>}</td> : null}
+            {on("rep") ? <td className="is-num st-health st-start"><Rep value={i.warmupReputation} low={0} /></td> : null}
+            {on("age") ? <td className="is-num text-muted" title="Inbox added to Smartlead">{i.smartleadCreatedAt ? ageLabel(Math.floor((Date.now() - new Date(i.smartleadCreatedAt).getTime()) / 86_400_000)) : <span className="zero">—</span>}</td> : null}
+            {on("dns") ? <td /> : null}
+            {on("warmupState") ? <td><WarmupCell blocked={warmupOf(i) === "blocked" ? 1 : 0} paused={warmupOf(i) === "paused" ? 1 : 0} total={1} reason={i.warmupBlockedReason} /></td> : null}
+            {on("blacklist") ? <td /> : null}
+            {on("connection") ? <td>{i.status === "disconnected" ? <span className="ns-status tone-danger" title={i.connectError ?? undefined}>{i.connectError ? i.connectError.slice(0, 32) : "Disconnected"}</span> : <Ok>Connected</Ok>}</td> : null}
+          </tr>
+        )) : null}
+      </Fragment>
+    );
+  });
 
   return (
     <div className="flex flex-col gap-3">
@@ -413,7 +551,7 @@ export function InboxesView({ inboxes, clients, plans, smartleadConnected, dryRu
           <Search size={14} strokeWidth={1.5} />
           <input className="input" value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search" aria-label="Search inboxes" />
         </label>
-        {FLAT.includes(tab) ? null : <button type="button" className="btn btn-sm" aria-label={allOpen ? "Collapse all" : "Expand all"} title={allOpen ? "Collapse all" : "Expand all"} onClick={() => setOpenClients(allOpen ? new Set() : new Set(clientGroups.map((c) => c.key)))}>
+        {FLAT.includes(tab) ? null : <button type="button" className="btn btn-sm" aria-label={allOpen ? "Collapse all" : "Expand all"} title={allOpen ? "Collapse all" : "Expand all"} onClick={() => { setOpenClients(allOpen ? new Set() : new Set(clientGroups.map((c) => c.key))); setOpenTags(allOpen ? new Set() : new Set(clientGroups.flatMap((c) => c.tagGroups?.map((t) => t.key) ?? []))); }}>
           {allOpen ? <ChevronsDownUp size={14} /> : <ChevronsUpDown size={14} />}
         </button>}
         <button type="button" className="btn btn-sm" disabled={acting} title="Check SPF, DKIM, DMARC and MX now (selected domains, or all sending domains)" onClick={() => act(() => validateDns(selectedDomains))}>
@@ -528,106 +666,40 @@ export function InboxesView({ inboxes, clients, plans, smartleadConnected, dryRu
                             <span className="st-cap">Client</span>
                             <ClientCell name={c.domain} hue={c.clientHue} />
                           </span>
-                          <span className="st-count" title={`${c.domains.length} domain${c.domains.length === 1 ? "" : "s"}`}>{c.domains.length}</span>
+                          <span className="st-count" title={c.tagGroups ? `${c.tagGroups.length} tags, ${c.domains.length} domains` : `${c.domains.length} domain${c.domains.length === 1 ? "" : "s"}`}>{c.tagGroups ? c.tagGroups.length : c.domains.length}</span>
                         </span>
                       </td>
-                      {on("status") ? <td /> : null}
-                      {on("client") ? <td /> : null}
-                      {on("esp") ? <td>{c.esp ? <EspBadge type={c.esp} /> : <span className="zero">—</span>}</td> : null}
-                      {on("tags") ? <td /> : null}
-                      {on("count") ? <td className="is-num st-vol st-start strong"><span className="st-agg">Sum</span>{int(c.count)}</td> : null}
-                      {on("warmup") ? <td className="is-num st-vol"><span className="st-agg">Avg</span>{n0(c.avgWarmup)}{c.warmupOff ? <span className="text-faint"> · {c.warmupOff} off</span> : null}</td> : null}
-                      {on("limit") ? <td className="is-num st-vol"><span className="st-agg">Avg</span>{n0(c.avgLimit)}</td> : null}
-                      {on("capacity") ? <td className="is-num st-vol strong"><span className="st-agg">Sum</span>{c.capacity ? int(c.capacity) : <span className="zero">0</span>}</td> : null}
-                      {on("today") ? <td className="is-num st-vol"><span className="st-agg">Sum</span>{c.sentToday ? int(c.sentToday) : <span className="zero">0</span>}</td> : null}
-                      {on("gap") ? <td className="is-num st-vol">{c.avgWait != null ? `${Math.round(c.avgWait)}m` : <span className="zero">—</span>}</td> : null}
-                      {on("rep") ? <td className="is-num st-health st-start"><span className="st-agg">Avg</span><Rep value={c.avgRep} low={c.lowRep} /></td> : null}
-                      {on("age") ? <td /> : null}
-                      {on("dns") ? <td>{c.dnsBad ? <span className="ns-status tone-danger" title={`Missing: ${c.dns.missing.join(", ")}`}>{c.dnsBad} with gaps</span> : c.dns.state === "unknown" ? <span className="zero">—</span> : <Ok>Valid</Ok>}</td> : null}
-                      {on("warmupState") ? <td><WarmupCell blocked={c.blocked} paused={c.paused} total={c.count} /></td> : null}
-                      {on("blacklist") ? <td>{c.bl == null ? <span className="zero">—</span> : c.listed ? <span className="ns-status tone-danger" title={c.blListings.join(", ")}>{c.listed} listed</span> : <Ok>Clean</Ok>}</td> : null}
-                      {on("connection") ? <td>{c.disconnected ? <span className="ns-status tone-danger">{c.disconnected} disconnected</span> : <Ok title={`All ${c.count} inboxes connected`}>{c.count}/{c.count}</Ok>}</td> : null}
+                      {summaryCells(c)}
                     </tr>
-              {cOpen ? c.domains.map((g, gi) => {
-                const isOpen = open.has(g.domainId);
-                const ids = g.inboxes.map((i) => i.id);
-                const gSel = ids.every((id) => selected.has(id));
-                const gSome = ids.some((id) => selected.has(id));
-                return (
-                  <Fragment key={g.domainId}>
-                    <tr className="is-clickable" aria-expanded={isOpen} data-selected={gSel} onClick={() => toggle(g.domainId)}>
-                      <td className="col-check" onClick={(e) => { e.stopPropagation(); toggleIds(ids); }}>
-                        <input type="checkbox" className="checkbox" checked={gSel} ref={(el) => { if (el) el.indeterminate = !gSel && gSome; }} onChange={() => {}} aria-label={`Select inboxes on ${g.domain}`} tabIndex={-1} />
-                      </td>
-                      <td className="col-first" style={{ paddingLeft: 12 }}>
-                        <span className="flex items-center gap-1.5">
-                          <span className="st-n">{gi + 1}</span>
-                          <ChevronRight size={14} className="flex-none text-faint transition-transform" style={{ transform: isOpen ? "rotate(90deg)" : undefined }} />
-                          <DomainLink id={g.domainId} tab="inboxes" className="strong hover:underline">{g.domain}</DomainLink>
-                          <TagList tags={g.domainTags} graceDaysLeft={g.graceDaysLeft} />
-                        </span>
-                      </td>
-                      {on("status") ? <td><StatusDot status={g.status} /></td> : null}
-                      {on("client") ? <td><ClientCell name={g.clientName} hue={g.clientHue} /></td> : null}
-                      {on("esp") ? <td>{g.esp ? <EspBadge type={g.esp} /> : <span className="zero">—</span>}</td> : null}
-                      {on("tags") ? <td><Tags tags={g.tags} graceDaysLeft={g.graceDaysLeft} /></td> : null}
-                      {on("count") ? <td className="is-num st-vol st-start">{int(g.count)}</td> : null}
-                      {on("warmup") ? (
-                        <td className="is-num st-vol" title={g.warmupOff ? `${g.warmupOff} with warmup off` : undefined}>
-                          {n0(g.avgWarmup)}{g.warmupOff ? <span className="text-faint"> · {g.warmupOff} off</span> : null}
-                        </td>
-                      ) : null}
-                      {on("limit") ? <td className="is-num st-vol">{n0(g.avgLimit)}</td> : null}
-                      {on("capacity") ? <td className="is-num st-vol">{g.capacity ? int(g.capacity) : <span className="zero">0</span>}</td> : null}
-                      {on("today") ? <td className="is-num st-vol">{g.sentToday ? int(g.sentToday) : <span className="zero">0</span>}</td> : null}
-                      {on("gap") ? <td className="is-num st-vol">{g.avgWait != null ? `${Math.round(g.avgWait)}m` : <span className="zero">—</span>}</td> : null}
-                      {on("rep") ? (
-                        <td className="is-num st-health st-start" title={g.minRep != null ? `Lowest ${g.minRep.toFixed(0)}${g.lowRep ? `, ${g.lowRep} under 90` : ""}` : undefined}>
-                          <Rep value={g.avgRep} low={g.lowRep} />
-                        </td>
-                      ) : null}
-                      {on("age") ? <td className="is-num" title={g.ageDays != null ? `${g.ageDays} days since the first inbox was added to Smartlead` : "Not known yet"}>{ageLabel(g.ageDays) ?? <span className="zero">—</span>}</td> : null}
-                      {on("dns") ? <td><DnsCell dns={g.dns} /></td> : null}
-                      {on("warmupState") ? <td><WarmupCell blocked={g.blocked} paused={g.paused} total={g.count} /></td> : null}
-                      {on("blacklist") ? <td><BlacklistCell count={g.bl} listings={g.blListings} /></td> : null}
-                      {on("connection") ? <td>{g.disconnected ? <span className="ns-status tone-danger">{g.disconnected} disconnected</span> : <Ok title={`All ${g.count} inboxes connected`}>{g.count}/{g.count}</Ok>}</td> : null}
-                    </tr>
-                    {isOpen ? [...g.inboxes].sort(byValue((i: InboxListRow) => inboxValue(i, sort.key), (a, b) => a.email.localeCompare(b.email), sort.dir)).map((i) => (
-                      <tr key={i.id} className="is-clickable" data-selected={selected.has(i.id)} style={{ background: "var(--surface-2)" }} onClick={() => toggleIds([i.id])}>
-                        <td className="col-check"><input type="checkbox" className="checkbox" checked={selected.has(i.id)} onChange={() => {}} aria-label={`Select ${i.email}`} tabIndex={-1} /></td>
-                        <td className="col-first" style={{ paddingLeft: 66 }}>
-                          <span className="flex items-center gap-2" title={i.lastSyncedAt ? `Synced ${ago(i.lastSyncedAt)}` : undefined}>
-                            <span className="text-ink-soft">{i.email}</span>
-                            {i.status !== "connected" ? <span className="badge">{i.status}</span> : null}
-                            <ChangeBadge change={i.change} />
-                          </span>
-                        </td>
-                        {on("status") ? <td /> : null}
-                        {on("client") ? <td className="text-muted">{i.senderName ?? <span className="zero">—</span>}</td> : null}
-                        {on("esp") ? <td>{i.providerType ? <EspBadge type={i.providerType} /> : <span className="zero">—</span>}</td> : null}
-                        {on("tags") ? <td><Tags tags={i.smartleadTags} graceDaysLeft={i.domainGraceDaysLeft} /></td> : null}
-                        {on("count") ? <td className="is-num st-vol st-start"><span className="zero">—</span></td> : null}
-                        {on("warmup") ? (
-                          <td className="is-num st-vol" title={i.warmupMin != null ? `Smartlead sends ${i.warmupMin}–${i.warmupPerDay} a day${i.warmupReplyRate != null ? `, ${i.warmupReplyRate}% reply rate` : ""}` : undefined}>
-                            {i.warmupEnabled ? (i.warmupMin != null && i.warmupMin !== i.warmupPerDay ? `${i.warmupMin}–${i.warmupPerDay}` : int(i.warmupPerDay)) : <span className="zero">off</span>}
-                            {i.warmupRampup ? <span className="text-faint"> · +{i.warmupRampup}</span> : null}
-                          </td>
-                        ) : null}
-                        {on("limit") ? <td className="is-num st-vol">{i.dailyLimit ? int(i.dailyLimit) : <span className="zero">0</span>}</td> : null}
-                        {on("capacity") ? <td className="is-num st-vol">{i.dailyLimit ? int(i.dailyLimit) : <span className="zero">0</span>}</td> : null}
-                        {on("today") ? <td className="is-num st-vol">{i.dailySent ? int(i.dailySent) : <span className="zero">0</span>}</td> : null}
-                        {on("gap") ? <td className="is-num st-vol">{i.minWaitMins != null ? `${i.minWaitMins}m` : <span className="zero">—</span>}</td> : null}
-                        {on("rep") ? <td className="is-num st-health st-start"><Rep value={i.warmupReputation} low={0} /></td> : null}
-                        {on("age") ? <td className="is-num text-muted" title="Inbox added to Smartlead">{i.smartleadCreatedAt ? ageLabel(Math.floor((Date.now() - new Date(i.smartleadCreatedAt).getTime()) / 86_400_000)) : <span className="zero">—</span>}</td> : null}
-                        {on("dns") ? <td /> : null}
-                        {on("warmupState") ? <td><WarmupCell blocked={warmupOf(i) === "blocked" ? 1 : 0} paused={warmupOf(i) === "paused" ? 1 : 0} total={1} reason={i.warmupBlockedReason} /></td> : null}
-                        {on("blacklist") ? <td /> : null}
-                        {on("connection") ? <td>{i.status === "disconnected" ? <span className="ns-status tone-danger" title={i.connectError ?? undefined}>{i.connectError ? i.connectError.slice(0, 32) : "Disconnected"}</span> : <Ok>Connected</Ok>}</td> : null}
-                      </tr>
-                    )) : null}
-                  </Fragment>
-                );
-              }) : null}
+                    {cOpen ? (c.tagGroups
+                      ? c.tagGroups.map((t) => {
+                          const tOpen = openTags.has(t.key);
+                          const tIds = t.inboxes.map((i) => i.id);
+                          const tSel = tIds.every((id) => selected.has(id));
+                          const tSome = tIds.some((id) => selected.has(id));
+                          return (
+                            <Fragment key={t.key}>
+                              <tr className="is-clickable inb-tag" aria-expanded={tOpen} data-selected={tSel} onClick={() => toggleTag(t.key)}>
+                                <td className="col-check" onClick={(e) => { e.stopPropagation(); toggleIds(tIds); }}>
+                                  <input type="checkbox" className="checkbox" checked={tSel} ref={(el) => { if (el) el.indeterminate = !tSel && tSome; }} onChange={() => {}} aria-label={`Select every inbox tagged ${t.domain}`} tabIndex={-1} />
+                                </td>
+                                <td className="col-first" style={{ paddingLeft: 22 }}>
+                                  <span className="flex items-center gap-2">
+                                    <ChevronRight size={14} className="flex-none text-faint transition-transform" style={{ transform: tOpen ? "rotate(90deg)" : undefined }} />
+                                    <span className="st-client-name">
+                                      <span className="st-cap">Tag</span>
+                                      <span className="strong">{t.domain}</span>
+                                    </span>
+                                    <span className="st-count" title={`${t.domains.length} domain${t.domains.length === 1 ? "" : "s"}`}>{t.domains.length}</span>
+                                  </span>
+                                </td>
+                                {summaryCells(t)}
+                              </tr>
+                              {tOpen ? domainRows(t.domains, `${t.key}|`, 40) : null}
+                            </Fragment>
+                          );
+                        })
+                      : domainRows(c.domains, `${c.key}|`, 12)) : null}
                     {cOpen ? <tr className="st-gap" aria-hidden><td colSpan={colCount} /></tr> : null}
                   </Fragment>
                 );
