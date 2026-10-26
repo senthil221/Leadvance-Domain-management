@@ -2,7 +2,7 @@ import { PGlite } from "@electric-sql/pglite";
 import { PGLiteSocketServer } from "@electric-sql/pglite-socket";
 import postgres from "postgres";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { enrolNewDomains } from "../src/jobs/warmup-program";
+import { enrolNewDomains, loadWarmupProgram, newDomainIds, startWarmup } from "../src/jobs/warmup-program";
 import { parseWarmupProgram, warmupProgress } from "../src/lib/warmup-program";
 import { loadMigrations } from "../scripts/migrations";
 
@@ -81,5 +81,20 @@ describe("enrolNewDomains", () => {
     expect(c).toMatchObject({ changes: { warmup_enabled: true, warmup_per_day: 25, warmup_rampup: 3, warmup_reply_rate: 35 }, status: "pending", source: "warmup-program" });
 
     expect(await enrolNewDomains(sql)).toMatchObject({ enrolled: 0 });
+  });
+
+  it("tags started domains New, and starts chosen domains by hand even with automatic warm-up off", async () => {
+    const [fresh] = await sql`select tags from domains where name = 'fresh.com'`;
+    expect(fresh.tags).toContain("New");
+
+    await save({ enabled: false, days: 14, maxAgeDays: 1, perDay: 10, rampup: 1, replyRate: 30 });
+    const late = await domain("late.com");
+    await inbox(late, "a@late.com", 0);
+    expect(await newDomainIds(sql, 1)).toEqual([late]);
+    const r = await startWarmup(sql, null, [late], await loadWarmupProgram(sql), "tester");
+    expect(r).toMatchObject({ enrolled: 1, inboxes: 1, tagged: 0 });
+    const [row] = await sql`select warmup_days, tags from domains where id = ${late}`;
+    expect(row).toMatchObject({ warmup_days: 14, tags: ["New"] });
+    expect(await newDomainIds(sql, 1)).toEqual([]);
   });
 });

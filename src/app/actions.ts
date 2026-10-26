@@ -987,6 +987,35 @@ export async function saveWarmupProgram(input: z.input<typeof warmupProgramInput
 }
 
 /**
+ * Starts the warm-up of new domains by hand: the chosen ones, or every new
+ * domain not warming yet. Same values and New tag as the automatic run.
+ */
+export async function startWarmupNow(domainIds: string[]): Promise<ActionResult<{ message: string }>> {
+  try {
+    const actor = await requireActor();
+    const chosen = z.array(z.uuid()).max(2000).parse(domainIds);
+    const { loadWarmupProgram, newDomainIds, startWarmup } = await import("@/jobs/warmup-program");
+    const { jobContext } = await import("@/jobs");
+    const p = await loadWarmupProgram(jobSql);
+    const ids = chosen.length
+      ? (await sql<{ id: string }[]>`select id from domains where id in ${sql(chosen)} and (warmup_started_at is null or warmup_done_at is not null)`).map((d) => d.id)
+      : await newDomainIds(jobSql, p.maxAgeDays);
+    if (!ids.length) return { ok: false, error: "No new domains to warm up" };
+    const ctx = await jobContext(jobSql);
+    const r = await startWarmup(jobSql, ctx.smartleadApp, ids, p, actor);
+    kickJob("inbox-settings");
+    refresh();
+    const doms = `${r.enrolled} domain${r.enrolled === 1 ? "" : "s"}`;
+    const dry = process.env.INTEGRATIONS_DRY_RUN !== "false";
+    return { ok: true, data: { message: dry
+      ? `Dry run: ${doms} started warming in the app. Smartlead wasn't changed.`
+      : `${doms} warming up for ${p.days} days: warmup ${p.perDay} a day on ${r.inboxes} inboxes${ctx.smartleadApp ? `, ${r.tagged} tagged New` : ". Add SMARTLEAD_JWT to tag them New in Smartlead"}` } };
+  } catch (e) {
+    return appError(e);
+  }
+}
+
+/**
  * Moves whole domains onto a Smartlead tag, before or after their warm-up days
  * are up. Their inboxes take the tag (and lose their other tags), copy the
  * sending limit and warmup of the inboxes already on it, and the domain leaves
@@ -1028,7 +1057,8 @@ export async function moveDomainsToTag(input: { domainIds: string[]; tag: string
     const { retagRows } = await import("@/jobs/replacements");
     const { isMark } = await import("@/lib/tag-map");
     const target = v.tag.toLowerCase();
-    const remove = [...new Set(rows.flatMap((r) => (r.tags as string[]) ?? []).filter((t) => !isMark(t) && t.toLowerCase() !== target))];
+    // Its old tags go, and so does New: the domain is done warming.
+    const remove = [...new Set([...rows.flatMap((r) => (r.tags as string[]) ?? []).filter((t) => !isMark(t) && t.toLowerCase() !== target), "New"])];
     const retagged = app.dryRun ? 0 : await retagRows(jobSql, app, rows, [v.tag], remove, tagId, () => known);
 
     const copied = Object.fromEntries(Object.entries({
@@ -1045,6 +1075,8 @@ export async function moveDomainsToTag(input: { domainIds: string[]; tag: string
     // The domain leaves Warming up, takes the client of the tag, and goes live.
     await sql`update domains set warmup_done_at = now(), warmup_moved_to = ${v.tag}
       where id in ${sql(v.domainIds)} and warmup_started_at is not null and warmup_done_at is null`;
+    await sql`update domains set tags = array(select t from unnest(tags) t where lower(t) <> 'new' order by 1)
+      where id in ${sql(v.domainIds)} and exists (select 1 from unnest(tags) t where lower(t) = 'new')`;
     const [map] = await sql<{ clientId: string }[]>`
       select m.client_id from client_tags m join clients c on c.id = m.client_id and c.archived_at is null
       where m.tag = ${normTag(v.tag)}`;

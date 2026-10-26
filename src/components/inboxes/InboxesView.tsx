@@ -1,11 +1,11 @@
 "use client";
 
-import { ArrowLeftRight, ChevronDown, ChevronRight, ChevronsDownUp, ChevronsUpDown, Inbox, Info, PlugZap, Search, Settings2, ShieldCheck, Shuffle, Tag, Tags as TagsIcon, X } from "lucide-react";
+import { ArrowLeftRight, ChevronDown, Flame, ChevronRight, ChevronsDownUp, ChevronsUpDown, Inbox, Info, PlugZap, Search, Settings2, ShieldCheck, Shuffle, Tag, Tags as TagsIcon, X } from "lucide-react";
 import { useSearchParams } from "next/navigation";
 import { DropdownMenu } from "radix-ui";
 import { type ReactNode, useTransition } from "react";
 import { toast } from "sonner";
-import { markInboxes, reconnectInboxes, validateDns } from "@/app/actions";
+import { markInboxes, reconnectInboxes, startWarmupNow, validateDns } from "@/app/actions";
 import Link from "next/link";
 import { Fragment, useEffect, useMemo, useState } from "react";
 import { ColumnsMenu, useColumns, type ColumnDef } from "@/components/Columns";
@@ -24,19 +24,37 @@ import { DOMAIN_STATUSES, type DomainStatus } from "@/lib/status";
 
 // Five views of the sending setup. Active and Disconnected list inboxes under
 // their client and domain; Warming up, Needs attention and All domains list one line per domain.
-// Domains in the warm-up programme (enrolled, not yet moved to a tag) live under Warming up only.
+// Domains in the warm-up programme (enrolled, not yet moved to a tag) live under
+// Warming up only, and so do new domains that haven't started it yet (`fresh`).
 const warmingUp = (i: InboxListRow) => i.domainWarmupStartedAt != null && i.domainWarmupDoneAt == null;
-const TABS = [
-  { key: "active", label: "Active", match: (i: InboxListRow) => i.status === "connected" && i.domainStatus === "active" && !warmingUp(i) },
-  { key: "warming", label: "Warming up", match: (i: InboxListRow) => warmingUp(i) && i.status !== "removed" },
-  { key: "attention", label: "Needs attention", match: (i: InboxListRow) => (i.domainStatus === "active" || i.domainStatus === "warming") && !warmingUp(i) },
-  { key: "disconnected", label: "Disconnected", match: (i: InboxListRow) => i.status === "disconnected" },
+type Match = (i: InboxListRow, fresh: Set<string>) => boolean;
+const TABS: readonly { key: "active" | "warming" | "attention" | "disconnected" | "all"; label: string; match: Match }[] = [
+  { key: "active", label: "Active", match: (i, fresh) => i.status === "connected" && i.domainStatus === "active" && !warmingUp(i) && !fresh.has(i.domainId) },
+  { key: "warming", label: "Warming up", match: (i, fresh) => (warmingUp(i) || fresh.has(i.domainId)) && i.status !== "removed" },
+  { key: "attention", label: "Needs attention", match: (i, fresh) => (i.domainStatus === "active" || i.domainStatus === "warming") && !warmingUp(i) && !fresh.has(i.domainId) },
+  { key: "disconnected", label: "Disconnected", match: (i) => i.status === "disconnected" },
   { key: "all", label: "All domains", match: () => true },
-] as const;
+];
+
+/**
+ * New domains that haven't started warming: connected, at most `maxAgeDays`
+ * old, no client yet, and not part of a replacement (those carry New already).
+ */
+function freshDomains(inboxes: InboxListRow[], maxAgeDays: number) {
+  const ids = new Set<string>();
+  for (const g of group(inboxes.filter((i) => i.status === "connected"))) {
+    const f = g.inboxes[0];
+    if (f.domainWarmupStartedAt || g.clientName || g.ageDays == null || g.ageDays > maxAgeDays) continue;
+    if (f.domainStatus !== "active" && f.domainStatus !== "warming") continue;
+    if (f.domainTags.some((t) => t.toLowerCase() === "new")) continue;
+    ids.add(g.domainId);
+  }
+  return ids;
+}
 type TabKey = (typeof TABS)[number]["key"];
 const tabOf = (v: string | null): TabKey => (TABS.find((t) => t.key === v)?.key ?? "active");
 const FLAT: TabKey[] = ["warming", "attention", "all"];
-const tabMatch = (k: TabKey) => TABS.find((t) => t.key === k)!.match;
+const tabMatch = (k: TabKey, fresh: Set<string>) => (i: InboxListRow) => TABS.find((t) => t.key === k)!.match(i, fresh);
 
 /** Why a domain is on the Needs attention list: everything wrong with its sending setup. */
 type Reason = { label: string; tone: "danger" | "warning" };
@@ -304,8 +322,10 @@ function ChangeBadge({ change }: { change: InboxListRow["change"] }) {
   return null;
 }
 
-export function InboxesView({ inboxes, clients, plans, smartleadConnected, dryRun, timezone, appProblem }: {
+export function InboxesView({ inboxes, clients, plans, smartleadConnected, dryRun, timezone, appProblem, newMaxAgeDays }: {
   inboxes: InboxListRow[]; clients: ClientRow[]; plans: PlanRow[]; smartleadConnected: boolean; dryRun: boolean; timezone: string;
+  /** Settings → Warming up: how young a domain counts as new. */
+  newMaxAgeDays: number;
   /** Why the Smartlead token can't be used, or null when it can. */
   appProblem: string | null;
 }) {
@@ -340,16 +360,17 @@ export function InboxesView({ inboxes, clients, plans, smartleadConnected, dryRu
     const client = clients.find((c) => c.id === clientId)?.name;
     return inboxes.filter((i) => (!client || i.clientName === client) && (!esp || i.providerType === esp));
   }, [inboxes, clients, clientId, esp]);
-  const attentionCount = useMemo(() => group(base.filter(tabMatch("attention"))).filter((g) => reasonsOf(g).length > 0).length, [base]);
+  const fresh = useMemo(() => freshDomains(inboxes, newMaxAgeDays), [inboxes, newMaxAgeDays]);
+  const attentionCount = useMemo(() => group(base.filter(tabMatch("attention", fresh))).filter((g) => reasonsOf(g).length > 0).length, [base, fresh]);
   const lowRepInboxes = useMemo(() => base.filter((i) => i.status === "connected" && i.warmupReputation != null && i.warmupReputation < 90).length, [base]);
   // Domains in every view but Disconnected, which counts inboxes.
   const counts = useMemo(() => {
-    const domains = (k: TabKey) => new Set(base.filter(tabMatch(k)).map((i) => i.domainId)).size;
-    return { active: domains("active"), warming: domains("warming"), attention: attentionCount, disconnected: base.filter(tabMatch("disconnected")).length, all: domains("all") } as Record<TabKey, number>;
-  }, [base, attentionCount]);
+    const domains = (k: TabKey) => new Set(base.filter(tabMatch(k, fresh)).map((i) => i.domainId)).size;
+    return { active: domains("active"), warming: domains("warming"), attention: attentionCount, disconnected: base.filter(tabMatch("disconnected", fresh)).length, all: domains("all") } as Record<TabKey, number>;
+  }, [base, attentionCount, fresh]);
 
   const groups = useMemo(() => {
-    const match = TABS.find((t) => t.key === tab)!.match;
+    const match = tabMatch(tab, fresh);
     const needle = q.trim().toLowerCase();
     const shown = base.filter((i) => match(i) && (!needle || i.email.includes(needle) || i.domain.includes(needle) || i.senderName?.toLowerCase().includes(needle) || i.smartleadTags.some((t) => t.toLowerCase().includes(needle))));
     return group(shown).filter((g) => tab !== "attention" || reasonsOf(g).length > 0).sort((a, b) => {
@@ -359,7 +380,7 @@ export function InboxesView({ inboxes, clients, plans, smartleadConnected, dryRu
       if (y === null) return -1;
       return (x < y ? -1 : 1) * sort.dir;
     });
-  }, [base, tab, q, sort]);
+  }, [base, tab, q, sort, fresh]);
 
   // Keep the address in step so a view can be bookmarked or linked.
   useEffect(() => {
@@ -582,6 +603,16 @@ export function InboxesView({ inboxes, clients, plans, smartleadConnected, dryRu
         <button type="button" className="btn btn-sm" disabled={acting || Boolean(appProblem)} title={appProblem ?? "Ask Smartlead to retry the login of every disconnected inbox"} onClick={() => act(reconnectInboxes)}>
           <PlugZap size={14} /> Reconnect{inboxes.filter((i) => i.status === "disconnected").length ? ` (${inboxes.filter((i) => i.status === "disconnected").length})` : ""}
         </button>
+        {tab === "warming" && fresh.size ? (() => {
+          const chosen = selectedDomains.filter((id) => fresh.has(id));
+          return (
+            <button type="button" className="btn btn-sm btn-primary" disabled={acting || !smartleadConnected}
+              title="Switch warmup on with the values from Settings → Warming up and tag the inboxes New"
+              onClick={() => act(() => startWarmupNow(chosen))}>
+              <Flame size={14} /> Start warm-up ({chosen.length || fresh.size})
+            </button>
+          );
+        })() : null}
         {FLAT.includes(tab) ? null : <ColumnsMenu cols={cols} />}
       </div>
 
@@ -626,7 +657,7 @@ export function InboxesView({ inboxes, clients, plans, smartleadConnected, dryRu
                       </td>
                       <td><ClientCell name={g.clientName} hue={g.clientHue} /></td>
                       <td><Tags tags={g.tags.filter((t) => !isMark(t))} /></td>
-                      <td>{tab === "warming" && g.warm ? <WarmProgress warm={g.warm} /> : <StatusDot status={g.status} />}</td>
+                      <td>{tab === "warming" ? (g.warm ? <WarmProgress warm={g.warm} /> : <span className="ns-status tone-warning" title="New domain: warm-up not started">Not started</span>) : <StatusDot status={g.status} />}</td>
                       {tab === "attention" ? (
                         <td>
                           <span className="flex flex-wrap gap-1">

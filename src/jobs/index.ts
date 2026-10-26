@@ -86,7 +86,7 @@ export const JOBS: Job[] = [
     name: "warmup-new-domains",
     label: "Warm up new domains",
     everyMinutes: 30,
-    run: ({ sql }) => enrolNewDomains(sql),
+    run: ({ sql, smartleadApp }) => enrolNewDomains(sql, smartleadApp),
   },
   {
     name: "smartlead-campaigns",
