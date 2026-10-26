@@ -40,8 +40,9 @@ afterAll(async () => {
   await pg?.close();
 });
 
-async function domain(name: string, tags: string[] = []) {
-  const [d] = await sql`insert into domains (name, status, tags) values (${name}, 'warming', ${tags}) returning id`;
+async function domain(name: string, tags: string[] = [], dkim = true) {
+  const [d] = await sql`insert into domains (name, status, tags, dns_spf, dns_dkim, dns_dmarc, dns_mx)
+    values (${name}, 'warming', ${tags}, true, ${dkim}, true, true) returning id`;
   return d.id as string;
 }
 async function inbox(domainId: string, email: string, daysOld: number, tags: string[] = []) {
@@ -68,12 +69,14 @@ describe("enrolNewDomains", () => {
     await sql`insert into client_tags (tag, display, client_id) values ('prateek batra', 'Prateek Batra', ${client})`;
     const tagged = await domain("tagged.com");
     await inbox(tagged, "a@tagged.com", 0, ["Prateek Batra"]);
+    const noDkim = await domain("nodkim.com", [], false);
+    await inbox(noDkim, "a@nodkim.com", 0);
     const fresh2 = await domain("fresh2.com");
     await inbox(fresh2, "a@fresh2.com", 0);
     await inbox(fresh2, "b@fresh2.com", 0);
 
     const r = await enrolNewDomains(sql);
-    expect(r).toMatchObject({ enrolled: 2, inboxes: 3 }); // fresh.com and fresh2.com
+    expect(r).toMatchObject({ enrolled: 2, inboxes: 3 }); // fresh.com and fresh2.com; nodkim.com waits for its DNS
     const rows = await sql`select name, warmup_days from domains where warmup_started_at is not null order by name`;
     expect(rows.map((x) => x.name)).toEqual(["fresh.com", "fresh2.com"]);
     expect(rows[0].warmup_days).toBe(12);

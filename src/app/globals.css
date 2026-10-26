@@ -926,9 +926,42 @@ a.stat:hover { background: var(--surface-2); }
 .data-table tbody tr.inb-client .client-cell { font-weight: 600; color: var(--ink); }
 .rpl-tag.is-ready { background: var(--success-soft-2); color: var(--success-ink); box-shadow: inset 0 0 0 1px var(--success-line); }
 
-/* Warming up: day count and progress bar */
-.wu-progress { display: inline-flex; align-items: center; gap: 8px; white-space: nowrap; }
-.wu-bar { width: 72px; height: 6px; border-radius: 3px; background: var(--surface-4); overflow: hidden; }
-.wu-bar > span { display: block; height: 100%; border-radius: 3px; background: var(--info-solid); transition: width 200ms var(--t-ease); }
-.wu-bar > span.is-ready { background: var(--success-solid); }
-.wu-label { font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
+
+/* Warming up: stage summary, segmented day track */
+.wu-summary { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; margin-bottom: 10px; }
+.wu-stage {
+  display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 10px 14px; border-radius: 10px;
+  background: var(--surface); box-shadow: 0 0 0 1px var(--line); text-align: left; cursor: pointer;
+  transition: box-shadow 160ms var(--t-ease), background 160ms var(--t-ease), transform 160ms var(--t-ease);
+}
+.wu-stage:hover { box-shadow: 0 0 0 1px var(--line-strong); }
+.wu-stage:active { transform: scale(.99); }
+.wu-stage[aria-pressed="true"] { background: var(--surface-3); box-shadow: 0 0 0 1px var(--line-strong), 0 0 0 3px color-mix(in srgb, var(--ink) 6%, transparent); }
+.wu-stage-label { display: inline-flex; align-items: center; gap: 8px; color: var(--muted); font-size: 12.5px; }
+.wu-stage-label i { width: 7px; height: 7px; border-radius: 50%; background: var(--faint); }
+.wu-stage.is-dns i { background: var(--warning-solid); }
+.wu-stage.is-ready i { background: var(--info-solid); }
+.wu-stage.is-warming i { background: var(--violet-solid); box-shadow: 0 0 0 3px color-mix(in srgb, var(--violet-solid) 22%, transparent); }
+.wu-stage.is-done i { background: var(--success-solid); }
+.wu-stage-n { font-size: 18px; font-weight: 600; color: var(--ink); font-variant-numeric: tabular-nums; letter-spacing: -.01em; }
+@media (max-width: 760px) { .wu-summary { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+
+.wu-table .wu-col-track { min-width: 250px; }
+.wu-sub { font-size: 11.5px; color: var(--faint); }
+.wu-track { display: inline-flex; align-items: center; gap: 12px; width: 100%; }
+.wu-segs { display: grid; gap: 3px; flex: 1; min-width: 150px; max-width: 220px; }
+.wu-segs > span { height: 8px; border-radius: 3px; background: var(--surface-4); transition: background 240ms var(--t-ease); }
+.wu-segs > span.is-on { background: var(--violet-solid); }
+.wu-segs > span.is-done { background: var(--success-solid); }
+.wu-segs > span.is-today { background: color-mix(in srgb, var(--violet-solid) 45%, var(--surface-4)); animation: wu-pulse 1.8s ease-in-out infinite; }
+@keyframes wu-pulse { 50% { background: color-mix(in srgb, var(--violet-solid) 75%, var(--surface-4)); } }
+@media (prefers-reduced-motion: reduce) { .wu-segs > span.is-today { animation: none; } }
+.wu-count { display: inline-flex; align-items: baseline; gap: 6px; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.wu-count b { font-size: 13px; font-weight: 600; color: var(--ink); }
+.wu-count b.is-done { color: var(--success-ink); }
+.wu-count span { font-size: 12px; color: var(--muted); }
+.wu-count em { font-style: normal; font-size: 11.5px; color: var(--faint); }
+.wu-state { display: inline-flex; align-items: center; gap: 7px; height: 22px; padding: 0 9px; border-radius: 999px; font-size: 12px; font-weight: 500; }
+.wu-state::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+.wu-state.is-dns { background: var(--warning-soft-2); color: var(--warning-ink); }
+.wu-state.is-ready { background: var(--info-soft-2); color: var(--info-ink); }

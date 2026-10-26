@@ -89,12 +89,20 @@ export function WarmupProgramForm({ program }: { program: WarmupProgram }) {
       <label className="flex cursor-pointer items-start gap-2.5">
         <input type="checkbox" className="checkbox mt-1" checked={on} onChange={(e) => setOn(e.target.checked)} />
         <span className="flex flex-col">
-          <span className="strong">Warm up new domains automatically</span>
-          <span className="field-hint">When a new domain connects to Smartlead, warmup is switched on with the values below and the domain shows under Smartlead → Warming up.</span>
+          <span className="strong">Start warm-up automatically once DNS is valid</span>
+          <span className="field-hint">New domains show under Smartlead → Warming up as soon as they connect. When SPF, DKIM, DMARC and MX are all found, warmup is switched on with the values below and the inboxes are tagged New. Off: you start them with Start warm-up.</span>
         </span>
       </label>
       <div className="grid gap-4 sm:grid-cols-2">
-        {field("days", "Warm up for", "days", "How long a domain stays in Warming up. 12 to 14 is usual.")}
+        <div className="field">
+          <span className="field-label">Warm up for</span>
+          <div className="seg" role="group" aria-label="Warm-up days" style={{ width: "fit-content" }}>
+            {["12", "13", "14"].map((d) => (
+              <button key={d} type="button" aria-pressed={v.days === d} onClick={() => setV((x) => ({ ...x, days: d }))}>{d} days</button>
+            ))}
+          </div>
+          <span className="field-hint">Days counted from the start of warm-up, shown as a day-by-day track.</span>
+        </div>
         {field("maxAgeDays", "New means at most", "days old", "Age counts from the first inbox added to Smartlead. 0 is only today's.")}
         {field("perDay", "Warmup emails a day", "per inbox", "Smartlead's total warmup per day.")}
         {field("rampup", "Ramp-up", "per day", "How much the daily warmup grows each day.")}

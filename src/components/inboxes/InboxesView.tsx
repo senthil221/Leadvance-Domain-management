@@ -202,7 +202,7 @@ type SortKey = "progress" | "reasons" | "domain" | "status" | "client" | "esp" |
 const sortValue = (g: Group, k: SortKey): string | number | null => {
   switch (k) {
     case "status": return DOMAIN_STATUSES.indexOf(g.status);
-    case "progress": return g.warm ? g.warm.pct : null;
+    case "progress": return g.warm ? 100 + g.warm.pct : stageOf(g) === "ready" ? 1 : 0;
     case "reasons": return reasonsOf(g).length;
     case "client": return g.clientName?.toLowerCase() ?? null;
     case "esp": return g.esp;
@@ -305,11 +305,39 @@ function BlacklistCell({ count, listings }: { count: number | null; listings: st
 }
 
 /** Warming up: the day the domain is on, a bar, and when it is ready to move to a tag. */
-function WarmProgress({ warm }: { warm: NonNullable<Group["warm"]> }) {
+/** Where a domain is on the Warming up tab. */
+type Stage = "dns" | "ready" | "warming" | "done";
+const STAGES: { key: Stage; label: string; hint: string }[] = [
+  { key: "dns", label: "Waiting for DNS", hint: "New domains whose SPF, DKIM, DMARC or MX isn't found yet. Warm-up starts once all four are." },
+  { key: "ready", label: "Ready to start", hint: "DNS is valid. Starts by itself when automatic warm-up is on, or with Start warm-up." },
+  { key: "warming", label: "Warming", hint: "Warm-up running: counting the days set in Settings → Warming up." },
+  { key: "done", label: "Done", hint: "Warm-up days are up. Move them to a tag to put them to work." },
+];
+const stageOf = (g: Group): Stage => (g.warm ? (g.warm.ready ? "done" : "warming") : g.dns.state === "ok" ? "ready" : "dns");
+
+/** One segment per warm-up day: done days filled, today lit, the rest empty. */
+function WarmTrack({ g }: { g: Group }) {
+  const stage = stageOf(g);
+  if (!g.warm) {
+    return (
+      <span className="wu-track is-idle">
+        <span className={`wu-state is-${stage}`}>{stage === "ready" ? "Ready to start" : g.dns.state === "unknown" ? "Checking DNS…" : "Waiting for DNS"}</span>
+      </span>
+    );
+  }
+  const { day, days, ready, left } = g.warm;
+  const done = ready ? days : day - 1;
   return (
-    <span className="wu-progress" title={warm.ready ? "Warm-up days are up: ready to move to a tag" : `${warm.left} day${warm.left === 1 ? "" : "s"} left`}>
-      <span className="wu-bar"><span className={warm.ready ? "is-ready" : undefined} style={{ width: `${warm.pct}%` }} /></span>
-      <span className="wu-label">{warm.ready ? "Ready" : `Day ${warm.day} of ${warm.days}`}</span>
+    <span className="wu-track" title={ready ? `All ${days} days done` : `Day ${day} of ${days}: ${done} done, ${left} left after today`}>
+      <span className="wu-segs" style={{ gridTemplateColumns: `repeat(${days}, 1fr)` }}>
+        {Array.from({ length: days }, (_, k) => (
+          <span key={k} className={k < done ? (ready ? "is-done" : "is-on") : k === done && !ready ? "is-today" : undefined} />
+        ))}
+      </span>
+      <span className="wu-count">
+        {ready ? <b className="is-done">Done</b> : <><b>{day}</b><span>/{days}</span></>}
+        <em>{ready ? `${days} days` : `${left + 1} to go`}</em>
+      </span>
     </span>
   );
 }
@@ -342,6 +370,7 @@ export function InboxesView({ inboxes, clients, plans, smartleadConnected, dryRu
   }
   const [replaceOpen, setReplaceOpen] = useState(false);
   const [moveOpen, setMoveOpen] = useState(false);
+  const [stage, setStage] = useState<Stage | null>(null);
   const [q, setQ] = useState("");
   const [clientId, setClientId] = useState("");
   const [sort, setSort] = useState<{ key: SortKey; dir: 1 | -1 }>({ key: "domain", dir: 1 });
@@ -381,6 +410,13 @@ export function InboxesView({ inboxes, clients, plans, smartleadConnected, dryRu
       return (x < y ? -1 : 1) * sort.dir;
     });
   }, [base, tab, q, sort, fresh]);
+
+  // The Warming up tab's domains by stage, before the stage filter.
+  const warmStages = useMemo(() => {
+    const by: Record<Stage, string[]> = { dns: [], ready: [], warming: [], done: [] };
+    if (tab === "warming") for (const g of groups) by[stageOf(g)].push(g.domainId);
+    return by;
+  }, [groups, tab]);
 
   // Keep the address in step so a view can be bookmarked or linked.
   useEffect(() => {
@@ -603,22 +639,89 @@ export function InboxesView({ inboxes, clients, plans, smartleadConnected, dryRu
         <button type="button" className="btn btn-sm" disabled={acting || Boolean(appProblem)} title={appProblem ?? "Ask Smartlead to retry the login of every disconnected inbox"} onClick={() => act(reconnectInboxes)}>
           <PlugZap size={14} /> Reconnect{inboxes.filter((i) => i.status === "disconnected").length ? ` (${inboxes.filter((i) => i.status === "disconnected").length})` : ""}
         </button>
-        {tab === "warming" && fresh.size ? (() => {
-          const chosen = selectedDomains.filter((id) => fresh.has(id));
+        {tab === "warming" && warmStages.ready.length ? (() => {
+          const ready = new Set(warmStages.ready);
+          const chosen = selectedDomains.filter((id) => ready.has(id));
           return (
             <button type="button" className="btn btn-sm btn-primary" disabled={acting || !smartleadConnected}
-              title="Switch warmup on with the values from Settings → Warming up and tag the inboxes New"
-              onClick={() => act(() => startWarmupNow(chosen))}>
-              <Flame size={14} /> Start warm-up ({chosen.length || fresh.size})
+              title="Switch warmup on with the values from Settings → Warming up and tag the inboxes New. Only domains with valid DNS."
+              onClick={() => act(() => startWarmupNow(chosen.length ? chosen : warmStages.ready))}>
+              <Flame size={14} /> Start warm-up ({chosen.length || ready.size})
             </button>
           );
         })() : null}
         {FLAT.includes(tab) ? null : <ColumnsMenu cols={cols} />}
       </div>
 
+      {tab === "warming" ? (
+        <div className="wu-summary" role="group" aria-label="Warm-up stages">
+          {STAGES.map((s) => (
+            <button key={s.key} type="button" className={`wu-stage is-${s.key}`} aria-pressed={stage === s.key} title={s.hint}
+              onClick={() => setStage((x) => (x === s.key ? null : s.key))}>
+              <span className="wu-stage-label"><i />{s.label}</span>
+              <span className="wu-stage-n">{int(warmStages[s.key].length)}</span>
+            </button>
+          ))}
+        </div>
+      ) : null}
+
       <div className="table-wrap">
         <div className="table-scroll" style={{ maxHeight: "calc(100dvh - 270px)", minHeight: 260 }}>
-          {FLAT.includes(tab) ? (
+          {tab === "warming" ? (
+            <table className="data-table is-main wu-table">
+              <thead>
+                <tr>
+                  <th className="col-check">
+                    <input type="checkbox" className="checkbox" aria-label="Select all shown domains" checked={allSel}
+                      ref={(el) => { if (el) el.indeterminate = !allSel && someSel; }}
+                      onChange={() => setSelected((s0) => { const n = new Set(s0); for (const id of allIds) if (allSel) n.delete(id); else n.add(id); return n; })} />
+                  </th>
+                  <SortTh k="domain" sort={sort} onSort={sortBy}>Domain</SortTh>
+                  <SortTh k="progress" sort={sort} onSort={sortBy} className="wu-col-track">Warm-up progress</SortTh>
+                  <SortTh k="age" sort={sort} onSort={sortBy} num title="Days since the first inbox was added to Smartlead">Age</SortTh>
+                  <SortTh k="dnsMissing" sort={sort} onSort={sortBy}>DNS</SortTh>
+                  <SortTh k="warmupState" sort={sort} onSort={sortBy}>Warmup</SortTh>
+                  <SortTh k="avgWarmup" sort={sort} onSort={sortBy} num title="Warmup emails a day, per inbox">Warmup / day</SortTh>
+                  <SortTh k="avgLimit" sort={sort} onSort={sortBy} num title="Campaign limit a day, per inbox">Limit</SortTh>
+                  <SortTh k="count" sort={sort} onSort={sortBy} num>Inboxes</SortTh>
+                  <SortTh k="avgRep" sort={sort} onSort={sortBy} num>Reputation</SortTh>
+                  <SortTh k="tags" sort={sort} onSort={sortBy}>Tag</SortTh>
+                </tr>
+              </thead>
+              <tbody>
+                {groups.filter((g) => !stage || stageOf(g) === stage).map((g) => {
+                  const ids = g.inboxes.map((x) => x.id);
+                  const gSel = ids.every((id) => selected.has(id));
+                  const gSome = ids.some((id) => selected.has(id));
+                  return (
+                    <tr key={g.domainId} className="is-clickable" data-selected={gSel} onClick={() => toggleIds(ids)}>
+                      <td className="col-check">
+                        <input type="checkbox" className="checkbox" checked={gSel} ref={(el) => { if (el) el.indeterminate = !gSel && gSome; }} onChange={() => {}} aria-label={`Select inboxes on ${g.domain}`} tabIndex={-1} />
+                      </td>
+                      <td className="col-first">
+                        <span className="flex flex-col gap-0.5">
+                          <span className="flex items-center gap-2">
+                            <DomainLink id={g.domainId} tab="inboxes" className="strong hover:underline">{g.domain}</DomainLink>
+                            <TagList tags={g.domainTags} graceDaysLeft={g.graceDaysLeft} />
+                          </span>
+                          <span className="wu-sub">{g.clientName ?? "No client"}{g.esp ? ` · ${espLabel(g.esp)}` : ""}</span>
+                        </span>
+                      </td>
+                      <td className="wu-col-track"><WarmTrack g={g} /></td>
+                      <td className="is-num" title={g.ageDays != null ? `${g.ageDays} days since the first inbox was added to Smartlead` : "Not known yet"}>{g.ageDays == null ? <span className="zero">—</span> : `${g.ageDays}d`}</td>
+                      <td><DnsCell dns={g.dns} /></td>
+                      <td><WarmupCell blocked={g.blocked} paused={g.paused} total={g.count} /></td>
+                      <td className="is-num">{g.avgWarmup == null ? <span className="zero">—</span> : Math.round(g.avgWarmup)}</td>
+                      <td className="is-num">{g.avgLimit == null ? <span className="zero">—</span> : Math.round(g.avgLimit)}</td>
+                      <td className="is-num">{int(g.count)}</td>
+                      <td className="is-num" title={g.minRep != null ? `Lowest ${g.minRep.toFixed(0)}` : undefined}><Rep value={g.avgRep} low={g.lowRep} /></td>
+                      <td><Tags tags={g.tags.filter((t) => !isMark(t))} /></td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          ) : FLAT.includes(tab) ? (
             <table className="data-table is-main">
               <thead>
                 <tr>
@@ -630,7 +733,7 @@ export function InboxesView({ inboxes, clients, plans, smartleadConnected, dryRu
                   <SortTh k="domain" sort={sort} onSort={sortBy}>Domain</SortTh>
                   <SortTh k="client" sort={sort} onSort={sortBy}>Client</SortTh>
                   <SortTh k="tags" sort={sort} onSort={sortBy}>Tag</SortTh>
-                  {tab === "warming" ? <SortTh k="progress" sort={sort} onSort={sortBy}>Warm-up</SortTh> : <SortTh k="status" sort={sort} onSort={sortBy}>Status</SortTh>}
+                  <SortTh k="status" sort={sort} onSort={sortBy}>Status</SortTh>
                   {tab === "attention" ? <SortTh k="reasons" sort={sort} onSort={sortBy}>What needs attention</SortTh> : null}
                   <SortTh k="count" sort={sort} onSort={sortBy} num>Inboxes</SortTh>
                   <SortTh k="age" sort={sort} onSort={sortBy} num>Age</SortTh>
@@ -657,7 +760,7 @@ export function InboxesView({ inboxes, clients, plans, smartleadConnected, dryRu
                       </td>
                       <td><ClientCell name={g.clientName} hue={g.clientHue} /></td>
                       <td><Tags tags={g.tags.filter((t) => !isMark(t))} /></td>
-                      <td>{tab === "warming" ? (g.warm ? <WarmProgress warm={g.warm} /> : <span className="ns-status tone-warning" title="New domain: warm-up not started">Not started</span>) : <StatusDot status={g.status} />}</td>
+                      <td><StatusDot status={g.status} /></td>
                       {tab === "attention" ? (
                         <td>
                           <span className="flex flex-wrap gap-1">

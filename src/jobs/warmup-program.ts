@@ -16,7 +16,7 @@ export async function loadWarmupProgram(sql: Sql) {
   return parseWarmupProgram(row ? JSON.parse(row.v as string) : null);
 }
 
-/** Young, connected, not tagged to a client yet, not enrolled, and not warming through a replacement. */
+/** Young, connected, not tagged to a client yet, not enrolled, not warming through a replacement, and with valid DNS. */
 export async function newDomainIds(sql: Sql, maxAgeDays: number) {
   const due = await sql`
     select d.id
@@ -25,6 +25,7 @@ export async function newDomainIds(sql: Sql, maxAgeDays: number) {
     where d.warmup_started_at is null and d.status in ('warming', 'active')
       and not exists (select 1 from replacement_items ri where ri.new_domain_id = d.id)
       and not exists (select 1 from unnest(d.tags) t where lower(t) = 'new')
+      and d.dns_spf and d.dns_dkim and d.dns_dmarc and d.dns_mx and coalesce(d.nameservers_answering, true)
       and not exists (
         select 1 from inboxes x cross join lateral unnest(x.smartlead_tags) as u(t)
         join client_tags m on m.tag = regexp_replace(lower(trim(u.t)), '[[:space:]]+', ' ', 'g')

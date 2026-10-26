@@ -998,9 +998,10 @@ export async function startWarmupNow(domainIds: string[]): Promise<ActionResult<
     const { jobContext } = await import("@/jobs");
     const p = await loadWarmupProgram(jobSql);
     const ids = chosen.length
-      ? (await sql<{ id: string }[]>`select id from domains where id in ${sql(chosen)} and (warmup_started_at is null or warmup_done_at is not null)`).map((d) => d.id)
+      ? (await sql<{ id: string }[]>`select id from domains d where id in ${sql(chosen)} and (warmup_started_at is null or warmup_done_at is not null)
+          and d.dns_spf and d.dns_dkim and d.dns_dmarc and d.dns_mx and coalesce(d.nameservers_answering, true)`).map((d) => d.id)
       : await newDomainIds(jobSql, p.maxAgeDays);
-    if (!ids.length) return { ok: false, error: "No new domains to warm up" };
+    if (!ids.length) return { ok: false, error: "None of these domains has valid DNS yet (SPF, DKIM, DMARC and MX). Warm-up starts once they do." };
     const ctx = await jobContext(jobSql);
     const r = await startWarmup(jobSql, ctx.smartleadApp, ids, p, actor);
     kickJob("inbox-settings");
