@@ -27,8 +27,14 @@ export async function POST(request: Request, ctx: RouteContext<"/api/webhooks/sm
 
   const items = Array.isArray(body) ? body : [body];
   let stored = 0, duplicate = 0, ignored = 0;
+  // What arrived, by Smartlead's own event name, so a quiet webhook can be told
+  // apart from one whose events we don't read (docker compose logs web).
+  const types: Record<string, number> = {};
   try {
     for (const item of items.slice(0, 500)) {
+      const o = item && typeof item === "object" ? (item as Record<string, unknown>) : {};
+      const type = String(o.event_type ?? o.event ?? o.type ?? "none");
+      types[type] = (types[type] ?? 0) + 1;
       const event = parseSmartleadEvent(item);
       if (!event) { ignored++; continue; }
       if (await ingestEvent(sql, event, item)) stored++;
@@ -39,5 +45,6 @@ export async function POST(request: Request, ctx: RouteContext<"/api/webhooks/sm
     // 500 makes Smartlead retry later, which is what we want here.
     return Response.json({ ok: false }, { status: 500 });
   }
+  console.log(`smartlead webhook: ${JSON.stringify(types)} stored ${stored}, duplicate ${duplicate}, ignored ${ignored}`);
   return Response.json({ ok: true, stored, duplicate, ignored });
 }
