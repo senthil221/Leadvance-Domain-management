@@ -39,7 +39,7 @@ export function ClientAssignment({ source, clients, tags }: { source: "tags" | "
             if (!r.ok) return void toast.error(r.error);
             toast.success(`Built-in list saved: ${r.data.saved} tags${r.data.newClients ? `, ${r.data.newClients} new client${r.data.newClients === 1 ? "" : "s"}` : ""}, ${r.data.moved} domain${r.data.moved === 1 ? "" : "s"} moved`);
           })}>Use the built-in list</button>
-        <span className="field-hint">18 tags to 10 clients. Switches to mapped tags and applies it. Existing clients are kept.</span>
+        <span className="field-hint">15 tags to 7 clients. Switches to mapped tags and applies it. Existing clients are kept.</span>
       </div>
 
       <div className="flex flex-wrap items-center gap-2">

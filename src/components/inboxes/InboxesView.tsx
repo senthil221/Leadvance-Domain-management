@@ -1,7 +1,8 @@
 "use client";
 
-import { ArrowLeftRight, ChevronRight, ChevronsDownUp, ChevronsUpDown, Inbox, Info, PlugZap, Search, Settings2, ShieldCheck, Shuffle, Tag, X } from "lucide-react";
+import { ArrowLeftRight, ChevronDown, ChevronRight, ChevronsDownUp, ChevronsUpDown, Inbox, Info, PlugZap, Search, Settings2, ShieldCheck, Shuffle, Tag, X } from "lucide-react";
 import { useSearchParams } from "next/navigation";
+import { DropdownMenu } from "radix-ui";
 import { type ReactNode, useTransition } from "react";
 import { toast } from "sonner";
 import { markInboxes, reconnectInboxes, validateDns } from "@/app/actions";
@@ -289,7 +290,6 @@ export function InboxesView({ inboxes, clients, plans, smartleadConnected, dryRu
   appProblem: string | null;
 }) {
   const [selected, setSelected] = useState<Set<string>>(new Set());
-  const [mark, setMark] = useState<(typeof MARK_CHOICES)[number]>(MARK_CHOICES[0]);
   const [editOpen, setEditOpen] = useState(false);
   const params = useSearchParams();
   const [tab, setTab] = useState<TabKey>(() => tabOf(params.get("view")));
@@ -727,11 +727,24 @@ export function InboxesView({ inboxes, clients, plans, smartleadConnected, dryRu
           <button type="button" className="btn btn-primary btn-sm" disabled={!smartleadConnected} onClick={() => setEditOpen(true)}><Settings2 size={14} /> Configure settings</button>
           <button type="button" className="btn btn-sm" disabled={!replaceTargets.length} title="Swap the selected domains for free ones" onClick={() => setReplaceOpen(true)}><ArrowLeftRight size={14} /> Replace{replaceTargets.length ? ` (${replaceTargets.length})` : ""}</button>
           <button type="button" className="btn btn-sm" onClick={() => document.getElementById("plans-title")?.scrollIntoView({ behavior: "smooth" })}><Shuffle size={14} /> Daily plan</button>
-          <select className="select" style={{ width: 150, height: 30 }} value={mark} aria-label="Mark" onChange={(e) => setMark(e.target.value as (typeof MARK_CHOICES)[number])}>
-            {MARK_CHOICES.map((m) => <option key={m} value={m}>{m}</option>)}
-          </select>
-          <button type="button" className="btn btn-sm" disabled={acting || !smartleadConnected} title="Add this mark to the selected domains and their inboxes in Smartlead" onClick={() => act(() => markInboxes({ inboxIds: [...selected], mark, on: true }))}><Tag size={14} /> Mark</button>
-          <button type="button" className="btn btn-sm btn-ghost" disabled={acting || !smartleadConnected} title="Take this mark off" onClick={() => act(() => markInboxes({ inboxIds: [...selected], mark, on: false }))}>Clear</button>
+          <DropdownMenu.Root>
+            <DropdownMenu.Trigger asChild>
+              <button type="button" className="btn btn-sm menu-trigger" disabled={acting || !smartleadConnected} title="Put a mark on the selected domains and their inboxes in Smartlead"><Tag size={14} /> Mark <ChevronDown size={13} /></button>
+            </DropdownMenu.Trigger>
+            <DropdownMenu.Portal>
+              <DropdownMenu.Content className="menu" side="top" align="center" sideOffset={10} style={{ minWidth: 210 }}>
+                <DropdownMenu.Label className="menu-label">Mark as</DropdownMenu.Label>
+                {MARK_CHOICES.map((m) => (
+                  <DropdownMenu.Item key={m} className="menu-item" onSelect={() => act(() => markInboxes({ inboxIds: [...selected], mark: m, on: true }))}>{m}</DropdownMenu.Item>
+                ))}
+                <DropdownMenu.Separator className="menu-sep" />
+                <DropdownMenu.Label className="menu-label">Remove mark</DropdownMenu.Label>
+                {MARK_CHOICES.map((m) => (
+                  <DropdownMenu.Item key={m} className="menu-item" onSelect={() => act(() => markInboxes({ inboxIds: [...selected], mark: m, on: false }))}>{m}</DropdownMenu.Item>
+                ))}
+              </DropdownMenu.Content>
+            </DropdownMenu.Portal>
+          </DropdownMenu.Root>
           <span className="sep" />
           <button type="button" className="btn btn-sm" aria-label="Clear selection" onClick={() => setSelected(new Set())}><X size={14} /></button>
         </div>

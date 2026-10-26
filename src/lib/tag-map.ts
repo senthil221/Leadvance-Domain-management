@@ -31,16 +31,13 @@ export function parseTagPairs(text: string) {
  * Client assignment → "Use the built-in list" saves it and applies it.
  */
 export const BUILT_IN_TAG_PAIRS: { tag: string; client: string }[] = [
-  { tag: "Frederick Ungureit", client: "WiBotic" },
   { tag: "Prateek Batra", client: "Beebee" },
   { tag: "Raghav Bansal", client: "Beebee" },
-  { tag: "Olivia Bennett", client: "Toriut" },
   { tag: "Steve Kloosterman", client: "Westshore" },
   { tag: "George Vellios", client: "Straxo" },
   { tag: "Shawn Hooper", client: "Salesdraft" },
   { tag: "Neil Cornelius", client: "B2bdrive" },
   { tag: "Gene Nguyen", client: "Mvinix" },
-  { tag: "Braden Mineer", client: "Bridge Hiring" },
   // Qualifi has the most tags; the spellings of Edward DeAngelis count as one.
   { tag: "Amelia Wren", client: "Qualifi" },
   { tag: "Sophia Lark", client: "Qualifi" },
