@@ -229,6 +229,8 @@ export async function syncCampaigns(sql: Sql, sl: Smartlead) {
     });
     mapped++;
   }
+  // With mapped tags the tags decide the client; Smartlead's own clients on campaigns must not fill domains in behind them.
+  if ((await clientSource(sql)) === "mapped") return { campaigns: campaigns.length, mapped, campaignClients: 0, domainClients: 0 };
   const [assigned] = await sql`select campaigns, domains from assign_clients_from_campaigns()`;
   return { campaigns: campaigns.length, mapped, campaignClients: Number(assigned.campaigns), domainClients: Number(assigned.domains) };
 }
