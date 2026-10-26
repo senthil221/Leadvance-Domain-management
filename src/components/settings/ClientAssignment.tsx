@@ -2,7 +2,7 @@
 
 import { useState, useTransition } from "react";
 import { toast } from "sonner";
-import { applyTagClients, archiveEmptyClients, saveTagPairs, setClientSource, setTagClient, applyBuiltInTagMap } from "@/app/actions";
+import { applyTagClients, archiveEmptyClients, createClientTags, saveTagPairs, setClientSource, setTagClient, applyBuiltInTagMap } from "@/app/actions";
 import { int } from "@/lib/format";
 import type { ClientRow, TagRow } from "@/lib/queries";
 
@@ -40,6 +40,14 @@ export function ClientAssignment({ source, clients, tags }: { source: "tags" | "
             toast.success(`Built-in list saved: ${r.data.saved} tags${r.data.newClients ? `, ${r.data.newClients} new client${r.data.newClients === 1 ? "" : "s"}` : ""}, ${r.data.moved} domain${r.data.moved === 1 ? "" : "s"} moved`);
           })}>Use the built-in list</button>
         <span className="field-hint">18 tags to 10 clients. Switches to mapped tags and applies it. Existing clients are kept.</span>
+      </div>
+
+      <div className="flex flex-wrap items-center gap-2">
+        <button type="button" className="btn" disabled={pending}
+          onClick={() => run(async () => { const r = await createClientTags(); if (!r.ok) toast.error(r.error); else toast.success(r.data.message); })}>
+          Create client tags in Smartlead
+        </button>
+        <span className="field-hint">One tag per client, named after the client. Tags that already exist are skipped.</span>
       </div>
 
       {source === "mapped" ? (

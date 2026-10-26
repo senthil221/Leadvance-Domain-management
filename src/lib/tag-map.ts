@@ -1,3 +1,9 @@
+/** Marks a person can put on domains and inboxes; they are labels, never a client's tag. */
+export const MARK_CHOICES = ["Replaced", "Low reputation"] as const;
+/** Every mark the app uses (New is set by the replacement flow). Lower case. */
+export const MARK_TAGS = ["new", "replaced", "low reputation"];
+export const isMark = (t: string) => MARK_TAGS.includes(normTag(t));
+
 /** A tag as stored in the map: lower case, one space between words. */
 export const normTag = (s: string) => s.trim().toLowerCase().replace(/\s+/g, " ");
 

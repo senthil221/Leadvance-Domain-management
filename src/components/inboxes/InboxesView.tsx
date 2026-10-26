@@ -1,16 +1,16 @@
 "use client";
 
-import { ArrowLeftRight, ChevronRight, ChevronsDownUp, ChevronsUpDown, Inbox, Info, PlugZap, Search, Settings2, ShieldCheck, Shuffle, X } from "lucide-react";
+import { ArrowLeftRight, ChevronRight, ChevronsDownUp, ChevronsUpDown, Inbox, Info, PlugZap, Search, Settings2, ShieldCheck, Shuffle, Tag, X } from "lucide-react";
 import { useSearchParams } from "next/navigation";
 import { type ReactNode, useTransition } from "react";
 import { toast } from "sonner";
-import { reconnectInboxes, validateDns } from "@/app/actions";
+import { markInboxes, reconnectInboxes, validateDns } from "@/app/actions";
 import Link from "next/link";
 import { Fragment, useEffect, useMemo, useState } from "react";
 import { ColumnsMenu, useColumns, type ColumnDef } from "@/components/Columns";
 import { SortTh } from "@/components/SortTh";
 import { DomainLink } from "@/components/domains/DomainLink";
-import { normTag } from "@/lib/tag-map";
+import { MARK_CHOICES, MARK_TAGS, normTag } from "@/lib/tag-map";
 import { ReplaceDialog } from "@/components/domains/ReplaceDialog";
 import { ClientCell, Empty, Rep, StatusDot, TagList } from "@/components/ui";
 import { InboxSettingsDialog } from "./InboxSettingsDialog";
@@ -86,7 +86,7 @@ function group(rows: InboxListRow[]): Group[] {
       avgWait: avg(list.filter((i) => i.minWaitMins != null).map((i) => i.minWaitMins!)),
       pending: list.filter((i) => i.change?.status === "pending" || i.change?.status === "running").length,
       tags: [...new Set(list.flatMap((i) => i.smartleadTags))],
-      domainTags: f.domainTags.filter((t) => ["new", "replaced"].includes(t.toLowerCase())),
+      domainTags: f.domainTags.filter((t) => MARK_TAGS.includes(t.toLowerCase())),
       graceDaysLeft: f.domainGraceDaysLeft,
       alerts: f.domainAlerts,
       ageDays: (() => {
@@ -146,7 +146,7 @@ function roll(key: string, label: string, clientName: string | null, domains: Gr
 function tagGroupsOf(c: ClientGroup): ClientGroup[] | null {
   const byTag = new Map<string, { shown: string; inboxes: InboxListRow[] }>();
   for (const i of c.inboxes) {
-    const tags = i.smartleadTags.filter((t) => t.trim() && !["new", "replaced"].includes(t.trim().toLowerCase()));
+    const tags = i.smartleadTags.filter((t) => t.trim() && !MARK_TAGS.includes(t.trim().toLowerCase()));
     for (const t of tags.length ? tags : [""]) {
       const k = normTag(t);
       const e = byTag.get(k) ?? { shown: t.trim(), inboxes: [] };
@@ -289,6 +289,7 @@ export function InboxesView({ inboxes, clients, plans, smartleadConnected, dryRu
   appProblem: string | null;
 }) {
   const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [mark, setMark] = useState<(typeof MARK_CHOICES)[number]>(MARK_CHOICES[0]);
   const [editOpen, setEditOpen] = useState(false);
   const params = useSearchParams();
   const [tab, setTab] = useState<TabKey>(() => tabOf(params.get("view")));
@@ -726,6 +727,11 @@ export function InboxesView({ inboxes, clients, plans, smartleadConnected, dryRu
           <button type="button" className="btn btn-primary btn-sm" disabled={!smartleadConnected} onClick={() => setEditOpen(true)}><Settings2 size={14} /> Configure settings</button>
           <button type="button" className="btn btn-sm" disabled={!replaceTargets.length} title="Swap the selected domains for free ones" onClick={() => setReplaceOpen(true)}><ArrowLeftRight size={14} /> Replace{replaceTargets.length ? ` (${replaceTargets.length})` : ""}</button>
           <button type="button" className="btn btn-sm" onClick={() => document.getElementById("plans-title")?.scrollIntoView({ behavior: "smooth" })}><Shuffle size={14} /> Daily plan</button>
+          <select className="select" style={{ width: 150, height: 30 }} value={mark} aria-label="Mark" onChange={(e) => setMark(e.target.value as (typeof MARK_CHOICES)[number])}>
+            {MARK_CHOICES.map((m) => <option key={m} value={m}>{m}</option>)}
+          </select>
+          <button type="button" className="btn btn-sm" disabled={acting || !smartleadConnected} title="Add this mark to the selected domains and their inboxes in Smartlead" onClick={() => act(() => markInboxes({ inboxIds: [...selected], mark, on: true }))}><Tag size={14} /> Mark</button>
+          <button type="button" className="btn btn-sm btn-ghost" disabled={acting || !smartleadConnected} title="Take this mark off" onClick={() => act(() => markInboxes({ inboxIds: [...selected], mark, on: false }))}>Clear</button>
           <span className="sep" />
           <button type="button" className="btn btn-sm" aria-label="Clear selection" onClick={() => setSelected(new Set())}><X size={14} /></button>
         </div>

@@ -28,7 +28,7 @@ export async function sheetCapacity(sql: postgres.Sql) {
     join domains d on d.id = i.domain_id
     join clients c on c.id = d.client_id
     cross join lateral (
-      select unnest(coalesce(nullif(array(select x from unnest(i.smartlead_tags) x where lower(x) not in ('new', 'replaced')), '{}'), array['']::text[])) as tag
+      select unnest(coalesce(nullif(array(select x from unnest(i.smartlead_tags) x where lower(x) not in ('new', 'replaced', 'low reputation')), '{}'), array['']::text[])) as tag
     ) t
     where i.status = 'connected' and d.status = 'active' and i.daily_limit > 0
       and c.name not ilike '%warmup%'

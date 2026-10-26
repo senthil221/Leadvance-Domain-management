@@ -7,7 +7,7 @@ import { requireActor } from "@/lib/auth";
 import { jobSql, sql } from "@/lib/db";
 import { hypertideAcceptsDomain } from "@/integrations/hypertide";
 import { getDomainDetail, listStorageCandidates } from "@/lib/queries";
-import { BUILT_IN_TAG_PAIRS, normTag, parseTagPairs } from "@/lib/tag-map";
+import { BUILT_IN_TAG_PAIRS, MARK_CHOICES, normTag, parseTagPairs } from "@/lib/tag-map";
 import { DOMAIN_STATUSES, REPLACEMENT_REASONS } from "@/lib/status";
 
 export type ActionResult<T = undefined> = { ok: true; data: T } | { ok: false; error: string };
@@ -894,6 +894,67 @@ export async function updateInboxTags(input: { inboxIds: string[]; tags: string[
     await sql`update inboxes set smartlead_tags = ${tags.map((t) => t.name)}::text[] where id in ${sql(rows.map((r) => r.id))}`;
     refresh();
     return { ok: true, data: { message: `Tagged ${rows.length} inbox${rows.length === 1 ? "" : "es"} ${tags.map((t) => t.name).join(", ")}` } };
+  } catch (e) {
+    return appError(e);
+  }
+}
+
+/** One Smartlead tag per client, named after the client. Tags that already exist are left alone. */
+export async function createClientTags(): Promise<ActionResult<{ message: string }>> {
+  try {
+    await requireActor();
+    const app = await smartleadAppOrError("Creating client tags");
+    const clients = await sql<{ name: string }[]>`select name from clients where archived_at is null order by name`;
+    const known = new Set((await app.tags()).map((t) => normTag(t.name)));
+    const missing = clients.filter((c) => !known.has(normTag(c.name)));
+    for (const c of missing) await app.createTag(c.name);
+    const n = missing.length, have = clients.length - n;
+    const exists = have ? ` ${have} already existed.` : "";
+    return { ok: true, data: { message: app.dryRun ? `Dry run: ${n} client tag${n === 1 ? "" : "s"} weren't created in Smartlead.${exists}` : `Created ${n} client tag${n === 1 ? "" : "s"} in Smartlead.${exists}` } };
+  } catch (e) {
+    return appError(e);
+  }
+}
+
+/**
+ * Puts a mark (Replaced, Low reputation) on or takes it off the chosen inboxes
+ * and their domains. In Smartlead the inboxes keep their other tags; the mark
+ * is created there if it doesn't exist yet.
+ */
+export async function markInboxes(input: { inboxIds: string[]; mark: string; on: boolean }): Promise<ActionResult<{ message: string }>> {
+  try {
+    await requireActor();
+    const v = z.object({
+      inboxIds: z.array(z.uuid()).min(1, "Select at least one inbox").max(5000),
+      mark: z.enum(MARK_CHOICES),
+      on: z.boolean(),
+    }).parse(input);
+    const app = await smartleadAppOrError("Marking inboxes");
+    const rows = await sql`
+      select id, smartlead_account_id as account, smartlead_tags as tags, domain_id from inboxes
+      where id in ${sql(v.inboxIds)} and status <> 'removed'`;
+    const linked = rows.filter((r) => r.account != null);
+    const domainIds = [...new Set(rows.map((r) => r.domainId as string))];
+    await sql`update domains set tags = array(
+        select distinct t from unnest(tags || ${v.on ? [v.mark] : []}::text[]) t where ${v.on}::boolean or lower(t) <> ${v.mark.toLowerCase()} order by 1)
+      where id in ${sql(domainIds)}`;
+    const { retagRows } = await import("@/jobs/replacements");
+    let known = await app.tags();
+    const tagId = async (name: string) => {
+      let t = known.find((k) => k.name.toLowerCase() === name.toLowerCase());
+      if (!t) {
+        const made = await app.createTag(name);
+        if (!made) return null;
+        known = [...known, made];
+        t = made;
+      }
+      return t;
+    };
+    const n = app.dryRun ? 0 : await retagRows(jobSql, app, linked, v.on ? [v.mark] : [], v.on ? [] : [v.mark], tagId, () => known);
+    refresh();
+    const dom = `${domainIds.length} domain${domainIds.length === 1 ? "" : "s"}`;
+    const verb = v.on ? "Marked" : "Cleared";
+    return { ok: true, data: { message: app.dryRun ? `${verb} ${dom} as ${v.mark} in the app. Dry run: Smartlead wasn't changed.` : `${verb} ${dom} as ${v.mark}, ${n} inbox${n === 1 ? "" : "es"} retagged in Smartlead` } };
   } catch (e) {
     return appError(e);
   }

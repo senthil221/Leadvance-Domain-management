@@ -680,6 +680,14 @@ async function retagInboxes(
   const inboxes = await sql`
     select id, smartlead_account_id as account, smartlead_tags as tags from inboxes
     where domain_id = ${domainId} and status = 'connected' and smartlead_account_id is not null`;
+  return retagRows(sql, app, inboxes, add, remove, tagId, known);
+}
+
+/** Adds and removes tags on the given inboxes (id, account, tags), keeping each one's other tags. */
+export async function retagRows(
+  sql: Sql, app: SmartleadApp, inboxes: readonly postgres.Row[], add: string[], remove: string[],
+  tagId: (name: string) => Promise<SmartleadTag | null>, known: () => SmartleadTag[],
+) {
   for (const name of add) if (!(await tagId(name))) return 0;
   const lower = (x: string) => x.toLowerCase();
   const groups = new Map<string, { names: string[]; accounts: number[]; ids: string[] }>();
