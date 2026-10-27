@@ -59,7 +59,7 @@ describe("enrolNewDomains", () => {
     expect(await enrolNewDomains(sql)).toMatchObject({ skipped: expect.stringContaining("off") });
   });
 
-  it("enrols only young, untagged domains, once, and queues the warmup values", async () => {
+  it("enrols young domains with valid DNS, client-tagged ones too, once, and queues the warmup values", async () => {
     await save({ enabled: true, days: 12, maxAgeDays: 1, perDay: 25, rampup: 3, replyRate: 35 });
     const old = await domain("old.com");
     await inbox(old, "a@old.com", 100);
@@ -76,9 +76,9 @@ describe("enrolNewDomains", () => {
     await inbox(fresh2, "b@fresh2.com", 0);
 
     const r = await enrolNewDomains(sql);
-    expect(r).toMatchObject({ enrolled: 2, inboxes: 3 }); // fresh.com and fresh2.com; nodkim.com waits for its DNS
+    expect(r).toMatchObject({ enrolled: 3, inboxes: 4 }); // fresh.com, fresh2.com and tagged.com; nodkim.com waits for its DNS
     const rows = await sql`select name, warmup_days from domains where warmup_started_at is not null order by name`;
-    expect(rows.map((x) => x.name)).toEqual(["fresh.com", "fresh2.com"]);
+    expect(rows.map((x) => x.name)).toEqual(["fresh.com", "fresh2.com", "tagged.com"]);
     expect(rows[0].warmup_days).toBe(12);
     const [c] = await sql`select changes, status, source from inbox_setting_changes limit 1`;
     expect(c).toMatchObject({ changes: { warmup_enabled: true, warmup_per_day: 25, warmup_rampup: 3, warmup_reply_rate: 35 }, status: "pending", source: "warmup-program" });

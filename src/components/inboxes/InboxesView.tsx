@@ -53,13 +53,14 @@ function crowdedDomains(inboxes: InboxListRow[], limit: number) {
 
 /**
  * New domains that haven't started warming: connected, at most `maxAgeDays`
- * old, no client yet, and not part of a replacement (those carry New already).
+ * old and not part of a replacement (those carry New already). A client or a
+ * client tag doesn't make a domain ready to send; it still warms up first.
  */
 function freshDomains(inboxes: InboxListRow[], maxAgeDays: number) {
   const ids = new Set<string>();
   for (const g of group(inboxes.filter((i) => i.status === "connected"))) {
     const f = g.inboxes[0];
-    if (f.domainWarmupStartedAt || g.clientName || g.ageDays == null || g.ageDays > maxAgeDays) continue;
+    if (f.domainWarmupStartedAt || g.ageDays == null || g.ageDays > maxAgeDays) continue;
     if (f.domainStatus !== "active" && f.domainStatus !== "warming") continue;
     if (f.domainTags.some((t) => t.toLowerCase() === "new")) continue;
     ids.add(g.domainId);
