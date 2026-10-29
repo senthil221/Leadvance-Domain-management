@@ -273,7 +273,10 @@ export function dayIn(tz: string, offsetDays = 0, now = new Date()) {
 }
 
 const HISTORY_DAYS = 30;
-const BACKFILL_PER_RUN = 8;
+const BACKFILL_PER_RUN = 6;
+// Smartlead allows 10 calls a minute to its domain analytics; a run makes at
+// most 9 (the 7-day total, today, yesterday, BACKFILL_PER_RUN older days).
+const ANALYTICS_SPACING_MS = 7_000;
 
 /**
  * Smartlead's per-domain totals for the last 7 days, and the same numbers
@@ -319,6 +322,7 @@ async function syncDomainDays(sql: Sql, sl: Smartlead, tz: string) {
 
   let filled = 0;
   for (const day of [...recent, ...missing]) {
+    await new Promise((r) => setTimeout(r, ANALYTICS_SPACING_MS));
     const { rows } = parseDomainHealth(await sl.domainHealth(day, day, tz));
     // An empty answer is left alone, so a quiet Smartlead never wipes a day.
     if (!rows.length) {
