@@ -93,6 +93,18 @@ The same tunnel lets local development use the real database on port 54322.
 
 ## Updating
 
+Two servers run this app, one per company, each with its own `deploy/app/.env`
+(accounts, keys, host): srv1826728 (`root@200.97.170.1`) and srv1033325
+(`root@72.60.201.43`, key `~/.ssh/id_ed25519`). Ship every change to both from
+Git Bash on your computer, after `git push`:
+
+```bash
+bash deploy/deploy-all.sh
+```
+
+It uploads the pushed commit, migrates, rebuilds, checks `/api/health`, and
+stops at the first server that fails. By hand, on one server:
+
 ```bash
 cd /docker/domain-engine/deploy/app
 docker compose run --rm migrate && docker compose up -d --build web worker

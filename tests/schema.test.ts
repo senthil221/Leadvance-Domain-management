@@ -185,6 +185,19 @@ describe("rollup_daily_stats", () => {
     expect(s.sent).toBe(42);
   });
 
+  it("fills replies and bounces from Smartlead analytics when webhooks have fewer, keeping reply types from events", async () => {
+    const id = await addDomain("nohook.com", "active");
+    await event("nohook.com", "reply", "human");
+    await db.query("insert into smartlead_domain_daily (domain_name, day, sent, replies, bounces) values ('nohook.com', current_date, 400, 3, 9), ('nohook.com', current_date - 5, 380, 2, 7)");
+    await db.query("select rollup_daily_stats(current_date - 6)");
+    const rows = (await db.query<Record<string, number>>(
+      "select sent, replies, human_replies, bounces from domain_daily_stats where domain_id = $1 order by day", [id])).rows;
+    expect(rows).toEqual([
+      { sent: 380, replies: 2, human_replies: 0, bounces: 7 },
+      { sent: 400, replies: 3, human_replies: 1, bounces: 9 },
+    ]);
+  });
+
   it("records today's average warmup reputation and keeps older history untouched", async () => {
     const id = await addDomain("rep.com", "active");
     await db.query("insert into inboxes (domain_id, email, status, warmup_reputation) values ($1, 'a@rep.com', 'connected', 96), ($1, 'b@rep.com', 'connected', 100)", [id]);

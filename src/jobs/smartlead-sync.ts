@@ -272,10 +272,15 @@ export function dayIn(tz: string, offsetDays = 0, now = new Date()) {
   return new Intl.DateTimeFormat("en-CA", { timeZone: tz, year: "numeric", month: "2-digit", day: "2-digit" }).format(d);
 }
 
+const HISTORY_DAYS = 30;
+const BACKFILL_PER_RUN = 8;
+
 /**
- * Smartlead's per-domain totals for the last 7 days. Its domain analytics
- * return nothing for one- or two-day ranges, so the app's daily numbers come
- * from the Email Sent webhook and these are kept as a cross-check.
+ * Smartlead's per-domain totals for the last 7 days, and the same numbers
+ * day by day in smartlead_domain_daily: today and yesterday on every run,
+ * plus up to BACKFILL_PER_RUN missing days of the last HISTORY_DAYS. The
+ * daily rows give sent, replies and bounces even when no webhook reaches the
+ * app; the webhook still adds the reply types.
  */
 export async function syncDomainStats(sql: Sql, sl: Smartlead, tz: string) {
   const raw = await sl.domainHealth(dayIn(tz, -7), dayIn(tz, 0), tz);
@@ -283,6 +288,7 @@ export async function syncDomainStats(sql: Sql, sl: Smartlead, tz: string) {
   if (!recognised) {
     throw new Error(`Unrecognised domain-wise analytics response, sample: ${JSON.stringify(raw).slice(0, 400)}`);
   }
+  const daily = await syncDomainDays(sql, sl, tz);
   await sql.begin(async (tx) => {
     await tx`delete from smartlead_domain_7d`;
     if (rows.length) {
@@ -294,5 +300,45 @@ export async function syncDomainStats(sql: Sql, sl: Smartlead, tz: string) {
         on conflict (domain_name) do update set sent = excluded.sent, replies = excluded.replies, bounces = excluded.bounces, synced_at = now()`;
     }
   });
-  return { domains7d: rows.length, sent7d: rows.reduce((n, r) => n + r.sent, 0) };
+  return { domains7d: rows.length, sent7d: rows.reduce((n, r) => n + r.sent, 0), ...daily };
+}
+
+async function syncDomainDays(sql: Sql, sl: Smartlead, tz: string) {
+  const recent = [dayIn(tz, 0), dayIn(tz, -1)];
+  const stored = new Set(
+    (await sql<{ day: string }[]>`select distinct day::text as day from smartlead_domain_daily where day >= ${dayIn(tz, -HISTORY_DAYS)}::date`)
+      .map((r) => r.day),
+  );
+  // Days Smartlead had nothing for (before the account sent) aren't asked again.
+  const [e] = await sql<{ days: string[] | null }[]>`select value as days from settings where key = 'smartlead_empty_days'`;
+  const empty = new Set((e?.days ?? []).filter((d) => d >= dayIn(tz, -HISTORY_DAYS)));
+  const missing: string[] = [];
+  for (let i = 2; i <= HISTORY_DAYS && missing.length < BACKFILL_PER_RUN; i++) {
+    if (!stored.has(dayIn(tz, -i)) && !empty.has(dayIn(tz, -i))) missing.push(dayIn(tz, -i));
+  }
+
+  let filled = 0;
+  for (const day of [...recent, ...missing]) {
+    const { rows } = parseDomainHealth(await sl.domainHealth(day, day, tz));
+    // An empty answer is left alone, so a quiet Smartlead never wipes a day.
+    if (!rows.length) {
+      if (missing.includes(day)) empty.add(day);
+      continue;
+    }
+    await sql`
+      insert into smartlead_domain_daily (domain_name, day, sent, replies, bounces, synced_at)
+      select r.domain, ${day}::date, r.sent, coalesce(r.replies, 0), coalesce(r.bounces, 0), now()
+      from jsonb_to_recordset(${sql.json(rows.map((r) => ({ domain: r.domain, sent: r.sent, replies: r.replies, bounces: r.bounces })))})
+        as r(domain text, sent int, replies int, bounces int)
+      on conflict (domain_name, day) do update set sent = excluded.sent, replies = excluded.replies, bounces = excluded.bounces, synced_at = now()`;
+    filled++;
+  }
+
+  if (missing.length) {
+    await sql`insert into settings (key, value) values ('smartlead_empty_days', ${sql.json([...empty].sort())})
+      on conflict (key) do update set value = excluded.value, updated_at = now()`;
+    // The regular rollup only looks back two days; older days filled here need their own.
+    await sql`select rollup_daily_stats(${missing[missing.length - 1]}::date, ${tz})`;
+  }
+  return { daysSynced: filled, daysBackfilled: missing.length };
 }
