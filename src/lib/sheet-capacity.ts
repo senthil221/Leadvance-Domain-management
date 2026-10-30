@@ -1,4 +1,5 @@
 import type postgres from "postgres";
+import { MARK_TAGS } from "./tag-map";
 
 /** One line of the campaign volume sheet: inboxes of a client and tag that share one daily limit. */
 export type CapacityRow = {
@@ -28,7 +29,7 @@ export async function sheetCapacity(sql: postgres.Sql) {
     join domains d on d.id = i.domain_id
     join clients c on c.id = d.client_id
     cross join lateral (
-      select unnest(coalesce(nullif(array(select x from unnest(i.smartlead_tags) x where lower(x) not in ('new', 'replaced', 'low reputation')), '{}'), array['']::text[])) as tag
+      select unnest(coalesce(nullif(array(select x from unnest(i.smartlead_tags) x where lower(x) <> all(${MARK_TAGS}::text[])), '{}'), array['']::text[])) as tag
     ) t
     where i.status = 'connected' and d.status = 'active' and i.daily_limit > 0
       and c.name not ilike '%warmup%'

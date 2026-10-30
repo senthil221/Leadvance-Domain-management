@@ -2,6 +2,7 @@ import type { CSSProperties, ReactNode } from "react";
 import type { LucideIcon } from "lucide-react";
 import { SectionTabs } from "@/components/shell/SectionTabs";
 import { initials } from "@/lib/format";
+import { MARK_TAGS } from "@/lib/tag-map";
 import { STATUS_META, type DomainStatus, type Tone } from "@/lib/status";
 
 export function PageHead({ title, sub, children }: { title: string; sub?: ReactNode; children?: ReactNode }) {
@@ -53,7 +54,7 @@ function TagBadge({ tag, graceDaysLeft }: { tag: string; graceDaysLeft: number |
 /** A domain's tags, replacement tags first, the rest folded after `max`. */
 export function TagList({ tags, graceDaysLeft = null, max = 2 }: { tags: string[]; graceDaysLeft?: number | null; max?: number }) {
   if (!tags.length) return null;
-  const special = (t: string) => (["new", "replaced", "low reputation"].includes(t.toLowerCase()) ? 0 : 1);
+  const special = (t: string) => (MARK_TAGS.includes(t.toLowerCase()) ? 0 : 1);
   const sorted = [...tags].sort((a, b) => special(a) - special(b));
   const shown = sorted.slice(0, max), rest = sorted.slice(max);
   return (

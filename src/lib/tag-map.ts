@@ -1,7 +1,13 @@
-/** Marks a person can put on domains and inboxes; they are labels, never a client's tag. */
-export const MARK_CHOICES = ["Replaced", "Low reputation"] as const;
+/**
+ * Marks a person can put on domains and inboxes. They go to Smartlead as inbox
+ * tags (to filter and act on there), and are labels, never a client's tag.
+ */
+export const MARK_CHOICES = ["Replaced", "Low reputation", "Disconnected", "Cancelled", "Replace", "Watch"] as const;
+export type Mark = (typeof MARK_CHOICES)[number];
 /** Every mark the app uses (New is set by the replacement flow). Lower case. */
-export const MARK_TAGS = ["new", "replaced", "low reputation"];
+export const MARK_TAGS = ["new", "replaced", "low reputation", "disconnected", "cancelled", "replace", "watch"];
+/** The mark spelled as the app spells it, for a tag typed in any case; null when it isn't one. */
+export const markOf = (t: string): Mark | null => MARK_CHOICES.find((m) => m.toLowerCase() === normTag(t)) ?? null;
 export const isMark = (t: string) => MARK_TAGS.includes(normTag(t));
 
 /** A tag as stored in the map: lower case, one space between words. */

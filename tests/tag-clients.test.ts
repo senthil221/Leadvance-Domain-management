@@ -2,8 +2,8 @@ import { PGlite } from "@electric-sql/pglite";
 import { PGLiteSocketServer } from "@electric-sql/pglite-socket";
 import postgres from "postgres";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { clientSource, clientsFromMappedTags, clientsFromSenders } from "../src/jobs/smartlead-sync";
-import { normTag, parseTagPairs } from "../src/lib/tag-map";
+import { clientSource, clientsFromMappedTags, clientsFromSenders, clientsFromTags } from "../src/jobs/smartlead-sync";
+import { markOf, normTag, parseTagPairs } from "../src/lib/tag-map";
 import { senderOverview, tagOverview } from "../src/lib/tag-list";
 import { loadMigrations } from "../scripts/migrations";
 
@@ -29,6 +29,12 @@ a, b, c`;
 
   it("matches tags regardless of case and spacing", () => {
     expect(normTag("  Edward   DeAngelis ")).toBe(normTag("edward deangelis"));
+  });
+
+  it("knows the marks that go to Smartlead, typed in any case", () => {
+    expect(markOf(" disconnected ")).toBe("Disconnected");
+    expect(markOf("low  reputation")).toBe("Low reputation");
+    expect(markOf("Remove")).toBeNull();
   });
 });
 
@@ -151,5 +157,15 @@ describe("clientsFromSenders", () => {
     expect(rows.find((r) => r.key === "sophia lark")).toMatchObject({ clientName: "Qualifi", domains: 3, inboxes: 4 });
     expect(rows.find((r) => r.key === "sophia lark")?.current).toEqual(["Qualifi"]);
     expect(rows.find((r) => r.key === "nobody mapped")).toMatchObject({ clientId: null, domains: 1 });
+  });
+});
+
+describe("clientsFromTags", () => {
+  it("never makes a client of a mark", async () => {
+    const d = await domain("marked.com");
+    await inbox(d, "x@marked.com", ["Disconnected", "Cancelled", "Watch"]);
+    await clientsFromTags(sql);
+    expect(await sql`select name from clients where lower(name) in ('disconnected', 'cancelled', 'watch')`).toHaveLength(0);
+    expect(await clientOf("marked.com")).toBeNull();
   });
 });

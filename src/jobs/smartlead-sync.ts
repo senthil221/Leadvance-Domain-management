@@ -1,4 +1,5 @@
 import type postgres from "postgres";
+import { MARK_TAGS } from "../lib/tag-map";
 import type { Smartlead } from "../integrations/smartlead";
 import { parseAccount, parseCampaign, parseClient, parseDomainHealth, type SmartleadAccount } from "../integrations/smartlead-parse";
 
@@ -150,7 +151,7 @@ export async function clientsFromTags(sql: postgres.Sql | postgres.TransactionSq
     insert into clients (name, hue)
     select t.name, (abs(hashtext(t.name)) % 360)
     from (select distinct trim(unnest(smartlead_tags)) as name from inboxes where status <> 'removed') t
-    where t.name <> '' and lower(t.name) not in ('new', 'replaced', 'low reputation') and not exists (select 1 from clients c where lower(c.name) = lower(t.name))
+    where t.name <> '' and lower(t.name) <> all(${MARK_TAGS}::text[]) and not exists (select 1 from clients c where lower(c.name) = lower(t.name))
     returning id`;
   const assigned = await sql`
     update domains d set client_id = x.client_id
@@ -158,7 +159,7 @@ export async function clientsFromTags(sql: postgres.Sql | postgres.TransactionSq
       select distinct on (i.domain_id) i.domain_id, c.id as client_id
       from inboxes i cross join lateral unnest(i.smartlead_tags) tag
       join clients c on lower(c.name) = lower(trim(tag)) and c.archived_at is null
-      where i.status <> 'removed' and lower(trim(tag)) not in ('new', 'replaced', 'low reputation')
+      where i.status <> 'removed' and lower(trim(tag)) <> all(${MARK_TAGS}::text[])
       group by i.domain_id, c.id
       order by i.domain_id, count(*) desc
     ) x
@@ -222,7 +223,7 @@ export async function clientsFromSenders(sql: postgres.Sql | postgres.Transactio
         where y.domain_id = d.id and y.status <> 'removed'
           and (exists (select 1 from client_tags ct where ct.tag = regexp_replace(lower(trim(u.t)), '[[:space:]]+', ' ', 'g'))
             or exists (select 1 from clients k where k.archived_at is null and lower(k.name) = lower(trim(u.t))
-              and lower(trim(u.t)) not in ('new', 'replaced', 'low reputation'))))
+              and lower(trim(u.t)) <> all(${MARK_TAGS}::text[]))))
     returning d.id`;
   return { domainsFromSenders: assigned.length };
 }

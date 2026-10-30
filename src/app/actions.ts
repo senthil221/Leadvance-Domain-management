@@ -1059,31 +1059,53 @@ export async function markInboxes(input: { inboxIds: string[]; mark: string; on:
     const rows = await sql`
       select id, smartlead_account_id as account, smartlead_tags as tags, domain_id from inboxes
       where id in ${sql(v.inboxIds)} and status <> 'removed'`;
-    const linked = rows.filter((r) => r.account != null);
-    const domainIds = [...new Set(rows.map((r) => r.domainId as string))];
-    await sql`update domains set tags = array(
-        select distinct t from unnest(tags || ${v.on ? [v.mark] : []}::text[]) t where ${v.on}::boolean or lower(t) <> ${v.mark.toLowerCase()} order by 1)
-      where id in ${sql(domainIds)}`;
-    const { retagRows } = await import("@/jobs/replacements");
-    let known = await app.tags();
-    const tagId = async (name: string) => {
-      let t = known.find((k) => k.name.toLowerCase() === name.toLowerCase());
-      if (!t) {
-        const made = await app.createTag(name);
-        if (!made) return null;
-        known = [...known, made];
-        t = made;
-      }
-      return t;
-    };
-    const n = app.dryRun ? 0 : await retagRows(jobSql, app, linked, v.on ? [v.mark] : [], v.on ? [] : [v.mark], tagId, () => known);
-    refresh();
-    const dom = `${domainIds.length} domain${domainIds.length === 1 ? "" : "s"}`;
-    const verb = v.on ? "Marked" : "Cleared";
-    return { ok: true, data: { message: app.dryRun ? `${verb} ${dom} as ${v.mark} in the app. Dry run: Smartlead wasn't changed.` : `${verb} ${dom} as ${v.mark}, ${n} inbox${n === 1 ? "" : "es"} retagged in Smartlead` } };
+    return { ok: true, data: { message: await applyMark(app, rows, [...new Set(rows.map((r) => r.domainId as string))], v.mark, v.on) } };
   } catch (e) {
     return appError(e);
   }
+}
+
+/**
+ * The same marks on whole domains (the weekly review): every inbox of the
+ * domains gets the tag in Smartlead too, so they can be filtered there.
+ */
+export async function markDomains(input: { domainIds: string[]; mark: string; on: boolean }): Promise<ActionResult<{ message: string }>> {
+  try {
+    await requireActor();
+    const v = z.object({ domainIds: ids, mark: z.enum(MARK_CHOICES), on: z.boolean() }).parse(input);
+    const app = await smartleadAppOrError("Marking domains");
+    const rows = await sql`
+      select id, smartlead_account_id as account, smartlead_tags as tags, domain_id from inboxes
+      where domain_id in ${sql(v.domainIds)} and status <> 'removed'`;
+    return { ok: true, data: { message: await applyMark(app, rows, v.domainIds, v.mark, v.on) } };
+  } catch (e) {
+    return appError(e);
+  }
+}
+
+/** Puts a mark on (or takes it off) the domains, and the inboxes' tags in Smartlead. The confirmation to show. */
+async function applyMark(app: Awaited<ReturnType<typeof smartleadAppOrError>>, rows: readonly import("postgres").Row[], domainIds: string[], mark: string, on: boolean) {
+  const linked = rows.filter((r) => r.account != null);
+  await sql`update domains set tags = array(
+      select distinct t from unnest(tags || ${on ? [mark] : []}::text[]) t where ${on}::boolean or lower(t) <> ${mark.toLowerCase()} order by 1)
+    where id in ${sql(domainIds)}`;
+  const { retagRows } = await import("@/jobs/replacements");
+  let known = await app.tags();
+  const tagId = async (name: string) => {
+    let t = known.find((k) => k.name.toLowerCase() === name.toLowerCase());
+    if (!t) {
+      const made = await app.createTag(name);
+      if (!made) return null;
+      known = [...known, made];
+      t = made;
+    }
+    return t;
+  };
+  const n = app.dryRun ? 0 : await retagRows(jobSql, app, linked, on ? [mark] : [], on ? [] : [mark], tagId, () => known);
+  refresh();
+  const dom = `${domainIds.length} domain${domainIds.length === 1 ? "" : "s"}`;
+  const verb = on ? "Marked" : "Cleared";
+  return app.dryRun ? `${verb} ${dom} as ${mark} in the app. Dry run: Smartlead wasn't changed.` : `${verb} ${dom} as ${mark}, ${n} inbox${n === 1 ? "" : "es"} retagged in Smartlead`;
 }
 
 const warmupProgramInput = z.object({

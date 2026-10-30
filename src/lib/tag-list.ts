@@ -1,4 +1,5 @@
 import type postgres from "postgres";
+import { MARK_TAGS } from "./tag-map";
 
 export type TagRow = { key: string; tag: string; domains: number; inboxes: number; clientId: string | null; clientName: string | null };
 
@@ -8,7 +9,7 @@ export async function tagOverview(sql: postgres.Sql) {
     with t as (
       select regexp_replace(lower(trim(x)), '[[:space:]]+', ' ', 'g') as key, trim(x) as shown, i.domain_id
       from inboxes i cross join lateral unnest(i.smartlead_tags) as u(x)
-      where i.status <> 'removed' and trim(x) <> '' and lower(trim(x)) not in ('new', 'replaced', 'low reputation')
+      where i.status <> 'removed' and trim(x) <> '' and lower(trim(x)) <> all(${MARK_TAGS}::text[])
     )
     select t.key, min(t.shown) as tag, count(distinct t.domain_id)::int as domains, count(*)::int as inboxes,
       c.id as client_id, c.name as client_name

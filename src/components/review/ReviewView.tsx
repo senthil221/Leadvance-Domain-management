@@ -4,7 +4,7 @@ import { DomainLink } from "@/components/domains/DomainLink";
 import { ChevronLeft, ChevronRight, Copy, ListChecks, Search, Sheet, Tag, TagsIcon, X } from "lucide-react";
 import { useMemo, useState, useTransition } from "react";
 import { toast } from "sonner";
-import { loadReview, tagDomains } from "@/app/actions";
+import { loadReview, markDomains, tagDomains } from "@/app/actions";
 import { RangePicker } from "@/components/RangePicker";
 import { SortTh } from "@/components/SortTh";
 import { ClientCell, Empty, Rep, StatusDot, TagList } from "@/components/ui";
@@ -12,6 +12,7 @@ import { BOUNCE_META, BOUNCE_ORDER, type BounceReason } from "@/lib/bounces";
 import { int } from "@/lib/format";
 import type { ClientRow } from "@/lib/queries";
 import { nice, previousLabel } from "@/lib/range";
+import { MARK_CHOICES, markOf, type Mark } from "@/lib/tag-map";
 import {
   RULES, SIGNAL_META, SIGNAL_ORDER, VERDICT_META, VERDICT_ORDER, badLists, byClient, bySmartleadTag, judge, sheetRows,
   type Chip, type ClientSummary, type Judged, type ReviewData, type Signal, type Verdict,
@@ -22,6 +23,8 @@ import {
 // to copy or tag.
 
 const LISTS: Verdict[] = ["fix", "rest", "drop", "dead", "watch", "idle"];
+// The tag each list's Tag button suggests. Marks also go to Smartlead.
+const LIST_TAG: Partial<Record<Verdict, Mark>> = { rest: "Replace", drop: "Cancelled", dead: "Disconnected", watch: "Watch" };
 const CAUSE_COLOR: Record<BounceReason, string> = {
   sender: "var(--danger-solid)", dns: "color-mix(in srgb, var(--danger-solid) 70%, var(--violet-solid))",
   blocklist: "color-mix(in srgb, var(--danger-solid) 65%, var(--warning-solid))", spam: "var(--warning-solid)",
@@ -144,7 +147,7 @@ export function ReviewView({ initial, clients }: { initial: ReviewData; clients:
     const names = new Set(inScope.map((d) => d.clientName));
     return badLists(data.campaigns).filter((c) => clientId == null || names.has(c.clientName));
   }, [data.campaigns, inScope, clientId]);
-  const knownTags = useMemo(() => [...new Set(["Replace", "Watch", "Fix", "Idle", ...data.domains.flatMap((d) => d.tags)])].sort(), [data.domains]);
+  const knownTags = useMemo(() => [...new Set([...MARK_CHOICES, ...[...new Set(["Fix", "Idle", ...data.domains.flatMap((d) => d.tags)])].filter((t) => !markOf(t)).sort()])], [data.domains]);
 
   const count = (v: Verdict) => byVerdict.get(v)!.length;
   const selectedRows = rows.filter((r) => selected.has(r.id));
@@ -156,12 +159,21 @@ export function ReviewView({ initial, clients }: { initial: ReviewData; clients:
     setOnly(v);
     setSignals(new Set());
     setSelected(new Set(byVerdict.get(v)!.map((d) => d.id)));
-    setTag(VERDICT_META[v].label.split(" ")[0]);
+    setTag(LIST_TAG[v] ?? VERDICT_META[v].label.split(" ")[0]);
   };
+  // A mark goes to the inboxes in Smartlead as well; any other tag stays in the app.
+  const mark = markOf(tag);
   const applyTag = (on: boolean) => startTag(async () => {
-    const r = await tagDomains({ domainIds: selectedRows.map((d) => d.id), tag, on });
-    if (!r.ok) return void toast.error(r.error);
-    toast.success(on ? `Tagged ${plural(r.data.changed, "domain")} ${tag.trim()}` : `Took ${tag.trim()} off ${plural(r.data.changed, "domain")}`);
+    const domainIds = selectedRows.map((d) => d.id);
+    if (mark) {
+      const r = await markDomains({ domainIds, mark, on });
+      if (!r.ok) return void toast.error(r.error);
+      toast.success(r.data.message);
+    } else {
+      const r = await tagDomains({ domainIds, tag, on });
+      if (!r.ok) return void toast.error(r.error);
+      toast.success(on ? `Tagged ${plural(r.data.changed, "domain")} ${tag.trim()} (in this app only)` : `Took ${tag.trim()} off ${plural(r.data.changed, "domain")}`);
+    }
     const again = await loadReview({ from: data.from, to: data.to });
     if (again.ok) setData(again.data);
   });
@@ -403,7 +415,7 @@ export function ReviewView({ initial, clients }: { initial: ReviewData; clients:
                     <td className="is-num">{r.causes.missing ? int(r.causes.missing) : <span className="zero">0</span>}</td>
                     <td className="is-num"><span className={`metric${br != null && br > 3 ? " is-bad" : br != null && br > 2 ? " is-warn" : ""}${!br ? " zero" : ""}`}>{fx(br)}</span></td>
                     <td><SlTags tags={r.slTags} /></td>
-                    <td><TagList tags={r.tags} max={2} /></td>
+                    <td><TagList tags={r.tags} max={3} /></td>
                   </tr>
                 );
               })}
@@ -424,8 +436,9 @@ export function ReviewView({ initial, clients }: { initial: ReviewData; clients:
           <span className="bulk-count">{selectedRows.length} selected</span>
           <input className="rv-tag-input" list="rv-tags" value={tag} onChange={(e) => setTag(e.target.value)} placeholder="Tag name" aria-label="Tag name"
             onKeyDown={(e) => { if (e.key === "Enter" && tag.trim()) applyTag(true); }} />
-          <datalist id="rv-tags">{knownTags.map((t) => <option key={t} value={t} />)}</datalist>
-          <button type="button" className="btn btn-primary btn-sm" disabled={!tag.trim() || tagging} onClick={() => applyTag(true)}><TagsIcon size={14} /> Add tag</button>
+          <datalist id="rv-tags">{knownTags.map((t) => <option key={t} value={t} label={markOf(t) ? "Also in Smartlead" : "This app only"} />)}</datalist>
+          {tag.trim() ? <span className="rv-tag-where" title={mark ? "Every inbox of these domains gets this tag in Smartlead too, so you can filter and delete them there" : `Only marks go to Smartlead: ${MARK_CHOICES.join(", ")}`}>{mark ? "+ Smartlead" : "App only"}</span> : null}
+          <button type="button" className="btn btn-primary btn-sm" disabled={!tag.trim() || tagging} onClick={() => applyTag(true)}><TagsIcon size={14} /> {tagging ? "Tagging…" : "Add tag"}</button>
           <button type="button" className="btn btn-sm" disabled={!tag.trim() || tagging} onClick={() => applyTag(false)}>Remove</button>
           <span className="sep" />
           <button type="button" className="btn btn-sm" onClick={() => copy(selectedRows.map((d) => d.name).join("\n"), plural(selectedRows.length, "domain"))}><Copy size={14} /> Copy</button>
