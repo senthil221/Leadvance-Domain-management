@@ -727,6 +727,44 @@ a.stat:hover { background: var(--surface-2); }
 .login-brand .brand-mark { width: 36px; height: 36px; border-radius: 10px; }
 .login-tool { font-size: 15px; font-weight: 600; color: var(--ink); }
 
+/* ---------- Compact view (sidebar button, saved per browser) ----------
+   Same pages and columns, less air: shorter rows, tighter headers and cards. */
+[data-density="compact"] .page-head { min-height: 40px; padding: 4px 16px; }
+[data-density="compact"] .page-body { padding: 8px 14px 14px; gap: 8px; }
+[data-density="compact"] .stat { flex-direction: row; flex-wrap: wrap; align-items: baseline; column-gap: 8px; padding: 6px 12px; }
+[data-density="compact"] .stat-label { order: 0; font-size: 11.5px; }
+[data-density="compact"] .stat-value { order: 1; margin-left: auto; font-size: 15px; line-height: 20px; }
+[data-density="compact"] .stat-foot { order: 2; flex-basis: 100%; min-height: 0; font-size: 11px; }
+[data-density="compact"] .card-head { min-height: 34px; padding: 0 12px; }
+[data-density="compact"] .card-body { padding: 10px 12px; }
+[data-density="compact"] .btn { height: 28px; padding: 0 9px; }
+[data-density="compact"] .icon-btn { width: 28px; height: 28px; }
+[data-density="compact"] .search-input .input { height: 28px; }
+[data-density="compact"] .table-bar .view-tabs > a, [data-density="compact"] .table-bar .view-tabs > button { height: 28px; }
+[data-density="compact"] .data-table { font-size: 12.5px; }
+[data-density="compact"] .data-table thead th { height: 28px; padding: 0 8px; font-size: 11.5px; }
+[data-density="compact"] .data-table tbody td { height: 28px; padding: 0 8px; }
+[data-density="compact"] .data-table .col-check { padding-left: 10px; width: 32px; }
+[data-density="compact"] .data-table.rpl-table tbody td { height: 30px; }
+[data-density="compact"] .data-table.st-cd thead tr:nth-child(1) th { height: 26px; }
+[data-density="compact"] .data-table.st-cd thead tr:nth-child(2) th { top: 26px; height: 26px; }
+[data-density="compact"] .st-cap { display: none; }
+[data-density="compact"] .data-table tbody tr.st-gap > td { height: 4px; }
+[data-density="compact"] .table-footer { padding: 5px 12px; font-size: 12px; }
+[data-density="compact"] .list-row { min-height: 34px; padding: 5px 12px; }
+[data-density="compact"] .badge, [data-density="compact"] .rpl-tag { height: 18px; }
+[data-density="compact"] .nav-link { height: 28px; }
+/* Weekly review: the explanation moves into the card title's tooltip. */
+[data-density="compact"] .rv-headline { padding: 6px 12px; }
+[data-density="compact"] .rv-headline-h { font-size: 14px; }
+[data-density="compact"] .rv-lists { gap: 8px; }
+[data-density="compact"] .rv-list { min-height: 0; padding: 8px 12px; }
+[data-density="compact"] .rv-hint { display: none; }
+[data-density="compact"] .rv-list-head { margin-bottom: 4px; }
+[data-density="compact"] .rv-item { padding: 3px 0; }
+[data-density="compact"] .rv-why { font-size: 11.5px; line-height: 1.3; }
+[data-density="compact"] .rv-none { padding: 0; font-size: 12px; }
+
 /* ---------- Motion ---------- */
 
 @keyframes fade-in { from { opacity: 0; } }

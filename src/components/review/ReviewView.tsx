@@ -232,7 +232,7 @@ export function ReviewView({ initial, clients }: { initial: ReviewData; clients:
           const m = VERDICT_META[v];
           return (
             <div key={v} className={`card rv-list${list.length ? ` has-${m.tone}` : ""}`}>
-              <div className="rv-list-head">
+              <div className="rv-list-head" title={m.hint}>
                 <span className="card-title">{m.label}</span>
                 <span className={`rv-count tone-${list.length ? m.tone : "faint"}`}>{int(list.length)}</span>
               </div>

@@ -2,12 +2,12 @@
 
 import { Command } from "cmdk";
 import { Dialog } from "radix-ui";
-import { CornerDownLeft, Globe, Moon, Plus, Search } from "lucide-react";
+import { CornerDownLeft, Globe, Moon, Plus, Rows4, Search } from "lucide-react";
 import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useState, useTransition } from "react";
 import { loadSearchIndex } from "@/app/actions";
 import { STATUS_META, type DomainStatus } from "@/lib/status";
-import { toggleTheme } from "../ThemeToggle";
+import { toggleDensity, toggleTheme } from "../ThemeToggle";
 import { NAV_ITEMS } from "./nav";
 
 type Entry = { id: string; name: string; status: DomainStatus; client: string | null };
@@ -81,6 +81,10 @@ export function CommandPalette({ open, onOpenChange }: { open: boolean; onOpenCh
                 <Command.Item value="toggle dark light theme" onSelect={() => { toggleTheme(); onOpenChange(false); }}>
                   <Moon size={16} strokeWidth={1.5} />
                   <span>Switch light / dark</span>
+                </Command.Item>
+                <Command.Item value="toggle compact roomy view density" onSelect={() => { toggleDensity(); onOpenChange(false); }}>
+                  <Rows4 size={16} strokeWidth={1.5} />
+                  <span>Switch compact / roomy view</span>
                 </Command.Item>
               </Command.Group>
             </Command.List>

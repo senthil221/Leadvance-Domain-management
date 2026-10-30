@@ -4,7 +4,7 @@ import { Menu, Search } from "lucide-react";
 import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useRef, useState, ViewTransition, type ReactNode } from "react";
 import { brand } from "@/lib/brand";
-import { ThemeToggle } from "../ThemeToggle";
+import { DensityToggle, ThemeToggle } from "../ThemeToggle";
 import { BrandMark } from "./BrandMark";
 import { CommandPalette } from "./CommandPalette";
 import { NAV_ITEMS } from "./nav";
@@ -69,6 +69,7 @@ export function AppShell({ nav, user, children }: { nav: ReactNode; user: ReactN
         {nav}
         <div className="sidebar-foot">
           {user}
+          <DensityToggle />
           <ThemeToggle />
         </div>
       </aside>

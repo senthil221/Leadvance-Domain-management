@@ -11,6 +11,7 @@ import { ChangeStatusDialog } from "@/components/domains/ChangeStatusDialog";
 import { ReplaceDialog } from "@/components/domains/ReplaceDialog";
 import { SetupDialog } from "@/components/domains/SetupDialog";
 import { MarkReplacedDialog } from "./MarkReplacedDialog";
+import { useCompact } from "@/components/ThemeToggle";
 import { Badge, ClientCell, Empty, TagList } from "@/components/ui";
 import { daysSince, int, shortDate } from "@/lib/format";
 import type { ClientRow, DomainRow } from "@/lib/queries";
@@ -104,7 +105,10 @@ export function InventoryView({ domains, clients }: { domains: DomainRow[]; clie
   const allShown = rows.length > 0 && rows.every((r) => selected.has(r.id));
   const someShown = rows.some((r) => selected.has(r.id));
   const toggle = (id: string) => setSelected((s) => { const n = new Set(s); if (n.has(id)) n.delete(id); else n.add(id); return n; });
-  const virtual = useVirtualizer({ count: rows.length, getScrollElement: () => scrollRef.current, estimateSize: () => 42, overscan: 14 });
+  const compact = useCompact();
+  const virtual = useVirtualizer({ count: rows.length, getScrollElement: () => scrollRef.current, estimateSize: () => (compact ? 30 : 42), overscan: 14 });
+  // Rows change height with the compact view: size them again.
+  useEffect(() => { virtual.measure(); }, [compact, virtual]);
   const items = virtual.getVirtualItems();
   const padTop = items[0]?.start ?? 0;
   const padBottom = items.length ? virtual.getTotalSize() - items[items.length - 1].end : 0;
