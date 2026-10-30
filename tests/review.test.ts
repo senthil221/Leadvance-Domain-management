@@ -1,12 +1,13 @@
 import { describe, expect, it } from "vitest";
 import { bounceCauseOf, bounceReason } from "../src/lib/bounces";
 import { matchPreset, monday, presetRange, previousLabel, previousRange } from "../src/lib/range";
-import { badLists, judge, type ReviewDomain } from "../src/lib/review";
+import { badLists, byClient, judge, type ReviewDomain } from "../src/lib/review";
 
 const domain = (over: Partial<ReviewDomain> = {}): ReviewDomain => ({
   id: "d1", name: "welvion.com", status: "active", clientId: null, clientName: "Qualifi", clientHue: null, tags: [],
   inboxes: 10, disconnected: 0, blacklisted: 0, sent: 800, replies: 4, human: 1, bounces: 20, causes: {},
-  prevSent: 800, prevHuman: 2, prevSpam: 2, ...over,
+  prevSent: 800, prevHuman: 2, prevSpam: 2,
+  rep: 98, lowRepInboxes: 0, quietDays: 1, neverReplied: false, sentSinceReply: 100, ...over,
 });
 
 describe("week ranges", () => {
@@ -32,7 +33,8 @@ describe("week ranges", () => {
 
 describe("bounce causes", () => {
   it("tells our own setup, blocklists, spam and dead addresses apart", () => {
-    expect(bounceReason("Remote server returned an error -> 550 Sender (welvion.com) has no A, AAAA, or MX DNS records.")).toBe("sender");
+    expect(bounceReason("Remote server returned an error -> 550 Sender (welvion.com) has no A, AAAA, or MX DNS records.")).toBe("dns");
+    expect(bounceReason("550 5.7.509 Access denied, sending domain welvion.com does not pass DMARC verification")).toBe("dns");
     expect(bounceReason("550 5.7.705 Access denied, tenant has exceeded threshold")).toBe("sender");
     expect(bounceReason("550 A URL in this email (brightorae . com) is listed on https://www.surbl.org/lists")).toBe("blocklist");
     expect(bounceReason("530 5.3.0 recipient declines mail from a@b.com [orthrus:DBL0]")).toBe("blocklist");
@@ -79,7 +81,42 @@ describe("weekly review calls", () => {
   it("doesn't judge rates on a handful of emails, and doesn't blame the domain for dead addresses", () => {
     expect(judge(domain({ sent: 30, human: 0, causes: { spam: 12 } })).verdict).toBe("low");
     expect(judge(domain({ human: 0, bounces: 60, causes: { missing: 60 } })).verdict).toBe("ok");
-    expect(judge(domain({ sent: 500, replies: 0, human: 0 })).verdict).toBe("watch");
+    expect(judge(domain({ sent: 500, replies: 0, human: 0 })).verdict).toBe("ok");
+  });
+
+  it("tags the evidence and replaces a domain with two strikes", () => {
+    const j = judge(domain({ human: 0, rep: 84, lowRepInboxes: 3, quietDays: 9, sentSinceReply: 1200 }));
+    expect(j.verdict).toBe("rest");
+    expect(j.chips.map((c) => c.text)).toEqual(["Rep 84", "No reply 9d"]);
+    expect(j.why).toBe("Warmup reputation 84.0 (3 inboxes under 90), no human reply for 9 days (1,200 sent since); 0 human replies");
+    expect(judge(domain({ rep: 84 })).verdict).toBe("watch");
+    expect(judge(domain({ quietDays: 4, sentSinceReply: 500 })).chips[0]).toMatchObject({ text: "No reply 4d", tone: "warning" });
+    expect(judge(domain({ quietDays: 12, neverReplied: true, sentSinceReply: 900 })).chips[0].text).toBe("No reply 12+d");
+    expect(judge(domain({ quietDays: 9, sentSinceReply: 120 })).chips).toEqual([]);
+  });
+
+  it("only watches two strikes while human replies still come in", () => {
+    const j = judge(domain({ human: 2, rep: 86, causes: { spam: 6 }, prevSpam: 6, quietDays: 1 }));
+    expect(j.chips.map((c) => c.key)).toEqual(["spam", "lowrep"]);
+    expect(j.verdict).toBe("watch");
+  });
+
+  it("tells tenant and DNS problems apart", () => {
+    const j = judge(domain({ causes: { dns: 5 }, disconnected: 1 }));
+    expect(j.verdict).toBe("fix");
+    expect(j.chips.map((c) => c.text)).toEqual(["DNS 5", "Disconnected 1/11"]);
+    expect(judge(domain({ causes: { sender: 2, dns: 1 } })).chips.map((c) => c.key)).toEqual(["tenant", "dns"]);
+    expect(judge(domain({ causes: { sender: 2 } })).chips).toEqual([]);
+  });
+
+  it("puts the clients with most to fix or replace first", () => {
+    const rows = byClient([
+      judge(domain({ id: "a", clientId: "q", clientName: "Qualifi" })),
+      judge(domain({ id: "b", clientId: "m", clientName: "Mvinix", causes: { sender: 5 } })),
+      judge(domain({ id: "c", clientId: null, clientName: null })),
+    ]);
+    expect(rows.map((r) => r.name)).toEqual(["Mvinix", "No client", "Qualifi"]);
+    expect(rows[0].counts.fix).toBe(1);
   });
 
   it("flags campaigns whose bounces are mostly dead addresses", () => {

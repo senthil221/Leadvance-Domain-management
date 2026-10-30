@@ -3,12 +3,14 @@ import type { Tone } from "./status";
 // Why an email bounced, read from the bounce notice Smartlead forwards
 // (Office 365, Gmail and generic SMTP wording). Shared by server and client.
 // Spam and blocklist rejections are about the sending domain; no such address
-// is about the list; sender is our own setup (tenant, mailbox, DNS).
+// is about the list; sender and dns are our own setup (the tenant or mailbox,
+// and the sending domain's DNS records).
 
-export type BounceReason = "sender" | "blocklist" | "spam" | "missing" | "restricted" | "policy" | "full" | "temporary" | "other";
+export type BounceReason = "sender" | "dns" | "blocklist" | "spam" | "missing" | "restricted" | "policy" | "full" | "temporary" | "other";
 
 export const BOUNCE_META: Record<BounceReason, { label: string; tone: Tone; hint: string }> = {
-  sender: { label: "Sender setup", tone: "danger", hint: "Our side: the Microsoft tenant or mailbox is blocked, over its limit, or failing SPF/DKIM/DMARC. Fix before sending more" },
+  sender: { label: "Tenant / mailbox", tone: "danger", hint: "Our side: the Microsoft tenant or mailbox is blocked, over its limit, or can't sign in. Fix before sending more" },
+  dns: { label: "Sender DNS", tone: "danger", hint: "Our side: the sending domain's DNS is missing or broken (no MX/A records, SPF, DKIM or DMARC failing). Fix the records" },
   blocklist: { label: "Blocklist", tone: "danger", hint: "The sending domain or IP is on a block list (Spamhaus, Barracuda, Microsoft…): rest the domain" },
   spam: { label: "Spam rejection", tone: "warning", hint: "Rejected as spam or for reputation: the sending domain is being filtered" },
   missing: { label: "No such address", tone: "info", hint: "The address doesn't exist: a list quality problem, not the domain's" },
@@ -18,7 +20,7 @@ export const BOUNCE_META: Record<BounceReason, { label: string; tone: Tone; hint
   temporary: { label: "Temporary", tone: "faint", hint: "Delayed or timed out; it may deliver on a retry" },
   other: { label: "Other", tone: "faint", hint: "Couldn't tell why from the bounce notice" },
 };
-export const BOUNCE_ORDER: BounceReason[] = ["sender", "blocklist", "spam", "missing", "restricted", "policy", "full", "temporary", "other"];
+export const BOUNCE_ORDER: BounceReason[] = ["sender", "dns", "blocklist", "spam", "missing", "restricted", "policy", "full", "temporary", "other"];
 
 // First match wins, so the specific causes come before the catch-alls (5.7.x).
 const RULES: [BounceReason, RegExp][] = [
@@ -27,9 +29,11 @@ const RULES: [BounceReason, RegExp][] = [
     /tenant has exceeded|unregistered domain|traffic not accepted from this ip|\b5\.7\.(705|700|750|708|233)\b/,
     /outboundspam|bad outbound sender|restricted from sending|blocked from sending|sending (has been |is )?(disabled|suspended|blocked)|\b5\.1\.8\b/,
     /daily (user )?sending (limit|quota)|sending limit exceeded|submission ?quota ?exceeded|message rate limit exceeded|\b5\.4\.5\b/,
-    /\b(dmarc|dkim|spf)\b[^.\n]{0,40}(fail|reject|not pass|alignment)|sender is not authenticated|unauthenticated (email|mail|sender)|\b5\.7\.(2[3-7]|30|509)\b/,
     /authentication (failed|unsuccessful)(?! temporarily)|username and password not accepted|basic authentication is disabled|invalid_grant/,
-    // The receiver couldn't find our domain in DNS (no MX/A records, SPF or DMARC broken).
+  ].map((r) => r.source).join("|"), "i")],
+  // The receiver couldn't find or verify our domain in DNS (no MX/A records, SPF, DKIM or DMARC broken).
+  ["dns", new RegExp([
+    /\b(dmarc|dkim|spf)\b[^.\n]{0,40}(fail|reject|not pass|alignment)|sender is not authenticated|unauthenticated (email|mail|sender)|\b5\.7\.(2[3-7]|30|509)\b/,
     /has no a, aaaa,? or mx (dns )?records|(not|weren'?t) recognized as a valid sender|trusted location|spf validation error|misconfigured settings at|sender (address rejected: )?domain (does not exist|not found)|unknown sender domain/,
   ].map((r) => r.source).join("|"), "i")],
   ["blocklist", /spamhaus|spamcop|barracuda|\bsorbs\b|uceprotect|invaluement|mailspike|\bpsbl\b|uribl|surbl|\bdbl\d*\b|blocked using|dnsbl|\brbl\b|black ?list|block ?list|badmailfrom|banned sending ip|banned sender|\bs3150\b|\bs3140\b|\b5\.7\.(511|6[0-4]\d)\b/i],

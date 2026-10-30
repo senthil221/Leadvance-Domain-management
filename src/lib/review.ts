@@ -1,15 +1,16 @@
 import type { BounceReason } from "./bounces";
 
 // The weekly review's call on each sending domain, with the numbers behind
-// it. Shared by server and client. Spam and blocklist rejections count
-// against the domain; addresses that don't exist count against the list.
+// it. Shared by server and client. Spam and blocklist rejections, a low
+// warmup reputation and days without a human reply count against the domain;
+// addresses that don't exist count against the list.
 
 export type Verdict = "fix" | "rest" | "watch" | "idle" | "low" | "ok";
 
 export const VERDICT_META: Record<Verdict, { label: string; tone: "danger" | "warning" | "info" | "faint" | "success"; hint: string }> = {
   fix: { label: "Fix sender", tone: "danger", hint: "Our own setup is failing: tenant or mailbox blocked, DNS missing, or inboxes disconnected" },
-  rest: { label: "Rest", tone: "danger", hint: "Spam or blocklist rejections and no human replies: take it out of campaigns for a while" },
-  watch: { label: "Watch", tone: "warning", hint: "Early signs (spam rejections, no replies at all, blocklisted) but still worth sending: lower volume" },
+  rest: { label: "Replace", tone: "danger", hint: "Two strikes (spam, blocklisted, low rep, no reply for days) or heavy spam with no replies: pull it and line up a replacement" },
+  watch: { label: "Watch", tone: "warning", hint: "One strike so far: still worth sending, at lower volume" },
   idle: { label: "Idle", tone: "info", hint: "Active, but nothing was sent in this range" },
   low: { label: "Too little sent", tone: "faint", hint: "Not enough sent in this range to judge" },
   ok: { label: "OK", tone: "success", hint: "Nothing to act on" },
@@ -25,8 +26,31 @@ export const RULES = {
   restBlocklist: 5,
   watchSpam: 5,
   watchSpamRate: 0.5,
-  silentSent: 300,
+  lowRep: 90,
+  quietDays: 3,
+  longQuietDays: 7,
+  quietSent: 300,
 };
+
+/**
+ * The short tags beside each domain. Strikes count against the domain; the
+ * rest explain the call. Ordered as they're shown.
+ */
+export type Signal = "tenant" | "dns" | "disconnected" | "spam" | "rising" | "blocklist" | "lowrep" | "quiet" | "badlist";
+export const SIGNAL_META: Record<Signal, { label: string; hint: string; strike?: true }> = {
+  tenant: { label: "Tenant", hint: "Bounces saying our Microsoft tenant or mailbox is blocked, over its limit, or can't sign in" },
+  dns: { label: "DNS", hint: "Bounces saying the sending domain has no MX/A records, or SPF, DKIM or DMARC failed" },
+  disconnected: { label: "Disconnected", hint: "Inboxes disconnected in Smartlead" },
+  spam: { label: "Spam", hint: `Spam rejections: at least ${RULES.watchSpam} and ${RULES.watchSpamRate}% of sent`, strike: true },
+  rising: { label: "Spam rising", hint: "Spam share at least doubled since the same days before" },
+  blocklist: { label: "Blocklisted", hint: `On a blocklist in Smartlead's scan, or ${RULES.restBlocklist}+ blocklist bounces`, strike: true },
+  lowrep: { label: "Low rep", hint: `Average warmup reputation under ${RULES.lowRep}`, strike: true },
+  quiet: { label: "No reply", hint: `No human reply for ${RULES.quietDays}+ days with ${RULES.quietSent}+ sent since`, strike: true },
+  badlist: { label: "Bad list", hint: "Most bounces are addresses that don't exist: the list's fault, not the domain's" },
+};
+export const SIGNAL_ORDER: Signal[] = ["tenant", "dns", "disconnected", "spam", "rising", "blocklist", "lowrep", "quiet", "badlist"];
+export type Tone = "danger" | "warning" | "info" | "faint";
+export type Chip = { key: Signal; text: string; tone: Tone; why: string };
 
 export type ReviewDomain = {
   id: string; name: string; status: string; clientId: string | null; clientName: string | null; clientHue: number | null; tags: string[];
@@ -34,10 +58,14 @@ export type ReviewDomain = {
   sent: number; replies: number; human: number; bounces: number;
   causes: Partial<Record<BounceReason, number>>;
   prevSent: number; prevHuman: number; prevSpam: number;
+  /** Average warmup reputation of the connected inboxes, and how many are under RULES.lowRep. */
+  rep: number | null; lowRepInboxes: number;
+  /** Days from the last human reply (or, with none on record, the first send) to the end of the range. */
+  quietDays: number | null; neverReplied: boolean; sentSinceReply: number;
 };
 export type ReviewCampaign = { id: number; name: string; clientName: string | null; bounces: number; missing: number };
 export type ReviewData = { from: string; to: string; today: string; domains: ReviewDomain[]; campaigns: ReviewCampaign[] };
-export type Judged = ReviewDomain & { verdict: Verdict; why: string; worse: boolean; spam: number };
+export type Judged = ReviewDomain & { verdict: Verdict; why: string; worse: boolean; spam: number; chips: Chip[]; strikes: number };
 
 const pct = (n: number, d: number) => (d > 0 ? (100 * n) / d : 0);
 const p = (v: number) => `${v < 1 ? v.toFixed(2) : v.toFixed(1)}%`;
@@ -49,29 +77,51 @@ export function judge(d: ReviewDomain): Judged {
   const spam = (c.spam ?? 0) + (c.blocklist ?? 0);
   const rate = pct(spam, d.sent);
   const prevRate = pct(d.prevSpam, d.prevSent);
+  const judged = d.sent >= RULES.minSent;
   // Spam share at least doubled since the same days before.
   const worse = spam >= RULES.watchSpam && d.prevSent >= RULES.minSent && rate >= 2 * prevRate && rate > prevRate;
-  const trend = worse ? `, up from ${p(prevRate)}` : "";
-  const listed = d.blacklisted ? `, on ${s(d.blacklisted, "blocklist")}` : "";
-  const disc = d.disconnected ? `${n(d.disconnected)} of ${n(d.inboxes + d.disconnected)} inboxes disconnected` : "";
-  const out = (verdict: Verdict, why: string): Judged => ({ ...d, verdict, why, worse, spam });
+  const tenant = c.sender ?? 0, dns = c.dns ?? 0;
+  const ownSetup = tenant + dns >= RULES.senderBounces;
+  const heavySpam = judged && spam >= RULES.restSpam && rate >= RULES.restSpamRate;
 
-  if ((c.sender ?? 0) >= RULES.senderBounces) {
-    return out("fix", `${s(c.sender ?? 0, "bounce")} from our own setup (tenant, mailbox or DNS)${disc ? `; ${disc}` : ""}`);
+  const chips: Chip[] = [];
+  const add = (key: Signal, text: string, tone: Tone, why: string) => chips.push({ key, text, tone, why });
+  if (ownSetup && tenant) add("tenant", `Tenant ${n(tenant)}`, "danger", `${s(tenant, "bounce")} from the tenant or mailbox`);
+  if (ownSetup && dns) add("dns", `DNS ${n(dns)}`, "danger", `${s(dns, "bounce")} from missing or failing DNS`);
+  if (d.disconnected) add("disconnected", `Disconnected ${n(d.disconnected)}/${n(d.inboxes + d.disconnected)}`, "danger", `${n(d.disconnected)} of ${n(d.inboxes + d.disconnected)} inboxes disconnected`);
+  if (judged && spam >= RULES.watchSpam && rate >= RULES.watchSpamRate) {
+    add("spam", `Spam ${p(rate)}`, heavySpam ? "danger" : "warning", `${n(spam)} spam/blocklist rejections, ${p(rate)} of ${n(d.sent)} sent`);
   }
-  if (d.status === "active" && d.sent === 0) return out("idle", disc ? `Nothing sent; ${disc}` : "Nothing sent");
-  if (d.sent >= RULES.minSent && d.human === 0 &&
-      ((spam >= RULES.restSpam && rate >= RULES.restSpamRate) || (c.blocklist ?? 0) >= RULES.restBlocklist)) {
-    return out("rest", `${n(spam)} spam/blocklist rejections, ${p(rate)} of ${n(d.sent)} sent${trend}, no human replies${listed}`);
+  if (worse) add("rising", `Spam ↑ from ${p(prevRate)}`, "warning", `up from ${p(prevRate)}`);
+  if (d.blacklisted || (c.blocklist ?? 0) >= RULES.restBlocklist) {
+    add("blocklist", "Blocklisted", "danger", d.blacklisted ? `on ${s(d.blacklisted, "blocklist")}` : `${n(c.blocklist ?? 0)} blocklist bounces`);
   }
-  if (d.sent >= RULES.minSent) {
-    if (spam >= RULES.watchSpam && rate >= RULES.watchSpamRate) {
-      return out("watch", `${n(spam)} spam/blocklist rejections, ${p(rate)} of sent${trend}; ${s(d.human, "human reply", "human replies")}${listed}`);
-    }
-    if (d.sent >= RULES.silentSent && d.replies === 0) return out("watch", `${n(d.sent)} sent and no replies at all: may be landing in spam${listed}`);
-    if (d.blacklisted) return out("watch", `On ${s(d.blacklisted, "blocklist")} (Smartlead's scan)`);
+  if (d.rep != null && d.rep < RULES.lowRep) {
+    add("lowrep", `Rep ${d.rep.toFixed(0)}`, d.rep < RULES.lowRep - 5 ? "danger" : "warning",
+      `warmup reputation ${d.rep.toFixed(1)}${d.lowRepInboxes ? ` (${s(d.lowRepInboxes, "inbox", "inboxes")} under ${RULES.lowRep})` : ""}`);
   }
-  if (disc) return out("fix", disc);
+  if (d.quietDays != null && d.quietDays >= RULES.quietDays && d.sentSinceReply >= RULES.quietSent) {
+    const days = `${n(d.quietDays)}${d.neverReplied ? "+" : ""}d`;
+    add("quiet", `No reply ${days}`, d.quietDays >= RULES.longQuietDays ? "danger" : "warning",
+      `no human reply ${d.neverReplied ? "on record" : `for ${s(d.quietDays, "day")}`} (${n(d.sentSinceReply)} sent since)`);
+  }
+  const missing = c.missing ?? 0;
+  if (missing >= 10 && missing >= 0.5 * d.bounces) add("badlist", `Bad list ${Math.round(pct(missing, d.bounces))}%`, "info", `${n(missing)} of ${s(d.bounces, "bounce")} to addresses that don't exist`);
+
+  const strikes = chips.filter((x) => SIGNAL_META[x.key].strike).length;
+  const said = (keys: Signal[]) => chips.filter((x) => keys.includes(x.key)).map((x) => x.why).join(", ");
+  const against = said(["spam", "rising", "blocklist", "lowrep", "quiet"]);
+  const humans = s(d.human, "human reply", "human replies");
+  const out = (verdict: Verdict, why: string): Judged => ({ ...d, verdict, why: why.charAt(0).toUpperCase() + why.slice(1), worse, spam, chips, strikes });
+  // A human reply in the last few days says the domain still lands.
+  const replying = d.quietDays != null && d.quietDays < RULES.quietDays && !d.neverReplied;
+
+  if (ownSetup) return out("fix", `${said(["tenant", "dns", "disconnected"])}${against ? `; ${against}` : ""}`);
+  if (d.status === "active" && d.sent === 0) return out("idle", ["Nothing sent", said(["disconnected", "lowrep"])].filter(Boolean).join("; "));
+  if (judged && d.human === 0 && (heavySpam || (c.blocklist ?? 0) >= RULES.restBlocklist)) return out("rest", `${against}, no human replies`);
+  if (strikes >= 2 && !replying) return out("rest", `${against}; ${humans}`);
+  if (strikes >= 1) return out("watch", `${against}; ${humans}`);
+  if (d.disconnected) return out("fix", said(["disconnected"]));
   if (d.sent > 0 && d.sent < RULES.minSent) return out("low", `Only ${n(d.sent)} sent`);
   return out("ok", d.sent ? `${p(pct(d.human, d.sent))} human replies, ${p(pct(d.bounces, d.sent))} bounces` : "Not sending");
 }
@@ -81,4 +131,26 @@ export function badLists(campaigns: ReviewCampaign[]) {
   return campaigns
     .filter((c) => c.missing >= 10 && c.missing >= 0.5 * c.bounces)
     .sort((a, b) => b.missing - a.missing);
+}
+
+export type ClientSummary = {
+  id: string; name: string; hue: number | null; domains: number; counts: Record<Verdict, number>;
+  sent: number; human: number; bounces: number; spam: number;
+};
+
+/** One row per client, worst first: most domains to fix or replace, then to watch. */
+export function byClient(domains: Judged[]): ClientSummary[] {
+  const m = new Map<string, ClientSummary>();
+  for (const d of domains) {
+    const id = d.clientId ?? "";
+    let r = m.get(id);
+    if (!r) {
+      r = { id, name: d.clientName ?? "No client", hue: d.clientHue, domains: 0, counts: { fix: 0, rest: 0, watch: 0, idle: 0, low: 0, ok: 0 }, sent: 0, human: 0, bounces: 0, spam: 0 };
+      m.set(id, r);
+    }
+    r.domains++; r.counts[d.verdict]++;
+    r.sent += d.sent; r.human += d.human; r.bounces += d.bounces; r.spam += d.spam;
+  }
+  return [...m.values()].sort((a, b) =>
+    b.counts.fix + b.counts.rest - (a.counts.fix + a.counts.rest) || b.counts.watch - a.counts.watch || b.sent - a.sent || a.name.localeCompare(b.name));
 }

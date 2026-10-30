@@ -793,19 +793,37 @@ export async function getReview(from: string, to: string): Promise<import("./rev
             and (occurred_at at time zone tz.z)::date between ${pf}::date and ${to}::date
             and ((occurred_at at time zone tz.z)::date <= ${pt}::date or (occurred_at at time zone tz.z)::date >= ${from}::date)
           group by 1, 2, 3) e
-        group by 1)
+        group by 1),
+      rep as (
+        select domain_id, round(avg(warmup_reputation), 1)::float8 as rep, (count(*) filter (where warmup_reputation < 90))::int as low
+        from inboxes where status = 'connected' and warmup_reputation is not null group by 1),
+      -- Human replies are on record from the day the webhook first brought one in.
+      since as (select min(day) as day from domain_daily_stats where human_replies > 0),
+      hr as (
+        select domain_id, max(day) filter (where human_replies > 0) as last_human, min(day) filter (where sent > 0) as first_sent
+        from domain_daily_stats where day <= ${to}::date group by 1),
+      quiet as (
+        select hr.domain_id, hr.last_human is null as never,
+          (${to}::date - coalesce(hr.last_human, greatest(hr.first_sent, since.day)))::int as days,
+          (select coalesce(sum(s.sent), 0)::int from domain_daily_stats s
+            where s.domain_id = hr.domain_id and s.day <= ${to}::date and s.day > coalesce(hr.last_human, '-infinity'::date)) as sent_since
+        from hr cross join since where hr.first_sent is not null)
       select d.id, d.name, d.status::text as status, d.client_id, c.name as client_name, c.hue as client_hue, d.tags,
         (select count(*)::int from inboxes i where i.domain_id = d.id and i.status = 'connected') as inboxes,
         (select count(*)::int from inboxes i where i.domain_id = d.id and i.status = 'disconnected') as disconnected,
         (coalesce(d.blacklist_domain_count, 0) + coalesce(d.blacklist_ip_count, 0))::int as blacklisted,
         coalesce(cur.sent, 0) as sent, coalesce(cur.replies, 0) as replies, coalesce(cur.human, 0) as human, coalesce(cur.bounces, 0) as bounces,
         coalesce(ev.causes, '{}'::jsonb) as causes,
-        coalesce(prev.sent, 0) as prev_sent, coalesce(prev.human, 0) as prev_human, coalesce(ev.prev_spam, 0) as prev_spam
+        coalesce(prev.sent, 0) as prev_sent, coalesce(prev.human, 0) as prev_human, coalesce(ev.prev_spam, 0) as prev_spam,
+        rep.rep, coalesce(rep.low, 0) as low_rep_inboxes,
+        quiet.days as quiet_days, coalesce(quiet.never, false) as never_replied, coalesce(quiet.sent_since, 0) as sent_since_reply
       from domains d
       left join clients c on c.id = d.client_id
       left join cur on cur.domain_id = d.id
       left join prev on prev.domain_id = d.id
       left join ev on ev.domain_id = d.id
+      left join rep on rep.domain_id = d.id
+      left join quiet on quiet.domain_id = d.id
       where d.status in ('warming', 'active', 'draining') or cur.sent > 0
       order by d.name`,
     sql<import("./review").ReviewCampaign[]>`

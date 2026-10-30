@@ -1,25 +1,30 @@
 "use client";
 
 import { DomainLink } from "@/components/domains/DomainLink";
-import { ClipboardList, Copy, ListChecks, Search, Tag, TagsIcon, X } from "lucide-react";
+import { ChevronLeft, ChevronRight, ClipboardList, Copy, ListChecks, Search, Tag, TagsIcon, X } from "lucide-react";
 import { useMemo, useState, useTransition } from "react";
 import { toast } from "sonner";
 import { loadReview, tagDomains } from "@/app/actions";
 import { RangePicker } from "@/components/RangePicker";
 import { SortTh } from "@/components/SortTh";
-import { ClientCell, Empty, StatusDot, TagList } from "@/components/ui";
+import { ClientCell, Empty, Rep, StatusDot, TagList } from "@/components/ui";
 import { BOUNCE_META, BOUNCE_ORDER, type BounceReason } from "@/lib/bounces";
 import { int } from "@/lib/format";
 import type { ClientRow } from "@/lib/queries";
 import { nice, previousLabel } from "@/lib/range";
-import { VERDICT_META, VERDICT_ORDER, badLists, judge, type Judged, type ReviewData, type Verdict } from "@/lib/review";
+import {
+  RULES, SIGNAL_META, SIGNAL_ORDER, VERDICT_META, VERDICT_ORDER, badLists, byClient, judge,
+  type Chip, type Judged, type ReviewData, type Signal, type Verdict,
+} from "@/lib/review";
 
 // The weekly review: every sending domain sorted into what to do with it,
-// each with the numbers behind the call, ready to copy or tag.
+// with short tags for the evidence behind the call, client by client, ready
+// to copy or tag.
 
 const LISTS: Verdict[] = ["fix", "rest", "watch", "idle"];
 const CAUSE_COLOR: Record<BounceReason, string> = {
-  sender: "var(--danger-solid)", blocklist: "color-mix(in srgb, var(--danger-solid) 65%, var(--warning-solid))", spam: "var(--warning-solid)",
+  sender: "var(--danger-solid)", dns: "color-mix(in srgb, var(--danger-solid) 70%, var(--violet-solid))",
+  blocklist: "color-mix(in srgb, var(--danger-solid) 65%, var(--warning-solid))", spam: "var(--warning-solid)",
   missing: "var(--info-solid)", restricted: "var(--line-strong)", policy: "color-mix(in srgb, var(--faint) 70%, transparent)",
   full: "var(--line-strong)", temporary: "var(--line)", other: "var(--line)",
 };
@@ -27,12 +32,15 @@ const pct = (n: number, d: number) => (d > 0 ? (100 * n) / d : null);
 const fx = (v: number | null, digits = 1) => (v == null ? "—" : `${v.toFixed(v < 1 && digits === 1 ? 2 : digits)}%`);
 const plural = (n: number, one: string, many = `${one}s`) => `${int(n)} ${n === 1 ? one : many}`;
 
-type SortKey = "verdict" | "name" | "client" | "sent" | "human" | "spam" | "missing" | "bounceRate";
+type SortKey = "verdict" | "name" | "client" | "signals" | "sent" | "human" | "quiet" | "rep" | "spam" | "missing" | "bounceRate";
 const sortValue = (r: Judged, k: SortKey): string | number | null => {
   switch (k) {
-    case "verdict": return -VERDICT_ORDER.indexOf(r.verdict) * 1e6 + r.spam;
+    case "verdict": return -VERDICT_ORDER.indexOf(r.verdict) * 1e6 + r.strikes * 1e4 + r.spam;
+    case "signals": return r.strikes * 100 + r.chips.length;
     case "client": return r.clientName?.toLowerCase() ?? null;
     case "name": return r.name;
+    case "quiet": return r.quietDays;
+    case "rep": return r.rep;
     case "missing": return r.causes.missing ?? 0;
     case "bounceRate": return pct(r.bounces, r.sent);
     default: return r[k];
@@ -50,14 +58,24 @@ async function copy(text: string, what: string) {
   }
 }
 
+function Chips({ chips }: { chips: Chip[] }) {
+  if (!chips.length) return null;
+  return (
+    <span className="rv-sigs">
+      {chips.map((c) => <span key={c.key} className={`rv-sig tone-${c.tone}`} title={`${SIGNAL_META[c.key].hint}. Here: ${c.why}`}>{c.text}</span>)}
+    </span>
+  );
+}
+
 export function ReviewView({ initial, clients }: { initial: ReviewData; clients: ClientRow[] }) {
   const [data, setData] = useState(initial);
   const [loading, start] = useTransition();
   const [tagging, startTag] = useTransition();
   const [scope, setScope] = useState<"active" | "other">("active");
-  const [clientId, setClientId] = useState("");
+  const [clientId, setClientId] = useState<string | null>(null);
   const [q, setQ] = useState("");
   const [only, setOnly] = useState<Verdict | "">("");
+  const [signals, setSignals] = useState<Set<Signal>>(new Set());
   const [sort, setSort] = useState<{ key: SortKey; dir: 1 | -1 }>({ key: "verdict", dir: -1 });
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [tag, setTag] = useState("");
@@ -68,19 +86,37 @@ export function ReviewView({ initial, clients }: { initial: ReviewData; clients:
   });
 
   const judged = useMemo(() => data.domains.map(judge), [data.domains]);
-  const inScope = useMemo(() => judged.filter((d) => (scope === "active") === (d.status === "active") && (!clientId || d.clientId === clientId)), [judged, scope, clientId]);
+  const scoped = useMemo(() => judged.filter((d) => (scope === "active") === (d.status === "active")), [judged, scope]);
+  const clientRows = useMemo(() => byClient(scoped), [scoped]);
+  // "" is the domains without a client; null is every client.
+  const pickClient = (id: string | null) => { setClientId(id); setSelected(new Set()); };
+  const at = clientId == null ? -1 : clientRows.findIndex((c) => c.id === clientId);
+  const step = (by: 1 | -1) => {
+    if (!clientRows.length) return;
+    const i = at < 0 ? (by === 1 ? 0 : clientRows.length - 1) : (at + by + clientRows.length) % clientRows.length;
+    pickClient(clientRows[i].id);
+  };
+
+  const inScope = useMemo(() => scoped.filter((d) => clientId == null || (d.clientId ?? "") === clientId), [scoped, clientId]);
   const byVerdict = useMemo(() => {
     const m = new Map<Verdict, Judged[]>(VERDICT_ORDER.map((v) => [v, []]));
     for (const d of inScope) m.get(d.verdict)!.push(d);
-    for (const list of m.values()) list.sort((a, b) => b.spam - a.spam || (b.causes.sender ?? 0) - (a.causes.sender ?? 0) || b.sent - a.sent);
+    for (const list of m.values()) list.sort((a, b) => b.strikes - a.strikes || b.spam - a.spam || (b.causes.sender ?? 0) + (b.causes.dns ?? 0) - (a.causes.sender ?? 0) - (a.causes.dns ?? 0) || b.sent - a.sent);
     return m;
   }, [inScope]);
   const needle = q.trim().toLowerCase();
-  const rows = useMemo(() => inScope
-    .filter((d) => (!only || d.verdict === only) &&
-      (!needle || d.name.includes(needle) || d.clientName?.toLowerCase().includes(needle) || d.tags.some((t) => t.toLowerCase().includes(needle))))
+  const listed = useMemo(() => inScope.filter((d) => (!only || d.verdict === only) &&
+    (!needle || d.name.includes(needle) || d.clientName?.toLowerCase().includes(needle) || d.tags.some((t) => t.toLowerCase().includes(needle)))),
+  [inScope, only, needle]);
+  const signalCounts = useMemo(() => {
+    const m = new Map<Signal, number>();
+    for (const d of listed) for (const c of d.chips) m.set(c.key, (m.get(c.key) ?? 0) + 1);
+    return m;
+  }, [listed]);
+  const rows = useMemo(() => listed
+    .filter((d) => [...signals].every((k) => d.chips.some((c) => c.key === k)))
     .sort((a, b) => cmp(sortValue(a, sort.key), sortValue(b, sort.key), sort.dir) || a.name.localeCompare(b.name)),
-  [inScope, only, needle, sort]);
+  [listed, signals, sort]);
 
   const causes = useMemo(() => {
     const t: Partial<Record<BounceReason, number>> = {};
@@ -90,21 +126,23 @@ export function ReviewView({ initial, clients }: { initial: ReviewData; clients:
   const causeTotal = Object.values(causes).reduce((a, b) => a + (b ?? 0), 0);
   const lists = useMemo(() => {
     const names = new Set(inScope.map((d) => d.clientName));
-    return badLists(data.campaigns).filter((c) => !clientId || names.has(c.clientName));
+    return badLists(data.campaigns).filter((c) => clientId == null || names.has(c.clientName));
   }, [data.campaigns, inScope, clientId]);
-  const knownTags = useMemo(() => [...new Set(["Rest", "Watch", "Fix", "Idle", ...data.domains.flatMap((d) => d.tags)])].sort(), [data.domains]);
+  const knownTags = useMemo(() => [...new Set(["Replace", "Watch", "Fix", "Idle", ...data.domains.flatMap((d) => d.tags)])].sort(), [data.domains]);
 
   const count = (v: Verdict) => byVerdict.get(v)!.length;
   const selectedRows = rows.filter((r) => selected.has(r.id));
   const allSelected = rows.length > 0 && rows.every((r) => selected.has(r.id));
   const toggle = (id: string) => setSelected((s) => { const n = new Set(s); if (n.has(id)) n.delete(id); else n.add(id); return n; });
+  const toggleSignal = (k: Signal) => setSignals((s) => { const n = new Set(s); if (n.has(k)) n.delete(k); else n.add(k); return n; });
   const sortBy = (key: SortKey) => setSort((s) => (s.key === key ? { key, dir: s.dir === 1 ? -1 : 1 } : { key, dir: key === "name" || key === "client" ? 1 : -1 }));
   const pickList = (v: Verdict) => {
     setOnly(v);
+    setSignals(new Set());
     setSelected(new Set(byVerdict.get(v)!.map((d) => d.id)));
     setTag(VERDICT_META[v].label.split(" ")[0]);
   };
-  const reasons = (list: Judged[]) => list.map((d) => [d.name, d.clientName ?? "", VERDICT_META[d.verdict].label, d.why].join("\t")).join("\n");
+  const reasons = (list: Judged[]) => list.map((d) => [d.name, d.clientName ?? "", VERDICT_META[d.verdict].label, d.chips.map((c) => c.text).join(", "), d.why].join("\t")).join("\n");
   const applyTag = (on: boolean) => startTag(async () => {
     const r = await tagDomains({ domainIds: selectedRows.map((d) => d.id), tag, on });
     if (!r.ok) return void toast.error(r.error);
@@ -115,10 +153,11 @@ export function ReviewView({ initial, clients }: { initial: ReviewData; clients:
 
   const headline = [
     count("fix") ? `fix ${plural(count("fix"), "domain")}` : "",
-    count("rest") ? `rest ${int(count("rest"))}` : "",
+    count("rest") ? `replace ${int(count("rest"))}` : "",
     count("watch") ? `watch ${int(count("watch"))}` : "",
   ].filter(Boolean).join(", ");
   const tone = count("fix") || count("rest") ? "danger" : count("watch") ? "warning" : "success";
+  const current = at >= 0 ? clientRows[at] : null;
 
   return (
     <div className="flex flex-col gap-3" style={{ opacity: loading ? 0.6 : 1, transition: "opacity 120ms" }}>
@@ -133,16 +172,22 @@ export function ReviewView({ initial, clients }: { initial: ReviewData; clients:
           </button>
         </div>
         <RangePicker from={data.from} to={data.to} today={data.today} loading={loading} onChange={load} />
-        <select className="select" style={{ width: 150 }} value={clientId} onChange={(e) => { setClientId(e.target.value); setSelected(new Set()); }} aria-label="Filter by client">
-          <option value="">All clients</option>
-          {clients.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
-        </select>
+        <span className="rv-client-pick">
+          <button type="button" className="btn btn-sm btn-icon" aria-label="Previous client" title="Previous client" onClick={() => step(-1)}><ChevronLeft size={14} /></button>
+          <select className="select" style={{ width: 170 }} value={clientId ?? "*"} onChange={(e) => pickClient(e.target.value === "*" ? null : e.target.value)} aria-label="Filter by client">
+            <option value="*">All clients</option>
+            {clientRows.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+            {clients.filter((c) => !clientRows.some((r) => r.id === c.id)).map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+          </select>
+          <button type="button" className="btn btn-sm btn-icon" aria-label="Next client" title="Next client, worst first" onClick={() => step(1)}><ChevronRight size={14} /></button>
+          {current ? <span className="rv-client-at">{at + 1} of {clientRows.length}</span> : null}
+        </span>
       </div>
 
       <div className={`rv-headline tone-${tone}`}>
-        <span className="rv-headline-k">{nice(data.from)}{data.from === data.to ? "" : ` – ${nice(data.to)}`}, compared with {previousLabel(data.from, data.to)}</span>
+        <span className="rv-headline-k">{current ? `${current.name} · ` : ""}{nice(data.from)}{data.from === data.to ? "" : ` – ${nice(data.to)}`}, compared with {previousLabel(data.from, data.to)}</span>
         <span className="rv-headline-h">
-          {headline ? `${headline[0].toUpperCase()}${headline.slice(1)}.` : "Nothing to fix, rest or watch."}
+          {headline ? `${headline[0].toUpperCase()}${headline.slice(1)}.` : "Nothing to fix, replace or watch."}
           {scope === "active" && count("idle") ? ` ${plural(count("idle"), "active domain")} sent nothing.` : ""}
         </span>
       </div>
@@ -160,17 +205,20 @@ export function ReviewView({ initial, clients }: { initial: ReviewData; clients:
               <p className="rv-hint">{m.hint}</p>
               <div className="rv-items">
                 {list.length ? list.slice(0, 5).map((d) => (
-                  <div key={d.id} className="rv-item">
-                    <DomainLink id={d.id} tab="stats" className="strong hover:underline">{d.name}</DomainLink>
-                    <span className="rv-why">{d.clientName ? `${d.clientName} · ` : ""}{d.why}{d.worse ? " ▲" : ""}</span>
+                  <div key={d.id} className="rv-item" title={d.why}>
+                    <span className="rv-item-head">
+                      <DomainLink id={d.id} tab="stats" className="strong hover:underline">{d.name}</DomainLink>
+                      {clientId == null && d.clientName ? <span className="rv-why">{d.clientName}</span> : null}
+                    </span>
+                    {d.chips.length ? <Chips chips={d.chips} /> : <span className="rv-why">{d.why}</span>}
                   </div>
                 )) : <p className="rv-none">None in this range</p>}
-                {list.length > 5 ? <button type="button" className="rv-more" onClick={() => setOnly(v)}>and {int(list.length - 5)} more</button> : null}
+                {list.length > 5 ? <button type="button" className="rv-more" onClick={() => { setOnly(v); setSignals(new Set()); }}>and {int(list.length - 5)} more</button> : null}
               </div>
               {list.length ? (
                 <div className="rv-actions">
                   <button type="button" className="btn btn-sm" onClick={() => copy(list.map((d) => d.name).join("\n"), plural(list.length, "domain"))}><Copy size={13} /> Copy</button>
-                  <button type="button" className="btn btn-sm" title="Domain, client, call and reason, tab separated: paste into Sheets or Slack" onClick={() => copy(reasons(list), "with reasons")}><ClipboardList size={13} /> With reasons</button>
+                  <button type="button" className="btn btn-sm" title="Domain, client, call, tags and reason, tab separated: paste into Sheets or Slack" onClick={() => copy(reasons(list), "with reasons")}><ClipboardList size={13} /> With reasons</button>
                   <button type="button" className="btn btn-sm" onClick={() => pickList(v)}><Tag size={13} /> Tag</button>
                 </div>
               ) : null}
@@ -178,6 +226,44 @@ export function ReviewView({ initial, clients }: { initial: ReviewData; clients:
           );
         })}
       </section>
+
+      <div className="card">
+        <div className="card-head">
+          <span className="card-title">By client</span>
+          <span className="card-sub">Worst first. Click a client to see only its domains; the arrows up top step through them</span>
+        </div>
+        <div className="table-scroll" style={{ maxHeight: 320 }}>
+          <table className="data-table rv-clients">
+            <thead>
+              <tr>
+                <th>Client</th>
+                <th className="is-num">Domains</th>
+                {LISTS.map((v) => <th key={v} className="is-num" title={VERDICT_META[v].hint}>{VERDICT_META[v].label}</th>)}
+                <th className="is-num">Sent</th>
+                <th className="is-num" title="Human replies per email sent">Human</th>
+                <th className="is-num" title="Spam and blocklist rejections per email sent">Spam</th>
+                <th className="is-num">Bounce</th>
+              </tr>
+            </thead>
+            <tbody>
+              {clientRows.map((c) => (
+                <tr key={c.id || "none"} data-active={c.id === clientId} className="is-clickable" onClick={() => pickClient(c.id === clientId ? null : c.id)}>
+                  <td><ClientCell name={c.name} hue={c.hue} /></td>
+                  <td className="is-num">{int(c.domains)}</td>
+                  {LISTS.map((v) => (
+                    <td key={v} className="is-num">{c.counts[v] ? <span className={`rv-count tone-${VERDICT_META[v].tone}`}>{int(c.counts[v])}</span> : <span className="zero">0</span>}</td>
+                  ))}
+                  <td className="is-num">{c.sent ? int(c.sent) : <span className="zero">0</span>}</td>
+                  <td className="is-num">{fx(pct(c.human, c.sent))}</td>
+                  <td className="is-num"><span className={(pct(c.spam, c.sent) ?? 0) >= RULES.restSpamRate ? "metric is-bad" : (pct(c.spam, c.sent) ?? 0) >= RULES.watchSpamRate ? "metric is-warn" : "metric"}>{fx(pct(c.spam, c.sent))}</span></td>
+                  <td className="is-num">{fx(pct(c.bounces, c.sent))}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          {clientRows.length === 0 ? <p className="rv-none" style={{ padding: "10px 14px" }}>No domains here.</p> : null}
+        </div>
+      </div>
 
       <div className="grid gap-3 lg:grid-cols-[minmax(0,1.6fr)_minmax(0,1fr)]">
         <div className="card">
@@ -193,7 +279,7 @@ export function ReviewView({ initial, clients }: { initial: ReviewData; clients:
                     <span key={k} title={BOUNCE_META[k].hint}><i style={{ background: CAUSE_COLOR[k] }} />{BOUNCE_META[k].label} <b>{fx(pct(causes[k] ?? 0, causeTotal), 0)}</b></span>
                   ))}
                 </div>
-                <p className="rv-note">Sender setup, blocklist and spam count against the domain. No such address counts against the list.</p>
+                <p className="rv-note">Tenant, DNS, blocklist and spam count against the domain. No such address counts against the list.</p>
               </>
             ) : <p className="rv-none">No bounces in this range.</p>}
           </div>
@@ -225,6 +311,17 @@ export function ReviewView({ initial, clients }: { initial: ReviewData; clients:
         </label>
       </div>
 
+      <div className="rv-sig-filter" role="group" aria-label="Show only domains with these tags">
+        <span className="rv-sig-filter-k">Show only</span>
+        {SIGNAL_ORDER.filter((k) => signalCounts.get(k) || signals.has(k)).map((k) => (
+          <button key={k} type="button" className="rv-sig-btn" aria-pressed={signals.has(k)} title={SIGNAL_META[k].hint} onClick={() => toggleSignal(k)}>
+            {SIGNAL_META[k].label} <span>{int(signalCounts.get(k) ?? 0)}</span>
+          </button>
+        ))}
+        {signals.size ? <button type="button" className="rv-more" onClick={() => setSignals(new Set())}>Clear</button> : null}
+        {!signalCounts.size && !signals.size ? <span className="rv-none">No tags in this view</span> : null}
+      </div>
+
       <div className="table-wrap">
         <div className="table-scroll" style={{ maxHeight: "calc(100dvh - 220px)", minHeight: 240 }}>
           <table className="data-table is-main">
@@ -234,13 +331,15 @@ export function ReviewView({ initial, clients }: { initial: ReviewData; clients:
                 <SortTh k="name" sort={sort} onSort={sortBy}>Domain</SortTh>
                 <SortTh k="client" sort={sort} onSort={sortBy}>Client</SortTh>
                 <SortTh k="verdict" sort={sort} onSort={sortBy}>Call</SortTh>
-                <th>Why</th>
+                <SortTh k="signals" sort={sort} onSort={sortBy} title="Strikes first: spam, blocklisted, low reputation, no reply">Tags</SortTh>
                 <SortTh k="sent" sort={sort} onSort={sortBy} num>Sent</SortTh>
                 <SortTh k="human" sort={sort} onSort={sortBy} num>Human</SortTh>
+                <SortTh k="quiet" sort={sort} onSort={sortBy} num title="Days since the last human reply">Last reply</SortTh>
+                <SortTh k="rep" sort={sort} onSort={sortBy} num title="Average warmup reputation of connected inboxes">Rep</SortTh>
                 <SortTh k="spam" sort={sort} onSort={sortBy} num title="Spam and blocklist rejections">Spam</SortTh>
                 <SortTh k="missing" sort={sort} onSort={sortBy} num title="Bounces to addresses that don't exist">No address</SortTh>
                 <SortTh k="bounceRate" sort={sort} onSort={sortBy} num>Bounce</SortTh>
-                <th>Tags</th>
+                <th>Your tags</th>
               </tr>
             </thead>
             <tbody>
@@ -257,10 +356,17 @@ export function ReviewView({ initial, clients }: { initial: ReviewData; clients:
                       </span>
                     </td>
                     <td><ClientCell name={r.clientName} hue={r.clientHue} /></td>
-                    <td><span className={`badge tone-${m.tone}`} title={m.hint}>{m.label}</span></td>
-                    <td className="rv-why-cell" title={r.why}>{r.why}{r.worse ? <span className="rv-worse" title={`Spam share at least doubled since ${previousLabel(data.from, data.to)}`}> ▲</span> : null}</td>
+                    <td><span className={`badge tone-${m.tone}`} title={r.why}>{m.label}</span></td>
+                    <td className="rv-sig-cell" title={r.why}>{r.chips.length ? <Chips chips={r.chips} /> : <span className="zero">—</span>}</td>
                     <td className="is-num">{r.sent ? int(r.sent) : <span className="zero">0</span>}</td>
                     <td className="is-num">{r.human ? int(r.human) : <span className="zero">0</span>}</td>
+                    <td className="is-num" title={r.quietDays == null ? "Nothing sent yet" : r.neverReplied ? `No human reply on record (${int(r.sentSinceReply)} sent)` : `${int(r.sentSinceReply)} sent since`}>
+                      {r.quietDays == null ? <span className="zero">—</span>
+                        : <span className={`metric${r.quietDays >= RULES.longQuietDays && r.sentSinceReply >= RULES.quietSent ? " is-bad" : r.quietDays >= RULES.quietDays && r.sentSinceReply >= RULES.quietSent ? " is-warn" : ""}`}>
+                          {r.neverReplied ? `${r.quietDays}d+` : r.quietDays === 0 ? "Today" : `${r.quietDays}d`}
+                        </span>}
+                    </td>
+                    <td className="is-num"><Rep value={r.rep} /></td>
                     <td className="is-num">{r.spam ? <span className={r.spam >= 10 ? "metric is-bad" : "metric is-warn"}>{int(r.spam)}</span> : <span className="zero">0</span>}</td>
                     <td className="is-num">{r.causes.missing ? int(r.causes.missing) : <span className="zero">0</span>}</td>
                     <td className="is-num"><span className={`metric${br != null && br > 3 ? " is-bad" : br != null && br > 2 ? " is-warn" : ""}${!br ? " zero" : ""}`}>{fx(br)}</span></td>
@@ -270,7 +376,7 @@ export function ReviewView({ initial, clients }: { initial: ReviewData; clients:
               })}
             </tbody>
           </table>
-          {rows.length === 0 ? <Empty icon={ListChecks} title="No domains here">Pick another range, client or call.</Empty> : null}
+          {rows.length === 0 ? <Empty icon={ListChecks} title="No domains here">Pick another range, client, call or tag.</Empty> : null}
         </div>
         <div className="table-footer">
           <span><b>{int(rows.length)}</b> domains</span>

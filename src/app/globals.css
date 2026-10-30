@@ -1090,3 +1090,23 @@ a.stat:hover { background: var(--surface-2); }
 .rv-worse { color: var(--danger-ink); }
 .rv-tag-input { width: 140px; height: 28px; padding: 0 9px; border-radius: 7px; border: 1px solid color-mix(in srgb, var(--bg) 25%, transparent); background: color-mix(in srgb, var(--bg) 10%, transparent); color: var(--bg); font-size: 12.5px; }
 .rv-tag-input::placeholder { color: color-mix(in srgb, var(--bg) 55%, transparent); }
+.rv-sigs { display: inline-flex; flex-wrap: wrap; gap: 4px; }
+.rv-sig { display: inline-flex; align-items: center; height: 19px; padding: 0 6px; border-radius: 5px; font-size: 11.5px; font-weight: 500; white-space: nowrap; font-variant-numeric: tabular-nums; background: var(--surface-3); color: var(--muted); }
+.rv-sig.tone-danger { background: var(--danger-soft-2); color: var(--danger-ink); box-shadow: inset 0 0 0 1px var(--danger-line); }
+.rv-sig.tone-warning { background: var(--warning-soft-2); color: var(--warning-ink); box-shadow: inset 0 0 0 1px var(--warning-line); }
+.rv-sig.tone-info { background: var(--info-soft-2); color: var(--info-ink); box-shadow: inset 0 0 0 1px var(--info-line); }
+.rv-sig-cell { min-width: 160px; max-width: 320px; }
+.rv-item-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; min-width: 0; }
+.rv-item .rv-sigs { margin-top: 3px; }
+.rv-sig-filter { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.rv-sig-filter-k { color: var(--faint); font-size: 12px; margin-right: 2px; }
+.rv-sig-btn { display: inline-flex; align-items: center; gap: 6px; height: 26px; padding: 0 9px; border: 1px solid var(--line); border-radius: 999px; background: var(--surface); color: var(--ink-soft); font-size: 12.5px; }
+.rv-sig-btn:hover { border-color: var(--line-strong); }
+.rv-sig-btn span { color: var(--faint); font-variant-numeric: tabular-nums; }
+.rv-sig-btn[aria-pressed="true"] { border-color: var(--brand-line); background: var(--brand-soft); color: var(--brand-ink); }
+.rv-sig-btn[aria-pressed="true"] span { color: inherit; }
+.rv-client-pick { display: inline-flex; align-items: center; gap: 4px; }
+.rv-client-at { color: var(--faint); font-size: 12px; margin-left: 4px; white-space: nowrap; }
+.rv-clients tbody tr { cursor: pointer; }
+.rv-clients tbody tr:hover > td { background: var(--surface-2); }
+.rv-clients .rv-count { display: inline-block; }
