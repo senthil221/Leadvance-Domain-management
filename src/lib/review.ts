@@ -5,18 +5,19 @@ import type { BounceReason } from "./bounces";
 // warmup reputation and days without a human reply count against the domain;
 // addresses that don't exist count against the list.
 
-export type Verdict = "fix" | "rest" | "dead" | "watch" | "idle" | "low" | "ok";
+export type Verdict = "fix" | "rest" | "drop" | "dead" | "watch" | "idle" | "low" | "ok";
 
 export const VERDICT_META: Record<Verdict, { label: string; tone: "danger" | "warning" | "info" | "faint" | "success"; hint: string }> = {
   fix: { label: "Fix sender", tone: "danger", hint: "Our own setup is failing: tenant or mailbox blocked, DNS missing, or inboxes disconnected" },
   rest: { label: "Replace", tone: "danger", hint: "Two strikes (spam, blocklisted, low rep, no reply for days) or heavy spam with no replies: pull it and line up a replacement" },
-  dead: { label: "Disconnected", tone: "danger", hint: "Every inbox is disconnected: we can't get into them. Delete or replace in one go" },
+  drop: { label: "Cancelled / replaced", tone: "danger", hint: "Every inbox is disconnected and Hypertide has cancelled the order or the domain was replaced: nothing to reconnect. Delete in one go" },
+  dead: { label: "Disconnected", tone: "warning", hint: "Every inbox is disconnected, but Hypertide hasn't cancelled or replaced the domain: try reconnecting before replacing" },
   watch: { label: "Watch", tone: "warning", hint: "One strike so far: still worth sending, at lower volume" },
   idle: { label: "Idle", tone: "info", hint: "Active with inboxes connected, but nothing was sent in this range" },
   low: { label: "Too little sent", tone: "faint", hint: "Not enough sent in this range to judge" },
   ok: { label: "OK", tone: "success", hint: "Nothing to act on" },
 };
-export const VERDICT_ORDER: Verdict[] = ["fix", "rest", "dead", "watch", "idle", "low", "ok"];
+export const VERDICT_ORDER: Verdict[] = ["fix", "rest", "drop", "dead", "watch", "idle", "low", "ok"];
 
 /** The thresholds. A domain needs MIN_SENT in the range before it is judged on rates. */
 export const RULES = {
@@ -37,8 +38,10 @@ export const RULES = {
  * The short tags beside each domain. Strikes count against the domain; the
  * rest explain the call. Ordered as they're shown.
  */
-export type Signal = "tenant" | "dns" | "disconnected" | "spam" | "rising" | "blocklist" | "lowrep" | "quiet" | "badlist";
+export type Signal = "ended" | "unlisted" | "tenant" | "dns" | "disconnected" | "spam" | "rising" | "blocklist" | "lowrep" | "quiet" | "badlist";
 export const SIGNAL_META: Record<Signal, { label: string; hint: string; strike?: true }> = {
+  ended: { label: "Cancelled / replaced", hint: "Hypertide shows the order cancelled, or the domain was replaced" },
+  unlisted: { label: "No Hypertide order", hint: "Fully disconnected, and Hypertide's order list doesn't have the domain (or no longer does). The list misses some live domains too, so this alone doesn't prove it's cancelled" },
   tenant: { label: "Tenant", hint: "Bounces saying our Microsoft tenant or mailbox is blocked, over its limit, or can't sign in" },
   dns: { label: "DNS", hint: "Bounces saying the sending domain has no MX/A records, or SPF, DKIM or DMARC failed" },
   disconnected: { label: "Disconnected", hint: "Inboxes disconnected in Smartlead" },
@@ -49,7 +52,7 @@ export const SIGNAL_META: Record<Signal, { label: string; hint: string; strike?:
   quiet: { label: "No reply", hint: `No human reply for ${RULES.quietDays}+ days with ${RULES.quietSent}+ sent since`, strike: true },
   badlist: { label: "Bad list", hint: "Most bounces are addresses that don't exist: the list's fault, not the domain's" },
 };
-export const SIGNAL_ORDER: Signal[] = ["tenant", "dns", "disconnected", "spam", "rising", "blocklist", "lowrep", "quiet", "badlist"];
+export const SIGNAL_ORDER: Signal[] = ["ended", "unlisted", "tenant", "dns", "disconnected", "spam", "rising", "blocklist", "lowrep", "quiet", "badlist"];
 export type Tone = "danger" | "warning" | "info" | "faint";
 export type Chip = { key: Signal; text: string; tone: Tone; why: string };
 
@@ -65,7 +68,23 @@ export type ReviewDomain = {
   quietDays: number | null; neverReplied: boolean; sentSinceReply: number;
   /** The Smartlead tags on the domain's inboxes, most used first. */
   slTags: string[];
+  /**
+   * Where the domain stands on Hypertide: the order is live, cancelled, gone from
+   * the order list, the domain was replaced (by replacedBy), or there's no order
+   * for it on this account. null when it isn't a Hypertide domain.
+   */
+  ht: Ht | null; replacedBy: string | null;
 };
+export type Ht = "live" | "cancelled" | "gone" | "replaced" | "none";
+/** The Hypertide column of the sheet, and the chip on a domain Hypertide is done with. */
+export const HT_META: Record<Ht, { label: string; chip: string; why: string }> = {
+  live: { label: "Live", chip: "", why: "" },
+  cancelled: { label: "Cancelled", chip: "HT cancelled", why: "cancelled on Hypertide" },
+  gone: { label: "Off the order list", chip: "Off HT list", why: "no longer on Hypertide's order list" },
+  replaced: { label: "Replaced", chip: "Replaced", why: "replaced" },
+  none: { label: "No order", chip: "No HT order", why: "no Hypertide order on this account" },
+};
+const htText = (d: ReviewDomain) => (d.ht === "replaced" && d.replacedBy ? `Replaced by ${d.replacedBy}` : d.ht ? HT_META[d.ht].label : "");
 export type ReviewCampaign = { id: number; name: string; clientName: string | null; bounces: number; missing: number };
 export type ReviewData = { from: string; to: string; today: string; domains: ReviewDomain[]; campaigns: ReviewCampaign[] };
 export type Judged = ReviewDomain & { verdict: Verdict; why: string; worse: boolean; spam: number; chips: Chip[]; strikes: number };
@@ -89,6 +108,16 @@ export function judge(d: ReviewDomain): Judged {
 
   const chips: Chip[] = [];
   const add = (key: Signal, text: string, tone: Tone, why: string) => chips.push({ key, text, tone, why });
+  // Cancelled or replaced is proof the inboxes won't come back. A domain missing
+  // from the order list isn't: Hypertide's list leaves out some live domains.
+  const ended = d.ht === "cancelled" || d.ht === "replaced";
+  const allGone = d.disconnected > 0 && !d.inboxes;
+  if ((d.ht === "gone" || d.ht === "none") && allGone) add("unlisted", HT_META[d.ht].chip, "info", HT_META[d.ht].why);
+  if (ended && d.ht) {
+    const m = HT_META[d.ht];
+    add("ended", d.ht === "replaced" && d.replacedBy ? `Replaced → ${d.replacedBy}` : m.chip, allGone ? "danger" : "warning",
+      d.ht === "replaced" && d.replacedBy ? `replaced by ${d.replacedBy}` : m.why);
+  }
   if (ownSetup && tenant) add("tenant", `Tenant ${n(tenant)}`, "danger", `${s(tenant, "bounce")} from the tenant or mailbox`);
   if (ownSetup && dns) add("dns", `DNS ${n(dns)}`, "danger", `${s(dns, "bounce")} from missing or failing DNS`);
   if (d.disconnected) add("disconnected", `Disconnected ${n(d.disconnected)}/${n(d.inboxes + d.disconnected)}`, "danger", `${n(d.disconnected)} of ${n(d.inboxes + d.disconnected)} inboxes disconnected`);
@@ -119,8 +148,9 @@ export function judge(d: ReviewDomain): Judged {
   // A human reply in the last few days says the domain still lands.
   const replying = d.quietDays != null && d.quietDays < RULES.quietDays && !d.neverReplied;
 
-  // No inbox left to log into: nothing else about the domain matters.
-  if (d.disconnected && !d.inboxes) return out("dead", said(["disconnected"]));
+  // No inbox left to log into: nothing else about the domain matters. Gone
+  // from Hypertide, it can go; otherwise it may only need reconnecting.
+  if (allGone) return ended ? out("drop", said(["ended", "disconnected"])) : out("dead", said(["unlisted", "disconnected"]));
   if (ownSetup) return out("fix", `${said(["tenant", "dns", "disconnected"])}${against ? `; ${against}` : ""}`);
   if (d.status === "active" && d.sent === 0) return out("idle", ["Nothing sent", said(["disconnected", "lowrep"])].filter(Boolean).join("; "));
   if (judged && d.human === 0 && (heavySpam || (c.blocklist ?? 0) >= RULES.restBlocklist)) return out("rest", chips.some((x) => x.key === "quiet") ? against : `${against}, no human replies`);
@@ -151,10 +181,10 @@ const cell = (v: string | number | null) => {
 
 /** Tab-separated rows with a header, ready to paste into Google Sheets: one column per fact. */
 export function sheetRows(list: Judged[]): string {
-  const head = ["Domain", "Call", "Reason", "Signals", "Smartlead tags", "Client", "Status", "Sent", "Human replies", "Spam rejections",
+  const head = ["Domain", "Call", "Reason", "Signals", "Smartlead tags", "Hypertide", "Client", "Status", "Sent", "Human replies", "Spam rejections",
     "Bounce rate", "Warmup reputation", "Days since human reply", "Inboxes connected", "Inboxes disconnected"];
   const rows = list.map((d) => [
-    d.name, VERDICT_META[d.verdict].label, d.why, d.chips.map((c) => c.text).join(", "), d.slTags.join(", "), d.clientName, d.status,
+    d.name, VERDICT_META[d.verdict].label, d.why, d.chips.map((c) => c.text).join(", "), d.slTags.join(", "), htText(d), d.clientName, d.status,
     d.sent, d.human, d.spam, d.sent ? `${((100 * d.bounces) / d.sent).toFixed(2)}%` : "", d.rep,
     d.quietDays == null ? "" : `${d.quietDays}${d.neverReplied ? "+" : ""}`, d.inboxes, d.disconnected,
   ].map(cell).join("\t"));
@@ -168,7 +198,7 @@ function summarize(domains: Judged[], keys: (d: Judged) => { id: string; name: s
     for (const k of keys(d)) {
       let r = m.get(k.id);
       if (!r) {
-        r = { ...k, domains: 0, counts: { fix: 0, rest: 0, dead: 0, watch: 0, idle: 0, low: 0, ok: 0 }, sent: 0, human: 0, bounces: 0, spam: 0 };
+        r = { ...k, domains: 0, counts: { fix: 0, rest: 0, drop: 0, dead: 0, watch: 0, idle: 0, low: 0, ok: 0 }, sent: 0, human: 0, bounces: 0, spam: 0 };
         m.set(k.id, r);
       }
       r.domains++; r.counts[d.verdict]++;
@@ -176,7 +206,7 @@ function summarize(domains: Judged[], keys: (d: Judged) => { id: string; name: s
     }
   }
   return [...m.values()].sort((a, b) =>
-    b.counts.fix + b.counts.rest - (a.counts.fix + a.counts.rest) || b.counts.dead - a.counts.dead || b.counts.watch - a.counts.watch || b.sent - a.sent || a.name.localeCompare(b.name));
+    b.counts.fix + b.counts.rest - (a.counts.fix + a.counts.rest) || b.counts.drop + b.counts.dead - (a.counts.drop + a.counts.dead) || b.counts.watch - a.counts.watch || b.sent - a.sent || a.name.localeCompare(b.name));
 }
 
 /** One row per client. "" is the domains without a client. */

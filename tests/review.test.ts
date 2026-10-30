@@ -7,7 +7,7 @@ const domain = (over: Partial<ReviewDomain> = {}): ReviewDomain => ({
   id: "d1", name: "welvion.com", status: "active", clientId: null, clientName: "Qualifi", clientHue: null, tags: [],
   inboxes: 10, disconnected: 0, blacklisted: 0, sent: 800, replies: 4, human: 1, bounces: 20, causes: {},
   prevSent: 800, prevHuman: 2, prevSpam: 2,
-  rep: 98, lowRepInboxes: 0, quietDays: 1, neverReplied: false, sentSinceReply: 100, slTags: [], ...over,
+  rep: 98, lowRepInboxes: 0, quietDays: 1, neverReplied: false, sentSinceReply: 100, slTags: [], ht: "live", replacedBy: null, ...over,
 });
 
 describe("week ranges", () => {
@@ -116,6 +116,26 @@ describe("weekly review calls", () => {
     expect(judge(domain({ sent: 0, disconnected: 3 })).verdict).toBe("idle");
   });
 
+  it("sends disconnected domains Hypertide is done with to delete, the rest to reconnect", () => {
+    const gone = { inboxes: 0, disconnected: 50, sent: 0 };
+    const c = judge(domain({ ...gone, ht: "cancelled" }));
+    expect(c.verdict).toBe("drop");
+    expect(c.why).toBe("Cancelled on Hypertide, 50 of 50 inboxes disconnected");
+    expect(c.chips[0]).toMatchObject({ key: "ended", text: "HT cancelled", tone: "danger" });
+    const r = judge(domain({ ...gone, ht: "replaced", replacedBy: "newco.com" }));
+    expect([r.verdict, r.chips[0].text]).toEqual(["drop", "Replaced → newco.com"]);
+    // Missing from Hypertide's order list isn't proof: it misses live domains too.
+    const none = judge(domain({ ...gone, ht: "none" }));
+    expect([none.verdict, none.why, none.chips[0].text]).toEqual(["dead", "No Hypertide order on this account, 50 of 50 inboxes disconnected", "No HT order"]);
+    expect(judge(domain({ ...gone, ht: "gone" })).verdict).toBe("dead");
+    expect(judge(domain({ ...gone, ht: "live" })).verdict).toBe("dead");
+    expect(judge(domain({ ...gone, ht: null })).verdict).toBe("dead");
+    // Still has live inboxes: flagged, but judged as usual.
+    const live = judge(domain({ ht: "cancelled" }));
+    expect([live.verdict, live.chips[0].tone]).toEqual(["ok", "warning"]);
+    expect(judge(domain({ ht: "none" })).chips).toEqual([]);
+  });
+
   it("puts the clients with most to fix or replace first", () => {
     const rows = byClient([
       judge(domain({ id: "a", clientId: "q", clientName: "Qualifi" })),
@@ -133,6 +153,8 @@ describe("weekly review calls", () => {
     expect(cols.length).toBe(head.split("\t").length);
     expect(cols.slice(0, 3)).toEqual(["welvion.com", "Disconnected", "52 of 52 inboxes disconnected"]);
     expect(cols[4]).toBe("Remove, -old");
+    expect(cols[5]).toBe("Live");
+    expect(sheetRows([judge(domain({ ht: "replaced", replacedBy: "newco.com" }))]).split("\n")[1].split("\t")[5]).toBe("Replaced by newco.com");
     expect(sheetRows([judge(domain({ slTags: ["=cmd"] }))]).split("\n")[1].split("\t")[4]).toBe("'=cmd");
   });
 

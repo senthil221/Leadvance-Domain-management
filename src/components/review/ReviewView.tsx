@@ -21,7 +21,7 @@ import {
 // with short tags for the evidence behind the call, client by client, ready
 // to copy or tag.
 
-const LISTS: Verdict[] = ["fix", "rest", "dead", "watch", "idle"];
+const LISTS: Verdict[] = ["fix", "rest", "drop", "dead", "watch", "idle"];
 const CAUSE_COLOR: Record<BounceReason, string> = {
   sender: "var(--danger-solid)", dns: "color-mix(in srgb, var(--danger-solid) 70%, var(--violet-solid))",
   blocklist: "color-mix(in srgb, var(--danger-solid) 65%, var(--warning-solid))", spam: "var(--warning-solid)",
@@ -169,10 +169,11 @@ export function ReviewView({ initial, clients }: { initial: ReviewData; clients:
   const headline = [
     count("fix") ? `fix ${plural(count("fix"), "domain")}` : "",
     count("rest") ? `replace ${int(count("rest"))}` : "",
-    count("dead") ? `delete or replace ${int(count("dead"))} fully disconnected` : "",
+    count("drop") ? `delete ${int(count("drop"))} cancelled or replaced` : "",
+    count("dead") ? `try reconnecting ${int(count("dead"))} fully disconnected` : "",
     count("watch") ? `watch ${int(count("watch"))}` : "",
   ].filter(Boolean).join(", ");
-  const tone = count("fix") || count("rest") || count("dead") ? "danger" : count("watch") ? "warning" : "success";
+  const tone = count("fix") || count("rest") || count("drop") ? "danger" : count("watch") ? "warning" : "success";
   const current = at >= 0 ? clientRows[at] : null;
 
   return (

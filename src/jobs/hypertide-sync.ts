@@ -46,6 +46,10 @@ export async function syncHypertideOrders(sql: Sql, ctx: StepContext & { hyperti
           forwarding text, tool text, org text, ordered text)
         left join domains d on d.name = r.domain
         on conflict (id) do update set
+          -- The order moved to another domain: Hypertide replaced the old one.
+          replaced_domains = case when hypertide_orders.domain_name <> excluded.domain_name
+            and not (hypertide_orders.domain_name = any(hypertide_orders.replaced_domains))
+            then hypertide_orders.replaced_domains || hypertide_orders.domain_name else hypertide_orders.replaced_domains end,
           domain_name = excluded.domain_name, domain_id = excluded.domain_id, status = excluded.status,
           payment_status = excluded.payment_status, subscription_id = coalesce(excluded.subscription_id, hypertide_orders.subscription_id),
           forwarding_domain = excluded.forwarding_domain, sending_tool = excluded.sending_tool,

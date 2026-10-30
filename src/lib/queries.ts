@@ -819,9 +819,29 @@ export async function getReview(from: string, to: string): Promise<import("./rev
         quiet.days as quiet_days, coalesce(quiet.never, false) as never_replied, coalesce(quiet.sent_since, 0) as sent_since_reply,
         (select coalesce(array_agg(x.t order by x.n desc, x.t), '{}') from (
           select trim(t) as t, count(*) as n from inboxes i cross join unnest(i.smartlead_tags) t
-          where i.domain_id = d.id and i.status <> 'removed' and trim(t) <> '' group by 1) x) as sl_tags
+          where i.domain_id = d.id and i.status <> 'removed' and trim(t) <> '' group by 1) x) as sl_tags,
+        rp.name as replaced_by,
+        -- NPC is what Hypertide's dashboard shows as Cancelled. "none": a Hypertide
+        -- domain this account has no order for (only once orders have been synced).
+        case when rp.name is not null then 'replaced'
+          when ho.status in ('NPC', 'Cancelled') then 'cancelled'
+          when ho.gone then 'gone'
+          when ho.found then 'live'
+          when ip.name = 'Hypertide' and exists (select 1 from hypertide_orders) then 'none'
+        end as ht
       from domains d
       left join clients c on c.id = d.client_id
+      left join vendors ip on ip.id = d.inbox_provider_id
+      left join lateral (
+        select true as found, o.status, o.gone_at is not null as gone from hypertide_orders o
+        where o.domain_id = d.id or o.domain_name = d.name
+        order by (o.gone_at is null) desc, o.last_seen_at desc limit 1) ho on true
+      left join lateral (
+        select coalesce(
+          (select nd.name from replacement_items ri
+            join replacement_batches rb on rb.id = ri.batch_id join domains nd on nd.id = ri.new_domain_id
+            where ri.old_domain_id = d.id and rb.status <> 'cancelled' order by ri.created_at desc limit 1),
+          (select o.domain_name from hypertide_orders o where o.replaced_domains @> array[d.name] order by o.last_seen_at desc limit 1)) as name) rp on true
       left join cur on cur.domain_id = d.id
       left join prev on prev.domain_id = d.id
       left join ev on ev.domain_id = d.id
