@@ -2,13 +2,15 @@ import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import { Toaster } from "sonner";
 import { themeScript } from "@/components/theme-script";
+import { brand } from "@/lib/brand";
 import "./globals.css";
 
 const geistSans = Geist({ variable: "--font-geist-sans", subsets: ["latin"] });
 const geistMono = Geist_Mono({ variable: "--font-geist-mono", subsets: ["latin"] });
 
 export const metadata: Metadata = {
-  title: { default: "Domain Engine", template: "%s · Domain Engine" },
+  title: { default: brand.name, template: `%s · ${brand.name}` },
+  icons: { icon: brand.icon },
   description: "Domain lifecycle and reputation for cold email infrastructure",
 };
 

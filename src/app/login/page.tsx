@@ -1,5 +1,7 @@
 import type { Metadata } from "next";
 import { Suspense } from "react";
+import { BrandMark } from "@/components/shell/BrandMark";
+import { brand } from "@/lib/brand";
 import { LoginForm } from "./LoginForm";
 
 export const metadata: Metadata = { title: "Sign in" };
@@ -9,10 +11,8 @@ export default function LoginPage({ searchParams }: PageProps<"/login">) {
     <main className="login-page">
       <div className="login-card">
         <div className="login-brand">
-          <span className="brand-mark" aria-hidden="true">
-            <svg width="16" height="16" viewBox="0 0 12 12" fill="none"><path d="M2 6h8M6 2a6.5 6.5 0 0 1 0 8M6 2a6.5 6.5 0 0 0 0 8" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" /></svg>
-          </span>
-          <h1 className="login-tool">Domain Engine</h1>
+          <BrandMark size={16} />
+          <h1 className="login-tool">{brand.name}</h1>
         </div>
         <Suspense fallback={<LoginForm next="/" />}>
           <Form searchParams={searchParams} />

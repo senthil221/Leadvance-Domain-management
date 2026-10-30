@@ -7,6 +7,7 @@ services:
   web:
     build:
       context: ../..
+      args: { APP_BRAND: "${APP_BRAND:-}" }
     image: domain-engine:latest
     restart: unless-stopped
     mem_limit: 512m
@@ -31,6 +32,7 @@ services:
     build:
       context: ../..
       target: builder
+      args: { APP_BRAND: "${APP_BRAND:-}" }
     image: domain-engine-builder:latest
     restart: unless-stopped
     mem_limit: 384m
@@ -49,6 +51,7 @@ services:
     build:
       context: ../..
       target: builder
+      args: { APP_BRAND: "${APP_BRAND:-}" }
     image: domain-engine-builder:latest
     profiles: ["tools"]
     env_file: .env

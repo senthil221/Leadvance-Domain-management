@@ -244,6 +244,9 @@ a, button, input, select, textarea, td, tr {
   display: grid; place-items: center; width: 22px; height: 22px; border-radius: 6px;
   background: var(--ink); color: var(--bg);
 }
+.brand-letter { font-size: 0.62em; font-weight: 700; line-height: 1; }
+.sidebar-brand .brand-mark .brand-letter { font-size: 12.5px; }
+.login-brand .brand-mark .brand-letter { font-size: 19px; }
 .sidebar-search {
   display: flex; align-items: center; gap: 8px; height: 30px; padding: 0 8px; width: 100%;
   border: 1px solid var(--line); border-radius: 8px; background: var(--surface);

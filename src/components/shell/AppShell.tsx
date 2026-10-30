@@ -3,7 +3,9 @@
 import { Menu, Search } from "lucide-react";
 import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useRef, useState, ViewTransition, type ReactNode } from "react";
+import { brand } from "@/lib/brand";
 import { ThemeToggle } from "../ThemeToggle";
+import { BrandMark } from "./BrandMark";
 import { CommandPalette } from "./CommandPalette";
 import { NAV_ITEMS } from "./nav";
 
@@ -56,10 +58,8 @@ export function AppShell({ nav, user, children }: { nav: ReactNode; user: ReactN
     <div className="shell" data-nav-open={navOpen}>
       <aside className="sidebar">
         <div className="sidebar-brand">
-          <span className="brand-mark" aria-hidden="true">
-            <svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M2 6h8M6 2a6.5 6.5 0 0 1 0 8M6 2a6.5 6.5 0 0 0 0 8" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" /></svg>
-          </span>
-          Domain Engine
+          <BrandMark size={12} />
+          {brand.name}
         </div>
         <button type="button" className="sidebar-search" onClick={() => setPaletteOpen(true)}>
           <Search size={14} strokeWidth={1.5} />
@@ -78,7 +78,7 @@ export function AppShell({ nav, user, children }: { nav: ReactNode; user: ReactN
           <button type="button" className="icon-btn" aria-label="Open menu" onClick={() => setNavOpen(true)}>
             <Menu size={18} strokeWidth={1.5} />
           </button>
-          <span className="font-semibold">Domain Engine</span>
+          <span className="font-semibold">{brand.name}</span>
           <button type="button" className="icon-btn ml-auto" aria-label="Search" onClick={() => setPaletteOpen(true)}>
             <Search size={16} strokeWidth={1.5} />
           </button>
