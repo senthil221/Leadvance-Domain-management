@@ -63,6 +63,8 @@ export type ReviewDomain = {
   rep: number | null; lowRepInboxes: number;
   /** Days from the last human reply (or, with none on record, the first send) to the end of the range. */
   quietDays: number | null; neverReplied: boolean; sentSinceReply: number;
+  /** The Smartlead tags on the domain's inboxes, most used first. */
+  slTags: string[];
 };
 export type ReviewCampaign = { id: number; name: string; clientName: string | null; bounces: number; missing: number };
 export type ReviewData = { from: string; to: string; today: string; domains: ReviewDomain[]; campaigns: ReviewCampaign[] };
@@ -141,19 +143,28 @@ export type ClientSummary = {
   sent: number; human: number; bounces: number; spam: number;
 };
 
-/** One row per client, worst first: most domains to fix or replace, then to watch. */
-export function byClient(domains: Judged[]): ClientSummary[] {
+/** Rows of domains grouped by keys (a domain can sit in several), worst first: most to fix or replace, then to watch. */
+function summarize(domains: Judged[], keys: (d: Judged) => { id: string; name: string; hue: number | null }[]): ClientSummary[] {
   const m = new Map<string, ClientSummary>();
   for (const d of domains) {
-    const id = d.clientId ?? "";
-    let r = m.get(id);
-    if (!r) {
-      r = { id, name: d.clientName ?? "No client", hue: d.clientHue, domains: 0, counts: { fix: 0, rest: 0, dead: 0, watch: 0, idle: 0, low: 0, ok: 0 }, sent: 0, human: 0, bounces: 0, spam: 0 };
-      m.set(id, r);
+    for (const k of keys(d)) {
+      let r = m.get(k.id);
+      if (!r) {
+        r = { ...k, domains: 0, counts: { fix: 0, rest: 0, dead: 0, watch: 0, idle: 0, low: 0, ok: 0 }, sent: 0, human: 0, bounces: 0, spam: 0 };
+        m.set(k.id, r);
+      }
+      r.domains++; r.counts[d.verdict]++;
+      r.sent += d.sent; r.human += d.human; r.bounces += d.bounces; r.spam += d.spam;
     }
-    r.domains++; r.counts[d.verdict]++;
-    r.sent += d.sent; r.human += d.human; r.bounces += d.bounces; r.spam += d.spam;
   }
   return [...m.values()].sort((a, b) =>
-    b.counts.fix + b.counts.rest - (a.counts.fix + a.counts.rest) || b.counts.watch - a.counts.watch || b.sent - a.sent || a.name.localeCompare(b.name));
+    b.counts.fix + b.counts.rest - (a.counts.fix + a.counts.rest) || b.counts.dead - a.counts.dead || b.counts.watch - a.counts.watch || b.sent - a.sent || a.name.localeCompare(b.name));
 }
+
+/** One row per client. "" is the domains without a client. */
+export const byClient = (domains: Judged[]) =>
+  summarize(domains, (d) => [{ id: d.clientId ?? "", name: d.clientName ?? "No client", hue: d.clientHue }]);
+
+/** One row per Smartlead tag; a domain with two tags counts under both. "" is the untagged domains. */
+export const bySmartleadTag = (domains: Judged[]) =>
+  summarize(domains, (d) => (d.slTags.length ? d.slTags : [""]).map((t) => ({ id: t, name: t || "No tag", hue: null })));

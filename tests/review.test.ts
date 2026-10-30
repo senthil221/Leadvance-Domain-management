@@ -1,13 +1,13 @@
 import { describe, expect, it } from "vitest";
 import { bounceCauseOf, bounceReason } from "../src/lib/bounces";
 import { matchPreset, monday, presetRange, previousLabel, previousRange } from "../src/lib/range";
-import { badLists, byClient, judge, type ReviewDomain } from "../src/lib/review";
+import { badLists, byClient, bySmartleadTag, judge, type ReviewDomain } from "../src/lib/review";
 
 const domain = (over: Partial<ReviewDomain> = {}): ReviewDomain => ({
   id: "d1", name: "welvion.com", status: "active", clientId: null, clientName: "Qualifi", clientHue: null, tags: [],
   inboxes: 10, disconnected: 0, blacklisted: 0, sent: 800, replies: 4, human: 1, bounces: 20, causes: {},
   prevSent: 800, prevHuman: 2, prevSpam: 2,
-  rep: 98, lowRepInboxes: 0, quietDays: 1, neverReplied: false, sentSinceReply: 100, ...over,
+  rep: 98, lowRepInboxes: 0, quietDays: 1, neverReplied: false, sentSinceReply: 100, slTags: [], ...over,
 });
 
 describe("week ranges", () => {
@@ -124,6 +124,15 @@ describe("weekly review calls", () => {
     ]);
     expect(rows.map((r) => r.name)).toEqual(["Mvinix", "No client", "Qualifi"]);
     expect(rows[0].counts.fix).toBe(1);
+  });
+
+  it("counts a domain under each of its Smartlead tags", () => {
+    const rows = bySmartleadTag([
+      judge(domain({ id: "a", slTags: ["Q-Outlook 1", "Remove"], inboxes: 0, disconnected: 3 })),
+      judge(domain({ id: "b", slTags: ["Q-Outlook 1"] })),
+      judge(domain({ id: "c" })),
+    ]);
+    expect(rows.map((r) => [r.name, r.domains, r.counts.dead])).toEqual([["Q-Outlook 1", 2, 1], ["Remove", 1, 1], ["No tag", 1, 0]]);
   });
 
   it("flags campaigns whose bounces are mostly dead addresses", () => {

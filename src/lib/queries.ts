@@ -816,7 +816,10 @@ export async function getReview(from: string, to: string): Promise<import("./rev
         coalesce(ev.causes, '{}'::jsonb) as causes,
         coalesce(prev.sent, 0) as prev_sent, coalesce(prev.human, 0) as prev_human, coalesce(ev.prev_spam, 0) as prev_spam,
         rep.rep, coalesce(rep.low, 0) as low_rep_inboxes,
-        quiet.days as quiet_days, coalesce(quiet.never, false) as never_replied, coalesce(quiet.sent_since, 0) as sent_since_reply
+        quiet.days as quiet_days, coalesce(quiet.never, false) as never_replied, coalesce(quiet.sent_since, 0) as sent_since_reply,
+        (select coalesce(array_agg(x.t order by x.n desc, x.t), '{}') from (
+          select trim(t) as t, count(*) as n from inboxes i cross join unnest(i.smartlead_tags) t
+          where i.domain_id = d.id and i.status <> 'removed' and trim(t) <> '' group by 1) x) as sl_tags
       from domains d
       left join clients c on c.id = d.client_id
       left join cur on cur.domain_id = d.id

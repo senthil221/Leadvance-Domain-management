@@ -13,8 +13,8 @@ import { int } from "@/lib/format";
 import type { ClientRow } from "@/lib/queries";
 import { nice, previousLabel } from "@/lib/range";
 import {
-  RULES, SIGNAL_META, SIGNAL_ORDER, VERDICT_META, VERDICT_ORDER, badLists, byClient, judge,
-  type Chip, type Judged, type ReviewData, type Signal, type Verdict,
+  RULES, SIGNAL_META, SIGNAL_ORDER, VERDICT_META, VERDICT_ORDER, badLists, byClient, bySmartleadTag, judge,
+  type Chip, type ClientSummary, type Judged, type ReviewData, type Signal, type Verdict,
 } from "@/lib/review";
 
 // The weekly review: every sending domain sorted into what to do with it,
@@ -58,6 +58,16 @@ async function copy(text: string, what: string) {
   }
 }
 
+function SlTags({ tags }: { tags: string[] }) {
+  if (!tags.length) return <span className="zero">—</span>;
+  return (
+    <span className="rv-sigs">
+      {tags.slice(0, 2).map((t) => <span key={t} className="badge">{t}</span>)}
+      {tags.length > 2 ? <span className="badge" title={tags.slice(2).join(", ")}>+{tags.length - 2}</span> : null}
+    </span>
+  );
+}
+
 function Chips({ chips }: { chips: Chip[] }) {
   if (!chips.length) return null;
   return (
@@ -73,6 +83,8 @@ export function ReviewView({ initial, clients }: { initial: ReviewData; clients:
   const [tagging, startTag] = useTransition();
   const [scope, setScope] = useState<"active" | "other">("active");
   const [clientId, setClientId] = useState<string | null>(null);
+  const [slTag, setSlTag] = useState<string | null>(null);
+  const [groupBy, setGroupBy] = useState<"client" | "tag">("client");
   const [q, setQ] = useState("");
   const [only, setOnly] = useState<Verdict | "">("");
   const [signals, setSignals] = useState<Set<Signal>>(new Set());
@@ -87,9 +99,13 @@ export function ReviewView({ initial, clients }: { initial: ReviewData; clients:
 
   const judged = useMemo(() => data.domains.map(judge), [data.domains]);
   const scoped = useMemo(() => judged.filter((d) => (scope === "active") === (d.status === "active")), [judged, scope]);
-  const clientRows = useMemo(() => byClient(scoped), [scoped]);
-  // "" is the domains without a client; null is every client.
+  // "" is the domains without a client (or Smartlead tag); null is all of them.
+  const ofClient = (d: Judged) => clientId == null || (d.clientId ?? "") === clientId;
+  const ofTag = (d: Judged) => slTag == null || (slTag ? d.slTags.includes(slTag) : !d.slTags.length);
+  const clientRows = useMemo(() => byClient(scoped.filter(ofTag)), [scoped, slTag]); // eslint-disable-line react-hooks/exhaustive-deps
+  const tagRows = useMemo(() => bySmartleadTag(scoped.filter(ofClient)), [scoped, clientId]); // eslint-disable-line react-hooks/exhaustive-deps
   const pickClient = (id: string | null) => { setClientId(id); setSelected(new Set()); };
+  const pickTag = (t: string | null) => { setSlTag(t); setSelected(new Set()); };
   const at = clientId == null ? -1 : clientRows.findIndex((c) => c.id === clientId);
   const step = (by: 1 | -1) => {
     if (!clientRows.length) return;
@@ -97,7 +113,7 @@ export function ReviewView({ initial, clients }: { initial: ReviewData; clients:
     pickClient(clientRows[i].id);
   };
 
-  const inScope = useMemo(() => scoped.filter((d) => clientId == null || (d.clientId ?? "") === clientId), [scoped, clientId]);
+  const inScope = useMemo(() => scoped.filter((d) => ofClient(d) && ofTag(d)), [scoped, clientId, slTag]); // eslint-disable-line react-hooks/exhaustive-deps
   const byVerdict = useMemo(() => {
     const m = new Map<Verdict, Judged[]>(VERDICT_ORDER.map((v) => [v, []]));
     for (const d of inScope) m.get(d.verdict)!.push(d);
@@ -106,7 +122,7 @@ export function ReviewView({ initial, clients }: { initial: ReviewData; clients:
   }, [inScope]);
   const needle = q.trim().toLowerCase();
   const listed = useMemo(() => inScope.filter((d) => (!only || d.verdict === only) &&
-    (!needle || d.name.includes(needle) || d.clientName?.toLowerCase().includes(needle) || d.tags.some((t) => t.toLowerCase().includes(needle)))),
+    (!needle || d.name.includes(needle) || d.clientName?.toLowerCase().includes(needle) || [...d.tags, ...d.slTags].some((t) => t.toLowerCase().includes(needle)))),
   [inScope, only, needle]);
   const signalCounts = useMemo(() => {
     const m = new Map<Signal, number>();
@@ -142,7 +158,8 @@ export function ReviewView({ initial, clients }: { initial: ReviewData; clients:
     setSelected(new Set(byVerdict.get(v)!.map((d) => d.id)));
     setTag(VERDICT_META[v].label.split(" ")[0]);
   };
-  const reasons = (list: Judged[]) => list.map((d) => [d.name, d.clientName ?? "", VERDICT_META[d.verdict].label, d.chips.map((c) => c.text).join(", "), d.why].join("\t")).join("\n");
+  const reasons = (list: Judged[]) => list.map((d) => [d.name, d.slTags.join(", "), d.clientName ?? "", VERDICT_META[d.verdict].label, d.chips.map((c) => c.text).join(", "), d.why].join("\t")).join("\n");
+  const withTags = (list: Judged[]) => list.map((d) => [d.name, d.slTags.join(", ")].join("\t")).join("\n");
   const applyTag = (on: boolean) => startTag(async () => {
     const r = await tagDomains({ domainIds: selectedRows.map((d) => d.id), tag, on });
     if (!r.ok) return void toast.error(r.error);
@@ -183,10 +200,15 @@ export function ReviewView({ initial, clients }: { initial: ReviewData; clients:
           <button type="button" className="btn btn-sm btn-icon" aria-label="Next client" title="Next client, worst first" onClick={() => step(1)}><ChevronRight size={14} /></button>
           {current ? <span className="rv-client-at">{at + 1} of {clientRows.length}</span> : null}
         </span>
+        <select className="select" style={{ width: 190 }} value={slTag ?? "*"} onChange={(e) => pickTag(e.target.value === "*" ? null : e.target.value)} aria-label="Filter by Smartlead tag">
+          <option value="*">All Smartlead tags</option>
+          {[...tagRows].sort((a, b) => (a.id ? 0 : 1) - (b.id ? 0 : 1) || a.name.localeCompare(b.name)).map((t) => <option key={t.id || "none"} value={t.id}>{t.name} ({t.domains})</option>)}
+          {slTag != null && !tagRows.some((t) => t.id === slTag) ? <option value={slTag}>{slTag || "No tag"}</option> : null}
+        </select>
       </div>
 
       <div className={`rv-headline tone-${tone}`}>
-        <span className="rv-headline-k">{current ? `${current.name} · ` : ""}{nice(data.from)}{data.from === data.to ? "" : ` – ${nice(data.to)}`}, compared with {previousLabel(data.from, data.to)}</span>
+        <span className="rv-headline-k">{current ? `${current.name} · ` : ""}{slTag != null ? `${slTag || "No Smartlead tag"} · ` : ""}{nice(data.from)}{data.from === data.to ? "" : ` – ${nice(data.to)}`}, compared with {previousLabel(data.from, data.to)}</span>
         <span className="rv-headline-h">
           {headline ? `${headline[0].toUpperCase()}${headline.slice(1)}.` : "Nothing to fix, replace or watch."}
           {scope === "active" && count("idle") ? ` ${plural(count("idle"), "active domain")} sent nothing.` : ""}
@@ -209,7 +231,7 @@ export function ReviewView({ initial, clients }: { initial: ReviewData; clients:
                   <div key={d.id} className="rv-item" title={d.why}>
                     <span className="rv-item-head">
                       <DomainLink id={d.id} tab="stats" className="strong hover:underline">{d.name}</DomainLink>
-                      {clientId == null && d.clientName ? <span className="rv-why">{d.clientName}</span> : null}
+                      <span className="rv-why">{[clientId == null ? d.clientName : null, d.slTags.join(", ")].filter(Boolean).join(" · ")}</span>
                     </span>
                     {d.chips.length ? <Chips chips={d.chips} /> : <span className="rv-why">{d.why}</span>}
                   </div>
@@ -219,7 +241,8 @@ export function ReviewView({ initial, clients }: { initial: ReviewData; clients:
               {list.length ? (
                 <div className="rv-actions">
                   <button type="button" className="btn btn-sm" onClick={() => copy(list.map((d) => d.name).join("\n"), plural(list.length, "domain"))}><Copy size={13} /> Copy</button>
-                  <button type="button" className="btn btn-sm" title="Domain, client, call, tags and reason, tab separated: paste into Sheets or Slack" onClick={() => copy(reasons(list), "with reasons")}><ClipboardList size={13} /> With reasons</button>
+                  <button type="button" className="btn btn-sm" title="Domain and its Smartlead tags, tab separated" onClick={() => copy(withTags(list), "with Smartlead tags")}><TagsIcon size={13} /> With tags</button>
+                  <button type="button" className="btn btn-sm" title="Domain, Smartlead tags, client, call, signals and reason, tab separated: paste into Sheets or Slack" onClick={() => copy(reasons(list), "with reasons")}><ClipboardList size={13} /> With reasons</button>
                   <button type="button" className="btn btn-sm" onClick={() => pickList(v)}><Tag size={13} /> Tag</button>
                 </div>
               ) : null}
@@ -230,14 +253,19 @@ export function ReviewView({ initial, clients }: { initial: ReviewData; clients:
 
       <div className="card">
         <div className="card-head">
-          <span className="card-title">By client</span>
-          <span className="card-sub">Worst first. Click a client to see only its domains; the arrows up top step through them</span>
+          <div className="seg" role="group" aria-label="Group by">
+            <button type="button" aria-pressed={groupBy === "client"} onClick={() => setGroupBy("client")}>By client</button>
+            <button type="button" aria-pressed={groupBy === "tag"} onClick={() => setGroupBy("tag")}>By Smartlead tag</button>
+          </div>
+          <span className="card-sub">{groupBy === "client"
+            ? "Worst first. Click a client to see only its domains; the arrows up top step through them"
+            : "Worst first. A domain with two tags counts under both. Click a tag to see only its domains"}</span>
         </div>
         <div className="table-scroll" style={{ maxHeight: 320 }}>
           <table className="data-table rv-clients">
             <thead>
               <tr>
-                <th>Client</th>
+                <th>{groupBy === "client" ? "Client" : "Smartlead tag"}</th>
                 <th className="is-num">Domains</th>
                 {LISTS.map((v) => <th key={v} className="is-num" title={VERDICT_META[v].hint}>{VERDICT_META[v].label}</th>)}
                 <th className="is-num">Sent</th>
@@ -247,9 +275,12 @@ export function ReviewView({ initial, clients }: { initial: ReviewData; clients:
               </tr>
             </thead>
             <tbody>
-              {clientRows.map((c) => (
-                <tr key={c.id || "none"} data-active={c.id === clientId} className="is-clickable" onClick={() => pickClient(c.id === clientId ? null : c.id)}>
-                  <td><ClientCell name={c.name} hue={c.hue} /></td>
+              {(groupBy === "client" ? clientRows : tagRows).map((c: ClientSummary) => {
+                const on = groupBy === "client" ? c.id === clientId : c.id === slTag;
+                const pick = () => (groupBy === "client" ? pickClient(on ? null : c.id) : pickTag(on ? null : c.id));
+                return (
+                <tr key={c.id || "none"} data-active={on} className="is-clickable" onClick={pick}>
+                  <td>{groupBy === "client" ? <ClientCell name={c.name} hue={c.hue} /> : c.id ? <span className="badge">{c.name}</span> : <span className="zero">No tag</span>}</td>
                   <td className="is-num">{int(c.domains)}</td>
                   {LISTS.map((v) => (
                     <td key={v} className="is-num">{c.counts[v] ? <span className={`rv-count tone-${VERDICT_META[v].tone}`}>{int(c.counts[v])}</span> : <span className="zero">0</span>}</td>
@@ -259,10 +290,11 @@ export function ReviewView({ initial, clients }: { initial: ReviewData; clients:
                   <td className="is-num"><span className={(pct(c.spam, c.sent) ?? 0) >= RULES.restSpamRate ? "metric is-bad" : (pct(c.spam, c.sent) ?? 0) >= RULES.watchSpamRate ? "metric is-warn" : "metric"}>{fx(pct(c.spam, c.sent))}</span></td>
                   <td className="is-num">{fx(pct(c.bounces, c.sent))}</td>
                 </tr>
-              ))}
+                );
+              })}
             </tbody>
           </table>
-          {clientRows.length === 0 ? <p className="rv-none" style={{ padding: "10px 14px" }}>No domains here.</p> : null}
+          {(groupBy === "client" ? clientRows : tagRows).length === 0 ? <p className="rv-none" style={{ padding: "10px 14px" }}>No domains here.</p> : null}
         </div>
       </div>
 
@@ -340,6 +372,7 @@ export function ReviewView({ initial, clients }: { initial: ReviewData; clients:
                 <SortTh k="spam" sort={sort} onSort={sortBy} num title="Spam and blocklist rejections">Spam</SortTh>
                 <SortTh k="missing" sort={sort} onSort={sortBy} num title="Bounces to addresses that don't exist">No address</SortTh>
                 <SortTh k="bounceRate" sort={sort} onSort={sortBy} num>Bounce</SortTh>
+                <th title="Tags on the domain's inboxes in Smartlead">Smartlead tags</th>
                 <th>Your tags</th>
               </tr>
             </thead>
@@ -371,6 +404,7 @@ export function ReviewView({ initial, clients }: { initial: ReviewData; clients:
                     <td className="is-num">{r.spam ? <span className={r.spam >= 10 ? "metric is-bad" : "metric is-warn"}>{int(r.spam)}</span> : <span className="zero">0</span>}</td>
                     <td className="is-num">{r.causes.missing ? int(r.causes.missing) : <span className="zero">0</span>}</td>
                     <td className="is-num"><span className={`metric${br != null && br > 3 ? " is-bad" : br != null && br > 2 ? " is-warn" : ""}${!br ? " zero" : ""}`}>{fx(br)}</span></td>
+                    <td><SlTags tags={r.slTags} /></td>
                     <td><TagList tags={r.tags} max={2} /></td>
                   </tr>
                 );
@@ -397,6 +431,7 @@ export function ReviewView({ initial, clients }: { initial: ReviewData; clients:
           <button type="button" className="btn btn-sm" disabled={!tag.trim() || tagging} onClick={() => applyTag(false)}>Remove</button>
           <span className="sep" />
           <button type="button" className="btn btn-sm" onClick={() => copy(selectedRows.map((d) => d.name).join("\n"), plural(selectedRows.length, "domain"))}><Copy size={14} /> Copy</button>
+          <button type="button" className="btn btn-sm" onClick={() => copy(withTags(selectedRows), "with Smartlead tags")}><TagsIcon size={14} /> With tags</button>
           <button type="button" className="btn btn-sm" onClick={() => copy(reasons(selectedRows), "with reasons")}><ClipboardList size={14} /> With reasons</button>
           <span className="sep" />
           <button type="button" className="btn btn-sm" aria-label="Clear selection" onClick={() => setSelected(new Set())}><X size={14} /></button>
