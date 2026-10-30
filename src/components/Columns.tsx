@@ -9,7 +9,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 
 // Hidden-by-default columns added in the release that started saving the list
 // of columns a choice was made against.
-const ADDED_BEFORE_SEEN: string[] = ["tags"];
+const ADDED_BEFORE_SEEN: string[] = ["tags", "call"];
 
 export type ColumnDef<K extends string = string> = { key: K; label: string; hidden?: boolean; locked?: boolean };
 

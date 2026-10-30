@@ -5,13 +5,14 @@ import { BarChart3, CalendarDays, ChevronRight, Copy, Download, Loader, Search }
 import { useSearchParams } from "next/navigation";
 import { Fragment, useMemo, useState, useTransition } from "react";
 import { toast } from "sonner";
-import { loadStats } from "@/app/actions";
+import { loadReview, loadStats } from "@/app/actions";
 import { ColumnsMenu, useColumns, type ColumnDef } from "@/components/Columns";
 import { SortTh } from "@/components/SortTh";
-import { ClientCell, Empty, Metric, Rep, StatusDot, TagList } from "@/components/ui";
+import { Badge, ClientCell, Empty, Metric, Rep, StatusDot, TagList } from "@/components/ui";
 import { clientDays, clientDaySheet, rr, type ClientDays, type DayFigures } from "@/lib/client-days";
 import { int } from "@/lib/format";
 import type { ClientRow, StatDomain, StatsData } from "@/lib/queries";
+import { VERDICT_META, VERDICT_ORDER, judge, type Judged, type ReviewData, type Verdict } from "@/lib/review";
 import { DOMAIN_STATUSES } from "@/lib/status";
 import { PRESETS, addDays, daysBetween, matchPreset, nice, presetRange, previousLabel, weekday, type PresetKey } from "@/lib/range";
 
@@ -24,7 +25,7 @@ import { PRESETS, addDays, daysBetween, matchPreset, nice, presetRange, previous
 type Sums = { sent: number; replies: number; slReplies: number; human: number; ooo: number; negative: number; bounces: number };
 const zero = (): Sums => ({ sent: 0, replies: 0, slReplies: 0, human: 0, ooo: 0, negative: 0, bounces: 0 });
 const addInto = (a: Sums, b: Sums) => { a.sent += b.sent; a.replies += b.replies; a.slReplies += b.slReplies; a.human += b.human; a.ooo += b.ooo; a.negative += b.negative; a.bounces += b.bounces; };
-type Row = StatDomain & Sums & { reputation: number | null };
+type Row = StatDomain & Sums & { reputation: number | null; call: Judged | null };
 type Totals = Sums & { inboxes: number; capacity: number; prevSent: number; prevReplies: number; prevBounces: number; reputation?: number | null };
 const rate = (n: number, d: number) => (d > 0 ? (100 * n) / d : null);
 const avgRep = (rows: { reputation: number | null }[]) => {
@@ -37,13 +38,14 @@ const total = (rows: Row[]): Totals => {
   return t;
 };
 
-type SortKey = "name" | "status" | "client" | "sender" | "tags" | "esp" | "inboxes" | "usage" | "sent" | "replies" | "human" | "ooo" | "negative" | "bounces" | "replyRate" | "slRate" | "humanRate" | "bounceRate" | "reputation";
+type SortKey = "name" | "status" | "call" | "client" | "sender" | "tags" | "esp" | "inboxes" | "usage" | "sent" | "replies" | "human" | "ooo" | "negative" | "bounces" | "replyRate" | "slRate" | "humanRate" | "bounceRate" | "reputation";
 const sortValue = (r: Row, k: SortKey, len: number): string | number | null => {
   switch (k) {
     case "status": return DOMAIN_STATUSES.indexOf(r.status);
     case "client": return r.clientName?.toLowerCase() ?? null;
     case "sender": return r.senders[0]?.toLowerCase() ?? null;
     case "tags": return r.allTags[0]?.toLowerCase() ?? null;
+    case "call": return r.call ? VERDICT_ORDER.indexOf(r.call.verdict) : null;
     case "esp": return r.esp;
     case "replyRate": return rate(r.replies, r.sent);
     case "slRate": return rate(r.slReplies, r.sent);
@@ -62,6 +64,7 @@ const groupValue = (g: { name: string | null; rows: Row[] }, k: SortKey, len: nu
     case "status":
     case "sender":
     case "tags":
+    case "call":
     case "esp": return null;
     case "replyRate": return rate(t.replies, t.sent);
     case "slRate": return rate(t.slReplies, t.sent);
@@ -106,7 +109,7 @@ const gc = (key: string, on: (k: string) => boolean) => {
 };
 
 const COLUMNS: ColumnDef[] = [
-  { key: "client", label: "Client (when not grouped)" }, { key: "sender", label: "Sender name" }, { key: "tags", label: "Tags", hidden: true }, { key: "esp", label: "ESP", hidden: true },
+  { key: "client", label: "Client (when not grouped)" }, { key: "call", label: "Weekly review call", hidden: true }, { key: "sender", label: "Sender name" }, { key: "tags", label: "Tags", hidden: true }, { key: "esp", label: "ESP", hidden: true },
   { key: "inboxes", label: "Inboxes" }, { key: "usage", label: "Used" }, { key: "sent", label: "Sent" },
   { key: "slReplies", label: "Replies ex. OOO" }, { key: "replies", label: "Replies incl. OOO" },
   { key: "human", label: "Human" }, { key: "ooo", label: "Out of office", hidden: true }, { key: "negative", label: "Not interested", hidden: true },
@@ -215,8 +218,14 @@ function download(name: string, head: string[], lines: unknown[][]) {
 
 // ---------------------------------------------------------------------------
 
-export function StatsView({ initial, clients }: { initial: StatsData; clients: ClientRow[] }) {
+// The weekly review's calls that ask for action; Idle, too little sent and OK don't.
+const ATTENTION: Verdict[] = ["fix", "rest", "drop", "dead", "watch"];
+type CallFilter = "" | "attention" | Verdict;
+type Facet = "call" | "tag" | "esp" | "sender";
+
+export function StatsView({ initial, initialReview, clients }: { initial: StatsData; initialReview: ReviewData; clients: ClientRow[] }) {
   const [data, setData] = useState(initial);
+  const [review, setReview] = useState(initialReview);
   const [preset, setPreset] = useState<PresetKey>(() => matchPreset(initial.from, initial.to, initial.today));
   const [from, setFrom] = useState(initial.from);
   const [to, setTo] = useState(initial.to);
@@ -225,6 +234,14 @@ export function StatsView({ initial, clients }: { initial: StatsData; clients: C
   const [q, setQ] = useState("");
   const [clientId, setClientId] = useState(() => params.get("client") ?? "");
   const [onlySending, setOnlySending] = useState(true);
+  const [call, setCall] = useState<CallFilter>(() => {
+    const c = params.get("call");
+    return c === "attention" || VERDICT_ORDER.includes(c as Verdict) ? (c as CallFilter) : "";
+  });
+  // ?tag=, ?esp= and ?sender= open the page filtered, so a filtered view can be bookmarked.
+  const [tag, setTag] = useState(() => params.get("tag")?.toLowerCase() ?? "");
+  const [esp, setEsp] = useState(() => params.get("esp") ?? "");
+  const [sender, setSender] = useState(() => params.get("sender") ?? "");
   // Active domains (in campaigns) apart from the rest (warming, draining, retired).
   const [statusSet, setStatusSet] = useState<"" | "active" | "other">(() => (params.get("status") === "active" || params.get("status") === "other" ? params.get("status") as "active" | "other" : ""));
   // One line per client to start; open a client to see its domains.
@@ -238,8 +255,9 @@ export function StatsView({ initial, clients }: { initial: StatsData; clients: C
   const on = cols.on;
 
   const load = (f: string, t: string) => start(async () => {
-    const r = await loadStats({ from: f, to: t });
+    const [r, rv] = await Promise.all([loadStats({ from: f, to: t }), loadReview({ from: f, to: t })]);
     if (r.ok) setData(r.data); else toast.error(r.error);
+    if (rv.ok) setReview(rv.data); else toast.error(rv.error);
   });
   const pick = (k: PresetKey) => {
     setPreset(k);
@@ -249,15 +267,59 @@ export function StatsView({ initial, clients }: { initial: StatsData; clients: C
 
   const len = daysBetween(data.from, data.to);
   const needle = q.trim().toLowerCase();
-  const visible = useMemo(() => data.domains.filter((d) =>
-    (!clientId || d.clientId === clientId) &&
-    (!statusSet || (statusSet === "active") === (d.status === "active")) &&
-    (!needle || d.name.includes(needle) || d.clientName?.toLowerCase().includes(needle) || d.allTags.some((t) => t.toLowerCase().includes(needle)) ||
-      d.senders.some((s) => s.toLowerCase().includes(needle)))),
-  [data.domains, clientId, statusSet, needle]);
+  // The weekly review's call on each domain, for the same range.
+  const calls = useMemo(() => new Map(review.domains.map((d) => [d.id, judge(d)])), [review]);
+  // Sent in the range. "Sending only" hides the rest, except while picking a
+  // review call, which can be about domains that sent nothing (disconnected).
+  const sentIn = useMemo(() => {
+    const m = new Map<string, number>();
+    for (const x of data.days) m.set(x.d, (m.get(x.d) ?? 0) + x.sent);
+    return m;
+  }, [data.days]);
+  const { visible, options } = useMemo(() => {
+    const callMatches = (j: Judged | undefined) => !call || (!!j && (call === "attention" ? ATTENTION.includes(j.verdict) : j.verdict === call));
+    // Every filter but the one skipped, so each menu counts what picking an option would leave.
+    const passes = (d: StatDomain, skip?: Facet) =>
+      (!clientId || d.clientId === clientId) &&
+      (!statusSet || (statusSet === "active") === (d.status === "active")) &&
+      (skip === "call" || callMatches(calls.get(d.id))) &&
+      (skip === "tag" || !tag || d.allTags.some((t) => t.toLowerCase() === tag)) &&
+      (skip === "esp" || !esp || (d.esp ?? "") === esp) &&
+      (skip === "sender" || !sender || d.senders.includes(sender)) &&
+      (!needle || d.name.includes(needle) || !!d.clientName?.toLowerCase().includes(needle) || d.allTags.some((t) => t.toLowerCase().includes(needle)) ||
+        d.senders.some((s) => s.toLowerCase().includes(needle)));
+    const sendingOk = (d: StatDomain, skip?: Facet) => !onlySending || skip === "call" || !!call || (sentIn.get(d.id) ?? 0) > 0;
+    const count = (skip: Facet, keys: (d: StatDomain) => string[]) => {
+      const m = new Map<string, number>();
+      for (const d of data.domains) if (passes(d, skip) && sendingOk(d, skip)) for (const k of new Set(keys(d))) m.set(k, (m.get(k) ?? 0) + 1);
+      return m;
+    };
+    // Tags match whatever their case, shown as first seen.
+    const tags = new Map<string, { label: string; n: number }>();
+    for (const d of data.domains) {
+      if (!passes(d, "tag") || !sendingOk(d)) continue;
+      for (const t of new Set(d.allTags)) {
+        const k = t.toLowerCase(), e = tags.get(k);
+        tags.set(k, { label: e?.label ?? t, n: (e?.n ?? 0) + 1 });
+      }
+    }
+    const verdicts = count("call", (d) => { const j = calls.get(d.id); return j ? [j.verdict] : []; });
+    return {
+      visible: data.domains.filter((d) => passes(d)),
+      options: {
+        verdicts,
+        attention: ATTENTION.reduce((a, x) => a + (verdicts.get(x) ?? 0), 0),
+        tags: [...tags].sort((a, b) => a[1].label.localeCompare(b[1].label)),
+        esps: [...count("esp", (d) => [d.esp ?? ""])].sort((a, b) => a[0].localeCompare(b[0])),
+        senders: [...count("sender", (d) => d.senders)].sort((a, b) => a[0].localeCompare(b[0])),
+      },
+    };
+  }, [data.domains, clientId, statusSet, needle, call, calls, tag, esp, sender, sentIn, onlySending]);
+  const filtering = !!(call || tag || esp || sender);
+  const clearFilters = () => { setCall(""); setTag(""); setEsp(""); setSender(""); };
 
   const rows = useMemo(() => {
-    const byId = new Map<string, Row>(visible.map((d) => [d.id, { ...d, ...zero(), reputation: null }]));
+    const byId = new Map<string, Row>(visible.map((d) => [d.id, { ...d, ...zero(), reputation: null, call: calls.get(d.id) ?? null }]));
     const reps = new Map<string, number[]>();
     for (const x of data.days) {
       const r = byId.get(x.d);
@@ -267,9 +329,9 @@ export function StatsView({ initial, clients }: { initial: StatsData; clients: C
     }
     for (const [id, list] of reps) byId.get(id)!.reputation = list.reduce((a, b) => a + b, 0) / list.length;
     return [...byId.values()]
-      .filter((r) => !onlySending || r.sent > 0 || r.status === "active")
+      .filter((r) => !onlySending || !!call || r.sent > 0)
       .sort((a, b) => cmp(sortValue(a, sort.key, len), sortValue(b, sort.key, len), sort.dir) || a.name.localeCompare(b.name));
-  }, [visible, data.days, onlySending, sort, len]);
+  }, [visible, data.days, onlySending, call, calls, sort, len]);
 
   const days = useMemo(() => {
     const ids = new Set(visible.map((d) => d.id));
@@ -309,7 +371,8 @@ export function StatsView({ initial, clients }: { initial: StatsData; clients: C
 
   const t = total(rows);
   const showClient = !byClient && on("client");
-  const colCount = 1 + (showClient ? 1 : 0) + COLUMNS.filter((c) => c.key !== "client" && on(c.key)).length;
+  const showCall = on("call") || !!call;
+  const colCount = 1 + (showClient ? 1 : 0) + (showCall ? 1 : 0) + COLUMNS.filter((c) => c.key !== "client" && c.key !== "call" && on(c.key)).length;
   const allOpen = byClient && groups.length > 0 && groups.every((g) => openClients.has(g.key));
   const toggleAll = () => setOpenClients(allOpen ? new Set() : new Set(groups.map((g) => g.key)));
   const maxDay = Math.max(1, ...days.map((d) => d.sent));
@@ -327,8 +390,8 @@ export function StatsView({ initial, clients }: { initial: StatsData; clients: C
         [...days].sort((a, b) => a.day.localeCompare(b.day)).map((d) => [d.day, d.domains, d.sent, d.slReplies, d.replies, d.human, d.ooo, d.negative, d.bounces]));
     } else {
       const fx = (v: number | null) => (v == null ? "" : v.toFixed(2));
-      download(`stats-by-domain-${data.from}-${data.to}.csv`, ["domain", "status", "client", "sender", "tags", "esp", "inboxes", "capacity_per_day", "sent", "replies_ex_ooo", "replies_incl_ooo", "human", "ooo", "negative", "bounces", "reply_rate_ex_ooo", "reply_rate_incl_ooo", "human_rate", "bounce_rate", "reputation"],
-        rows.map((r) => [r.name, r.status, r.clientName, r.senders.join(", "), r.allTags.join("; "), r.esp, r.inboxes, r.capacity, r.sent, r.slReplies, r.replies, r.human, r.ooo, r.negative, r.bounces,
+      download(`stats-by-domain-${data.from}-${data.to}.csv`, ["domain", "status", "review_call", "client", "sender", "tags", "esp", "inboxes", "capacity_per_day", "sent", "replies_ex_ooo", "replies_incl_ooo", "human", "ooo", "negative", "bounces", "reply_rate_ex_ooo", "reply_rate_incl_ooo", "human_rate", "bounce_rate", "reputation"],
+        rows.map((r) => [r.name, r.status, r.call ? VERDICT_META[r.call.verdict].label : "", r.clientName, r.senders.join(", "), r.allTags.join("; "), r.esp, r.inboxes, r.capacity, r.sent, r.slReplies, r.replies, r.human, r.ooo, r.negative, r.bounces,
           fx(rate(r.slReplies, r.sent)), fx(rate(r.replies, r.sent)), fx(rate(r.human, r.sent)), fx(rate(r.bounces, r.sent)), fx(r.reputation)]));
     }
   };
@@ -372,9 +435,28 @@ export function StatsView({ initial, clients }: { initial: StatsData; clients: C
           <option value="active">Active</option>
           <option value="other">Not active</option>
         </select>
+        <select className="select" style={{ width: 170 }} value={call} onChange={(e) => setCall(e.target.value as CallFilter)} aria-label="Filter by weekly review call"
+          title="The weekly review's call for this range. Picking one also shows domains that sent nothing">
+          <option value="">All review calls</option>
+          <option value="attention">Needs attention ({options.attention})</option>
+          {VERDICT_ORDER.map((x) => <option key={x} value={x}>{VERDICT_META[x].label} ({options.verdicts.get(x) ?? 0})</option>)}
+        </select>
+        <select className="select" style={{ width: 140 }} value={tag} onChange={(e) => setTag(e.target.value)} aria-label="Filter by tag">
+          <option value="">All tags</option>
+          {options.tags.map(([k, x]) => <option key={k} value={k}>{x.label} ({x.n})</option>)}
+        </select>
+        <select className="select" style={{ width: 120 }} value={esp} onChange={(e) => setEsp(e.target.value)} aria-label="Filter by ESP">
+          <option value="">All ESPs</option>
+          {options.esps.map(([k, n]) => <option key={k} value={k}>{k || "No ESP"} ({n})</option>)}
+        </select>
+        <select className="select" style={{ width: 150 }} value={sender} onChange={(e) => setSender(e.target.value)} aria-label="Filter by sender name">
+          <option value="">All senders</option>
+          {options.senders.map(([k, n]) => <option key={k} value={k}>{k} ({n})</option>)}
+        </select>
+        {filtering ? <button type="button" className="btn btn-sm" onClick={clearFilters}>Clear filters</button> : null}
         {view === "domain" ? (
           <>
-            <label className="flex items-center gap-1.5 text-[12.5px] text-muted"><input type="checkbox" className="checkbox" checked={onlySending} onChange={(e) => setOnlySending(e.target.checked)} /> Sending only</label>
+            <label className="flex items-center gap-1.5 text-[12.5px] text-muted" title="Only domains that sent at least one email in this range"><input type="checkbox" className="checkbox" checked={onlySending} onChange={(e) => setOnlySending(e.target.checked)} /> Sending only</label>
             <label className="flex items-center gap-1.5 text-[12.5px] text-muted"><input type="checkbox" className="checkbox" checked={byClient} onChange={(e) => setByClient(e.target.checked)} /> By client</label>
             {byClient ? <button type="button" className="btn btn-sm" onClick={toggleAll}>{allOpen ? "Collapse all" : "Expand all"}</button> : null}
           </>
@@ -397,6 +479,7 @@ export function StatsView({ initial, clients }: { initial: StatsData; clients: C
                 <tr>
                   <SortTh k="name" sort={sort} onSort={sortBy}>{byClient ? "Client / domain" : "Domain"}</SortTh>
                   {showClient ? <SortTh k="client" sort={sort} onSort={sortBy}>Client</SortTh> : null}
+                  {showCall ? <SortTh k="call" sort={sort} onSort={sortBy} title="The weekly review's call for this range; hover a call for why">Call</SortTh> : null}
                   {on("sender") ? <SortTh k="sender" sort={sort} onSort={sortBy} title="Sender names on the domain's connected inboxes">Sender</SortTh> : null}
                   {on("tags") ? <SortTh k="tags" sort={sort} onSort={sortBy} title="The domain's tags and the Smartlead tags on its inboxes">Tags</SortTh> : null}
                   {on("esp") ? <SortTh k="esp" sort={sort} onSort={sortBy}>ESP</SortTh> : null}
@@ -427,6 +510,7 @@ export function StatsView({ initial, clients }: { initial: StatsData; clients: C
                             <span className="st-count" title={`${g.rows.length} domain${g.rows.length === 1 ? "" : "s"}`}>{g.rows.length}</span>
                           </span>
                         </td>
+                        {showCall ? <td /> : null}
                         {on("sender") ? <td /> : null}
                         {on("tags") ? <td /> : null}
                         {on("esp") ? <td /> : null}
@@ -444,6 +528,11 @@ export function StatsView({ initial, clients }: { initial: StatsData; clients: C
                           </span>
                         </td>
                         {showClient ? <td><ClientCell name={r.clientName} hue={r.clientHue} /></td> : null}
+                        {showCall ? (
+                          <td title={r.call?.why}>
+                            {r.call ? <Badge tone={VERDICT_META[r.call.verdict].tone === "faint" ? undefined : VERDICT_META[r.call.verdict].tone}>{VERDICT_META[r.call.verdict].label}</Badge> : <span className="zero">—</span>}
+                          </td>
+                        ) : null}
                         {on("sender") ? (
                           <td className="truncate" style={{ maxWidth: 180 }} title={r.senders.join(", ") || undefined}>
                             {r.senders.length ? <>{r.senders[0]}{r.senders.length > 1 ? <span className="text-faint"> +{r.senders.length - 1}</span> : null}</> : <span className="zero">—</span>}
