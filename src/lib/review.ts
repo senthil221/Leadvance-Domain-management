@@ -2,14 +2,14 @@ import type { BounceReason } from "./bounces";
 
 // The weekly review's call on each sending domain, with the numbers behind
 // it. Shared by server and client. Spam and blocklist rejections, a low
-// warmup reputation and days without a human reply count against the domain;
+// warmup reputation and days without any reply count against the domain;
 // addresses that don't exist count against the list.
 
 export type Verdict = "fix" | "rest" | "drop" | "dead" | "watch" | "idle" | "low" | "ok";
 
 export const VERDICT_META: Record<Verdict, { label: string; tone: "danger" | "warning" | "info" | "faint" | "success"; hint: string }> = {
   fix: { label: "Fix sender", tone: "danger", hint: "Our own setup is failing: tenant or mailbox blocked, DNS missing, or inboxes disconnected" },
-  rest: { label: "Replace", tone: "danger", hint: "Two strikes (spam, blocklisted, low rep, no reply for days) or heavy spam with no replies: pull it and line up a replacement" },
+  rest: { label: "Replace", tone: "danger", hint: "Two strikes (spam, blocklisted, low rep, no reply for days), heavy spam with no replies, or no response at all on real volume: pull it and line up a replacement" },
   drop: { label: "Cancelled / replaced", tone: "danger", hint: "Every inbox is disconnected and Hypertide has cancelled the order or the domain was replaced: nothing to reconnect. Delete in one go" },
   dead: { label: "Disconnected", tone: "warning", hint: "Every inbox is disconnected, but Hypertide hasn't cancelled or replaced the domain: try reconnecting before replacing" },
   watch: { label: "Watch", tone: "warning", hint: "One strike so far: still worth sending, at lower volume" },
@@ -32,13 +32,15 @@ export const RULES = {
   quietDays: 3,
   longQuietDays: 7,
   quietSent: 300,
+  /** Sent in the range with not one reply, not even an out of office: Replace on its own. */
+  silentSent: 300,
 };
 
 /**
  * The short tags beside each domain. Strikes count against the domain; the
  * rest explain the call. Ordered as they're shown.
  */
-export type Signal = "ended" | "unlisted" | "tenant" | "dns" | "disconnected" | "spam" | "rising" | "blocklist" | "lowrep" | "quiet" | "badlist";
+export type Signal = "ended" | "unlisted" | "tenant" | "dns" | "disconnected" | "spam" | "rising" | "blocklist" | "lowrep" | "quiet" | "silent" | "badlist";
 export const SIGNAL_META: Record<Signal, { label: string; hint: string; strike?: true }> = {
   ended: { label: "Cancelled / replaced", hint: "Hypertide shows the order cancelled, or the domain was replaced" },
   unlisted: { label: "No Hypertide order", hint: "Fully disconnected, and Hypertide's order list doesn't have the domain (or no longer does). The list misses some live domains too, so this alone doesn't prove it's cancelled" },
@@ -49,10 +51,11 @@ export const SIGNAL_META: Record<Signal, { label: string; hint: string; strike?:
   rising: { label: "Spam rising", hint: "Spam share at least doubled since the same days before" },
   blocklist: { label: "Blocklisted", hint: `On a blocklist in Smartlead's scan, or ${RULES.restBlocklist}+ blocklist bounces`, strike: true },
   lowrep: { label: "Low rep", hint: `Average warmup reputation under ${RULES.lowRep}`, strike: true },
-  quiet: { label: "No reply", hint: `No human reply for ${RULES.quietDays}+ days with ${RULES.quietSent}+ sent since`, strike: true },
+  quiet: { label: "No reply", hint: `No reply of any kind (out of office included) for ${RULES.quietDays}+ days with ${RULES.quietSent}+ sent since`, strike: true },
+  silent: { label: "No response", hint: `${RULES.silentSent}+ sent in the range and not one reply, not even an out of office: the mail is likely landing in spam`, strike: true },
   badlist: { label: "Bad list", hint: "Most bounces are addresses that don't exist: the list's fault, not the domain's" },
 };
-export const SIGNAL_ORDER: Signal[] = ["ended", "unlisted", "tenant", "dns", "disconnected", "spam", "rising", "blocklist", "lowrep", "quiet", "badlist"];
+export const SIGNAL_ORDER: Signal[] = ["ended", "unlisted", "tenant", "dns", "disconnected", "spam", "rising", "blocklist", "lowrep", "quiet", "silent", "badlist"];
 export type Tone = "danger" | "warning" | "info" | "faint";
 export type Chip = { key: Signal; text: string; tone: Tone; why: string };
 
@@ -64,7 +67,7 @@ export type ReviewDomain = {
   prevSent: number; prevHuman: number; prevSpam: number;
   /** Average warmup reputation of the connected inboxes, and how many are under RULES.lowRep. */
   rep: number | null; lowRepInboxes: number;
-  /** Days from the last human reply (or, with none on record, the first send) to the end of the range. */
+  /** Days from the last reply of any kind (or, with none on record, the first send) to the end of the range. */
   quietDays: number | null; neverReplied: boolean; sentSinceReply: number;
   /** The Smartlead tags on the domain's inboxes, most used first. */
   slTags: string[];
@@ -132,20 +135,26 @@ export function judge(d: ReviewDomain): Judged {
     add("lowrep", `Rep ${d.rep.toFixed(0)}`, d.rep < RULES.lowRep - 5 ? "danger" : "warning",
       `warmup reputation ${d.rep.toFixed(1)}${d.lowRepInboxes ? ` (${s(d.lowRepInboxes, "inbox", "inboxes")} under ${RULES.lowRep})` : ""}`);
   }
-  if (d.quietDays != null && d.quietDays >= RULES.quietDays && d.sentSinceReply >= RULES.quietSent) {
+  const quiet = d.quietDays != null && d.quietDays >= RULES.quietDays && d.sentSinceReply >= RULES.quietSent;
+  // Quiet for days and not one reply in the whole range on real volume: no
+  // longer a strike among others, it goes on its own.
+  const silent = quiet && d.replies === 0 && d.sent >= RULES.silentSent;
+  if (silent) {
+    add("silent", `No response · ${n(d.sent)} sent`, "danger", `not one reply on ${n(d.sent)} sent, not even an out of office`);
+  } else if (quiet && d.quietDays != null) {
     const days = `${n(d.quietDays)}${d.neverReplied ? "+" : ""}d`;
     add("quiet", `No reply ${days}`, d.quietDays >= RULES.longQuietDays ? "danger" : "warning",
-      `no human reply ${d.neverReplied ? "on record" : `for ${s(d.quietDays, "day")}`} (${n(d.sentSinceReply)} sent since)`);
+      `no reply of any kind ${d.neverReplied ? "on record" : `for ${s(d.quietDays, "day")}`} (${n(d.sentSinceReply)} sent since)`);
   }
   const missing = c.missing ?? 0;
   if (missing >= 10 && missing >= 0.5 * d.bounces) add("badlist", `Bad list ${Math.round(pct(missing, d.bounces))}%`, "info", `${n(missing)} of ${s(d.bounces, "bounce")} to addresses that don't exist`);
 
   const strikes = chips.filter((x) => SIGNAL_META[x.key].strike).length;
   const said = (keys: Signal[]) => chips.filter((x) => keys.includes(x.key)).map((x) => x.why).join(", ");
-  const against = said(["spam", "rising", "blocklist", "lowrep", "quiet"]);
+  const against = said(["spam", "rising", "blocklist", "lowrep", "quiet", "silent"]);
   const humans = s(d.human, "human reply", "human replies");
   const out = (verdict: Verdict, why: string): Judged => ({ ...d, verdict, why: why.charAt(0).toUpperCase() + why.slice(1), worse, spam, chips, strikes });
-  // A human reply in the last few days says the domain still lands.
+  // A reply in the last few days, of any kind, says the domain still lands.
   const replying = d.quietDays != null && d.quietDays < RULES.quietDays && !d.neverReplied;
 
   // No inbox left to log into: nothing else about the domain matters. Gone
@@ -153,6 +162,7 @@ export function judge(d: ReviewDomain): Judged {
   if (allGone) return ended ? out("drop", said(["ended", "disconnected"])) : out("dead", said(["unlisted", "disconnected"]));
   if (ownSetup) return out("fix", `${said(["tenant", "dns", "disconnected"])}${against ? `; ${against}` : ""}`);
   if (d.status === "active" && d.sent === 0) return out("idle", ["Nothing sent", said(["disconnected", "lowrep"])].filter(Boolean).join("; "));
+  if (silent) return out("rest", against);
   if (judged && d.human === 0 && (heavySpam || (c.blocklist ?? 0) >= RULES.restBlocklist)) return out("rest", chips.some((x) => x.key === "quiet") ? against : `${against}, no human replies`);
   if (strikes >= 2 && !replying) return out("rest", `${against}; ${humans}`);
   if (strikes >= 1) return out("watch", `${against}; ${humans}`);
@@ -182,11 +192,11 @@ const cell = (v: string | number | null) => {
 /** Tab-separated rows with a header, ready to paste into Google Sheets: one column per fact. */
 export function sheetRows(list: Judged[]): string {
   const head = ["Domain", "Call", "Reason", "Signals", "Smartlead tags", "Hypertide", "Client", "Status", "Sent", "Human replies", "Spam rejections",
-    "Bounce rate", "Warmup reputation", "Days since human reply", "Inboxes connected", "Inboxes disconnected"];
+    "Bounce rate", "Warmup reputation", "Days since any reply", "Inboxes connected", "Inboxes disconnected", "Replies incl. OOO"];
   const rows = list.map((d) => [
     d.name, VERDICT_META[d.verdict].label, d.why, d.chips.map((c) => c.text).join(", "), d.slTags.join(", "), htText(d), d.clientName, d.status,
     d.sent, d.human, d.spam, d.sent ? `${((100 * d.bounces) / d.sent).toFixed(2)}%` : "", d.rep,
-    d.quietDays == null ? "" : `${d.quietDays}${d.neverReplied ? "+" : ""}`, d.inboxes, d.disconnected,
+    d.quietDays == null ? "" : `${d.quietDays}${d.neverReplied ? "+" : ""}`, d.inboxes, d.disconnected, d.replies,
   ].map(cell).join("\t"));
   return [head.join("\t"), ...rows].join("\n");
 }

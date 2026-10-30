@@ -917,6 +917,14 @@ a.stat:hover { background: var(--surface-2); }
 .data-table tbody tr.st-idle > td { color: var(--faint); }
 .data-table tbody tr.st-idle .strong { color: var(--muted); font-weight: 400; }
 .data-table tbody tr.st-idle .zero { opacity: .6; }
+/* Stats: clients by day, two header rows (dates, then Sent / RR / RR incl. OOO) */
+.data-table.st-cd thead tr:nth-child(1) th { height: 30px; }
+.data-table.st-cd thead tr:nth-child(2) th { top: 30px; height: 30px; font-size: 11.5px; }
+.data-table.st-cd thead th.st-cd-day { text-align: center; }
+.data-table.st-cd thead th[rowspan] { z-index: 3; left: 0; }
+.data-table.st-cd tbody td.col-first { position: sticky; left: 0; z-index: 1; background: var(--surface); box-shadow: inset -1px 0 0 var(--line); }
+.data-table.st-cd tbody tr.inb-client > td.col-first { background: color-mix(in srgb, var(--ink) 3%, var(--surface)); }
+.data-table.st-cd tbody td { font-variant-numeric: tabular-nums; }
 
 /* Inboxes: client rows above their domains */
 .data-table tbody tr.inb-client > td { background: color-mix(in srgb, var(--ink) 3%, var(--surface)); border-bottom-color: var(--line-strong); }

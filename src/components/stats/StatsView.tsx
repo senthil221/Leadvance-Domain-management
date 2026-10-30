@@ -1,7 +1,7 @@
 "use client";
 
 import { DomainLink } from "@/components/domains/DomainLink";
-import { BarChart3, CalendarDays, ChevronRight, Download, Loader, Search } from "lucide-react";
+import { BarChart3, CalendarDays, ChevronRight, Copy, Download, Loader, Search } from "lucide-react";
 import { useSearchParams } from "next/navigation";
 import { type CSSProperties, Fragment, useMemo, useState, useTransition } from "react";
 import { toast } from "sonner";
@@ -9,6 +9,7 @@ import { loadStats } from "@/app/actions";
 import { ColumnsMenu, useColumns, type ColumnDef } from "@/components/Columns";
 import { SortTh } from "@/components/SortTh";
 import { ClientCell, Empty, Metric, Rep, StatusDot } from "@/components/ui";
+import { clientDays, clientDaySheet, rr, type ClientDays, type DayFigures } from "@/lib/client-days";
 import { int } from "@/lib/format";
 import type { ClientRow, StatDomain, StatsData } from "@/lib/queries";
 import { DOMAIN_STATUSES } from "@/lib/status";
@@ -18,9 +19,11 @@ import { PRESETS, addDays, daysBetween, matchPreset, nice, presetRange, previous
 // Aggregation
 // ---------------------------------------------------------------------------
 
-type Sums = { sent: number; replies: number; human: number; ooo: number; negative: number; bounces: number };
-const zero = (): Sums => ({ sent: 0, replies: 0, human: 0, ooo: 0, negative: 0, bounces: 0 });
-const addInto = (a: Sums, b: Sums) => { a.sent += b.sent; a.replies += b.replies; a.human += b.human; a.ooo += b.ooo; a.negative += b.negative; a.bounces += b.bounces; };
+// `replies` counts every reply, out of office included; `slReplies` is
+// Smartlead's own count, which leaves out-of-office replies out.
+type Sums = { sent: number; replies: number; slReplies: number; human: number; ooo: number; negative: number; bounces: number };
+const zero = (): Sums => ({ sent: 0, replies: 0, slReplies: 0, human: 0, ooo: 0, negative: 0, bounces: 0 });
+const addInto = (a: Sums, b: Sums) => { a.sent += b.sent; a.replies += b.replies; a.slReplies += b.slReplies; a.human += b.human; a.ooo += b.ooo; a.negative += b.negative; a.bounces += b.bounces; };
 type Row = StatDomain & Sums & { reputation: number | null };
 type Totals = Sums & { inboxes: number; capacity: number; prevSent: number; prevReplies: number; prevBounces: number; reputation?: number | null };
 const rate = (n: number, d: number) => (d > 0 ? (100 * n) / d : null);
@@ -34,12 +37,15 @@ const total = (rows: Row[]): Totals => {
   return t;
 };
 
-type SortKey = "name" | "status" | "client" | "inboxes" | "usage" | "sent" | "replies" | "human" | "ooo" | "negative" | "bounces" | "replyRate" | "humanRate" | "bounceRate" | "reputation";
+type SortKey = "name" | "status" | "client" | "sender" | "esp" | "inboxes" | "usage" | "sent" | "replies" | "human" | "ooo" | "negative" | "bounces" | "replyRate" | "slRate" | "humanRate" | "bounceRate" | "reputation";
 const sortValue = (r: Row, k: SortKey, len: number): string | number | null => {
   switch (k) {
     case "status": return DOMAIN_STATUSES.indexOf(r.status);
     case "client": return r.clientName?.toLowerCase() ?? null;
+    case "sender": return r.senders[0]?.toLowerCase() ?? null;
+    case "esp": return r.esp;
     case "replyRate": return rate(r.replies, r.sent);
+    case "slRate": return rate(r.slReplies, r.sent);
     case "humanRate": return rate(r.human, r.sent);
     case "bounceRate": return rate(r.bounces, r.sent);
     case "usage": return r.capacity ? r.sent / (r.capacity * len) : null;
@@ -52,8 +58,11 @@ const groupValue = (g: { name: string | null; rows: Row[] }, k: SortKey, len: nu
   switch (k) {
     case "name":
     case "client": return g.name?.toLowerCase() ?? null;
-    case "status": return null;
+    case "status":
+    case "sender":
+    case "esp": return null;
     case "replyRate": return rate(t.replies, t.sent);
+    case "slRate": return rate(t.slReplies, t.sent);
     case "humanRate": return rate(t.human, t.sent);
     case "bounceRate": return rate(t.bounces, t.sent);
     case "usage": return t.capacity ? t.sent / (t.capacity * len) : null;
@@ -61,7 +70,7 @@ const groupValue = (g: { name: string | null; rows: Row[] }, k: SortKey, len: nu
     default: return t[k];
   }
 };
-type DayKey = "day" | "domains" | "sent" | "replies" | "human" | "ooo" | "negative" | "bounces" | "replyRate" | "humanRate" | "bounceRate";
+type DayKey = "day" | "domains" | "sent" | "replies" | "human" | "ooo" | "negative" | "bounces" | "replyRate" | "slRate" | "humanRate" | "bounceRate";
 const flip = <K extends string>(s: { key: K; dir: 1 | -1 }, key: K, ascFirst: boolean) => (s.key === key ? { key, dir: (s.dir * -1) as 1 | -1 } : { key, dir: (ascFirst ? 1 : -1) as 1 | -1 });
 const cmp = (x: string | number | null, y: string | number | null, dir: number) => (x === y ? 0 : x === null ? 1 : y === null ? -1 : (x < y ? -1 : 1) * dir);
 
@@ -81,10 +90,12 @@ const Z = ({ v }: { v: number }) => (v ? <>{int(v)}</> : <span className="zero">
 // each show the count and the rate in one cell.
 const GROUPS: Record<string, string[]> = {
   vol: ["inboxes", "usage", "sent"],
-  rep: ["replies", "human", "ooo", "negative"],
+  rep: ["slReplies", "replies", "human", "ooo", "negative"],
   bnc: ["bounces"],
   health: ["reputation"],
 };
+const NO_OOO_TITLE = "Smartlead's own reply count, which leaves out out-of-office replies; sorts by rate";
+const WITH_OOO_TITLE = "Every reply, out of office and auto-replies included: any reply shows the email reached an inbox. Sorts by rate";
 const GROUP_OF = Object.fromEntries(Object.entries(GROUPS).flatMap(([g, keys]) => keys.map((k) => [k, g])));
 /** Class for a column: its group, plus a divider on the group's first visible column. */
 const gc = (key: string, on: (k: string) => boolean) => {
@@ -93,8 +104,9 @@ const gc = (key: string, on: (k: string) => boolean) => {
 };
 
 const COLUMNS: ColumnDef[] = [
-  { key: "client", label: "Client (when not grouped)" }, { key: "inboxes", label: "Inboxes" },
-  { key: "usage", label: "Used" }, { key: "sent", label: "Sent" }, { key: "replies", label: "Replies" },
+  { key: "client", label: "Client (when not grouped)" }, { key: "sender", label: "Sender name" }, { key: "esp", label: "ESP", hidden: true },
+  { key: "inboxes", label: "Inboxes" }, { key: "usage", label: "Used" }, { key: "sent", label: "Sent" },
+  { key: "slReplies", label: "Replies ex. OOO" }, { key: "replies", label: "Replies incl. OOO" },
   { key: "human", label: "Human" }, { key: "ooo", label: "Out of office", hidden: true }, { key: "negative", label: "Not interested", hidden: true },
   { key: "bounces", label: "Bounces" }, { key: "reputation", label: "Reputation" },
 ];
@@ -131,6 +143,7 @@ function Cells({ r, len, on, maxSent = 0, agg = false }: { r: Totals; len: numbe
           {cap("Sum")}{r.sent ? <span className="strong text-ink">{int(r.sent)}</span> : <span className="zero">0</span>}
         </td>
       ) : null}
+      {on("slReplies") ? <td className={c("slReplies")}>{cap("Sum")}<Pair n={r.slReplies} of={r.sent} tone="st-v-rep" /></td> : null}
       {on("replies") ? <td className={c("replies")}>{cap("Sum")}<Pair n={r.replies} of={r.sent} tone="st-v-rep" /></td> : null}
       {on("human") ? <td className={c("human")}>{cap("Sum")}<Pair n={r.human} of={r.sent} tone="st-v-hum" /></td> : null}
       {on("ooo") ? <td className={c("ooo")}>{cap("Sum")}<Z v={r.ooo} /></td> : null}
@@ -138,6 +151,56 @@ function Cells({ r, len, on, maxSent = 0, agg = false }: { r: Totals; len: numbe
       {on("bounces") ? <td className={c("bounces")}>{cap("Sum")}<Pair n={r.bounces} of={r.sent} digits={1} tone="st-v-bnc" warn={2} bad={3} /></td> : null}
       {on("reputation") ? <td className={c("reputation")}>{cap("Avg")}{r.reputation != null ? <Rep value={r.reputation} /> : <span className="zero">—</span>}</td> : null}
     </>
+  );
+}
+
+/**
+ * Clients by day: dates across the top, each with Sent, RR (without out of
+ * office, Smartlead's count) and RR incl. OOO, then the range's total.
+ */
+function ClientDayTable({ t }: { t: ReturnType<typeof clientDays> }) {
+  if (!t.clients.length) return <Empty icon={BarChart3} title="Nothing sent in this range">Pick another range, or clear the client filter.</Empty>;
+  const cells = (f: DayFigures | undefined, first: boolean, strong = false) => {
+    const v = f ?? { sent: 0, slReplies: 0, replies: 0 };
+    const r1 = rr(v.slReplies, v.sent), r2 = rr(v.replies, v.sent);
+    return (
+      <>
+        <td className={`is-num${first ? " st-start" : ""}`} title={`${int(v.sent)} sent`}>{v.sent ? <span className={strong ? "strong text-ink" : undefined}>{int(v.sent)}</span> : <span className="zero">0</span>}</td>
+        <td className="is-num st-rep" title={`${int(v.slReplies)} replies without out of office`}>{r1 == null ? <span className="zero">—</span> : `${r1.toFixed(2)}%`}</td>
+        <td className="is-num st-rep" title={`${int(v.replies)} replies, out of office included`}>{r2 == null ? <span className="zero">—</span> : `${r2.toFixed(2)}%`}</td>
+      </>
+    );
+  };
+  const row = (c: ClientDays, total = false) => (
+    <tr key={c.key} className={total ? "inb-client" : undefined}>
+      <td className="col-first">{total ? <span className="strong">Grand total</span> : <ClientCell name={c.name} hue={c.hue} />}</td>
+      {t.days.map((d) => <Fragment key={d}>{cells(c.days[d], true, total)}</Fragment>)}
+      {cells(c.total, true, true)}
+    </tr>
+  );
+  return (
+    <table className="data-table is-main st-cd">
+      <thead>
+        <tr>
+          <th rowSpan={2} className="col-first">Client</th>
+          {t.days.map((d) => <th key={d} colSpan={3} className="st-start st-cd-day">{nice(d)} <span className="text-faint">{weekday(d)}</span></th>)}
+          <th colSpan={3} className="st-start st-cd-day">Total</th>
+        </tr>
+        <tr>
+          {[...t.days, "total"].map((d) => (
+            <Fragment key={d}>
+              <th className="is-num st-start st-vol">Sent</th>
+              <th className="is-num st-rep" title={NO_OOO_TITLE.replace("; sorts by rate", "")}>RR</th>
+              <th className="is-num st-rep" title={WITH_OOO_TITLE.replace(" Sorts by rate", "")}>RR incl. OOO</th>
+            </Fragment>
+          ))}
+        </tr>
+      </thead>
+      <tbody>
+        {t.clients.map((c) => row(c))}
+        {row(t.total, true)}
+      </tbody>
+    </table>
   );
 }
 
@@ -155,9 +218,9 @@ export function StatsView({ initial, clients }: { initial: StatsData; clients: C
   const [preset, setPreset] = useState<PresetKey>(() => matchPreset(initial.from, initial.to, initial.today));
   const [from, setFrom] = useState(initial.from);
   const [to, setTo] = useState(initial.to);
-  const [view, setView] = useState<"domain" | "day">("domain");
-  const [q, setQ] = useState("");
   const params = useSearchParams();
+  const [view, setView] = useState<"domain" | "day" | "clients">(() => (params.get("view") === "clients" ? "clients" : "domain"));
+  const [q, setQ] = useState("");
   const [clientId, setClientId] = useState(() => params.get("client") ?? "");
   const [onlySending, setOnlySending] = useState(true);
   // Active domains (in campaigns) apart from the rest (warming, draining, retired).
@@ -187,7 +250,8 @@ export function StatsView({ initial, clients }: { initial: StatsData; clients: C
   const visible = useMemo(() => data.domains.filter((d) =>
     (!clientId || d.clientId === clientId) &&
     (!statusSet || (statusSet === "active") === (d.status === "active")) &&
-    (!needle || d.name.includes(needle) || d.clientName?.toLowerCase().includes(needle) || d.tags.some((t) => t.toLowerCase().includes(needle)))),
+    (!needle || d.name.includes(needle) || d.clientName?.toLowerCase().includes(needle) || d.tags.some((t) => t.toLowerCase().includes(needle)) ||
+      d.senders.some((s) => s.toLowerCase().includes(needle)))),
   [data.domains, clientId, statusSet, needle]);
 
   const rows = useMemo(() => {
@@ -217,7 +281,7 @@ export function StatsView({ initial, clients }: { initial: StatsData; clients: C
       if (x.sent > 0) r.domains++;
     }
     const v = (r: Sums & { day: string; domains: number }, k: DayKey): string | number | null =>
-      k === "replyRate" ? rate(r.replies, r.sent) : k === "humanRate" ? rate(r.human, r.sent) : k === "bounceRate" ? rate(r.bounces, r.sent) : r[k];
+      k === "replyRate" ? rate(r.replies, r.sent) : k === "slRate" ? rate(r.slReplies, r.sent) : k === "humanRate" ? rate(r.human, r.sent) : k === "bounceRate" ? rate(r.bounces, r.sent) : r[k];
     return [...map.values()].sort((a, b) => cmp(v(a, daySort.key), v(b, daySort.key), daySort.dir) || b.day.localeCompare(a.day));
   }, [visible, data.days, data.from, len, daySort]);
 
@@ -233,6 +297,14 @@ export function StatsView({ initial, clients }: { initial: StatsData; clients: C
     return [...map.values()].sort((a, b) => cmp(groupValue(a, sort.key, len), groupValue(b, sort.key, len), sort.dir) || (a.name ?? "").localeCompare(b.name ?? ""));
   }, [rows, byClient, sort, len]);
 
+  const perClient = useMemo(() => clientDays(visible, data.days), [visible, data.days]);
+  const copyClients = () => {
+    navigator.clipboard.writeText(clientDaySheet(perClient)).then(
+      () => toast.success(`Copied ${perClient.clients.length} client${perClient.clients.length === 1 ? "" : "s"} × ${perClient.days.length} day${perClient.days.length === 1 ? "" : "s"}: paste into Google Sheets`),
+      () => toast.error("Couldn't copy: the browser blocked the clipboard"),
+    );
+  };
+
   const t = total(rows);
   const maxSent = Math.max(0, ...rows.map((r) => r.sent));
   const showClient = !byClient && on("client");
@@ -246,13 +318,18 @@ export function StatsView({ initial, clients }: { initial: StatsData; clients: C
   const rangeLabel = data.from === data.to ? nice(data.from) : `${nice(data.from)} – ${nice(data.to)}`;
 
   const exportCsv = () => {
-    if (view === "day") {
-      download(`stats-by-day-${data.from}-${data.to}.csv`, ["day", "domains_sending", "sent", "replies", "human", "ooo", "negative", "bounces"],
-        [...days].sort((a, b) => a.day.localeCompare(b.day)).map((d) => [d.day, d.domains, d.sent, d.replies, d.human, d.ooo, d.negative, d.bounces]));
+    if (view === "clients") {
+      // The sheet's two header rows: dates, then the column names.
+      const [dates, ...lines] = clientDaySheet(perClient).split("\n").map((l) => l.split("\t"));
+      download(`stats-clients-by-day-${data.from}-${data.to}.csv`, dates, lines);
+    } else if (view === "day") {
+      download(`stats-by-day-${data.from}-${data.to}.csv`, ["day", "domains_sending", "sent", "replies_ex_ooo", "replies_incl_ooo", "human", "ooo", "negative", "bounces"],
+        [...days].sort((a, b) => a.day.localeCompare(b.day)).map((d) => [d.day, d.domains, d.sent, d.slReplies, d.replies, d.human, d.ooo, d.negative, d.bounces]));
     } else {
       const fx = (v: number | null) => (v == null ? "" : v.toFixed(2));
-      download(`stats-by-domain-${data.from}-${data.to}.csv`, ["domain", "status", "client", "inboxes", "capacity_per_day", "sent", "replies", "human", "ooo", "negative", "bounces", "reply_rate", "human_rate", "bounce_rate", "reputation"],
-        rows.map((r) => [r.name, r.status, r.clientName, r.inboxes, r.capacity, r.sent, r.replies, r.human, r.ooo, r.negative, r.bounces, fx(rate(r.replies, r.sent)), fx(rate(r.human, r.sent)), fx(rate(r.bounces, r.sent)), fx(r.reputation)]));
+      download(`stats-by-domain-${data.from}-${data.to}.csv`, ["domain", "status", "client", "sender", "esp", "inboxes", "capacity_per_day", "sent", "replies_ex_ooo", "replies_incl_ooo", "human", "ooo", "negative", "bounces", "reply_rate_ex_ooo", "reply_rate_incl_ooo", "human_rate", "bounce_rate", "reputation"],
+        rows.map((r) => [r.name, r.status, r.clientName, r.senders.join(", "), r.esp, r.inboxes, r.capacity, r.sent, r.slReplies, r.replies, r.human, r.ooo, r.negative, r.bounces,
+          fx(rate(r.slReplies, r.sent)), fx(rate(r.replies, r.sent)), fx(rate(r.human, r.sent)), fx(rate(r.bounces, r.sent)), fx(r.reputation)]));
     }
   };
 
@@ -260,7 +337,7 @@ export function StatsView({ initial, clients }: { initial: StatsData; clients: C
     <div className="flex flex-col gap-3">
       <section className="stats" aria-label="Totals">
         <div className="stat"><span className="stat-label">Sent · {rangeLabel}</span><span className="stat-value">{int(t.sent)}</span><span className="stat-foot">{t.prevSent ? <>vs {int(t.prevSent)} {previousLabel(data.from, data.to)}<Delta now={t.sent} before={t.prevSent} /></> : `${int(Math.round(t.sent / len))} a day on average`}</span></div>
-        <div className="stat"><span className="stat-label">Reply rate</span><span className="stat-value">{rate(t.replies, t.sent)?.toFixed(2) ?? "—"}%</span><span className="stat-foot">{int(t.replies)} replies · {int(t.ooo)} out of office<Delta now={rate(t.replies, t.sent)} before={rate(t.prevReplies, t.prevSent)} points /></span></div>
+        <div className="stat"><span className="stat-label">Reply rate incl. OOO</span><span className="stat-value">{rate(t.replies, t.sent)?.toFixed(2) ?? "—"}%</span><span className="stat-foot" title={NO_OOO_TITLE.replace("; sorts by rate", "")}>{int(t.replies)} replies · {rate(t.slReplies, t.sent)?.toFixed(2) ?? "0.00"}% ex. OOO<Delta now={rate(t.replies, t.sent)} before={rate(t.prevReplies, t.prevSent)} points /></span></div>
         <div className="stat"><span className="stat-label">Human replies</span><span className="stat-value">{int(t.human)}</span><span className="stat-foot">{rate(t.human, t.sent)?.toFixed(2) ?? "0.00"}% of sent · {int(t.negative)} not interested</span></div>
         <div className="stat"><span className="stat-label">Bounce rate</span><span className="stat-value">{rate(t.bounces, t.sent)?.toFixed(1) ?? "—"}%</span><span className="stat-foot">{int(t.bounces)} bounces<Delta now={rate(t.bounces, t.sent)} before={rate(t.prevBounces, t.prevSent)} points invert /></span></div>
       </section>
@@ -269,6 +346,7 @@ export function StatsView({ initial, clients }: { initial: StatsData; clients: C
         <div className="view-tabs" role="tablist" aria-label="View">
           <button type="button" role="tab" aria-selected={view === "domain"} className={view === "domain" ? "is-on" : undefined} onClick={() => setView("domain")}>By domain <span>{int(rows.length)}</span></button>
           <button type="button" role="tab" aria-selected={view === "day"} className={view === "day" ? "is-on" : undefined} onClick={() => setView("day")}>By day <span>{len}</span></button>
+          <button type="button" role="tab" aria-selected={view === "clients"} className={view === "clients" ? "is-on" : undefined} onClick={() => setView("clients")}>Clients by day <span>{perClient.clients.length}</span></button>
         </div>
         <label className="flex items-center gap-1.5">
           <CalendarDays size={14} className="text-faint" />
@@ -306,6 +384,7 @@ export function StatsView({ initial, clients }: { initial: StatsData; clients: C
           <Search size={14} strokeWidth={1.5} />
           <input className="input" value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search" aria-label="Search stats" />
         </label>
+        {view === "clients" ? <button type="button" className="btn btn-sm" onClick={copyClients} disabled={!perClient.clients.length}><Copy size={14} /> Copy for Sheets</button> : null}
         <button type="button" className="btn btn-sm" onClick={exportCsv}><Download size={14} /> Export</button>
         {view === "domain" ? <ColumnsMenu cols={cols} /> : null}
       </div>
@@ -318,10 +397,13 @@ export function StatsView({ initial, clients }: { initial: StatsData; clients: C
                 <tr>
                   <SortTh k="name" sort={sort} onSort={sortBy}>{byClient ? "Client / domain" : "Domain"}</SortTh>
                   {showClient ? <SortTh k="client" sort={sort} onSort={sortBy}>Client</SortTh> : null}
+                  {on("sender") ? <SortTh k="sender" sort={sort} onSort={sortBy} title="Sender names on the domain's connected inboxes">Sender</SortTh> : null}
+                  {on("esp") ? <SortTh k="esp" sort={sort} onSort={sortBy}>ESP</SortTh> : null}
                   {on("inboxes") ? <SortTh k="inboxes" sort={sort} onSort={sortBy} num className={gc("inboxes", on)}>Inboxes</SortTh> : null}
                   {on("usage") ? <SortTh k="usage" sort={sort} onSort={sortBy} num className={gc("usage", on)} title="Sent as a share of the inboxes' daily limits over the range">Used</SortTh> : null}
                   {on("sent") ? <SortTh k="sent" sort={sort} onSort={sortBy} num className={gc("sent", on)} title="Hover a number for the period before">Sent</SortTh> : null}
-                  {on("replies") ? <SortTh k="replyRate" sort={sort} onSort={sortBy} num className={gc("replies", on)} title="Replies and reply rate; sorts by rate">Replies</SortTh> : null}
+                  {on("slReplies") ? <SortTh k="slRate" sort={sort} onSort={sortBy} num className={gc("slReplies", on)} title={NO_OOO_TITLE}>Replies ex. OOO</SortTh> : null}
+                  {on("replies") ? <SortTh k="replyRate" sort={sort} onSort={sortBy} num className={gc("replies", on)} title={WITH_OOO_TITLE}>Replies incl. OOO</SortTh> : null}
                   {on("human") ? <SortTh k="humanRate" sort={sort} onSort={sortBy} num className={gc("human", on)} title="Human replies and their rate; sorts by rate">Human</SortTh> : null}
                   {on("ooo") ? <SortTh k="ooo" sort={sort} onSort={sortBy} num className={gc("ooo", on)}>OOO</SortTh> : null}
                   {on("negative") ? <SortTh k="negative" sort={sort} onSort={sortBy} num className={gc("negative", on)}>Negative</SortTh> : null}
@@ -344,6 +426,8 @@ export function StatsView({ initial, clients }: { initial: StatsData; clients: C
                             <span className="st-count" title={`${g.rows.length} domain${g.rows.length === 1 ? "" : "s"}`}>{g.rows.length}</span>
                           </span>
                         </td>
+                        {on("sender") ? <td /> : null}
+                        {on("esp") ? <td /> : null}
                         <Cells r={{ ...total(g.rows), reputation: avgRep(g.rows) }} len={len} on={on} maxSent={maxClientSent} agg />
                       </tr>
                     ) : null}
@@ -358,6 +442,12 @@ export function StatsView({ initial, clients }: { initial: StatsData; clients: C
                           </span>
                         </td>
                         {showClient ? <td><ClientCell name={r.clientName} hue={r.clientHue} /></td> : null}
+                        {on("sender") ? (
+                          <td className="truncate" style={{ maxWidth: 180 }} title={r.senders.join(", ") || undefined}>
+                            {r.senders.length ? <>{r.senders[0]}{r.senders.length > 1 ? <span className="text-faint"> +{r.senders.length - 1}</span> : null}</> : <span className="zero">—</span>}
+                          </td>
+                        ) : null}
+                        {on("esp") ? <td className="text-muted text-[12px]">{r.esp ?? <span className="zero">—</span>}</td> : null}
                         <Cells r={r} len={len} on={on} maxSent={maxSent} />
                       </tr>
                     ))}
@@ -366,6 +456,8 @@ export function StatsView({ initial, clients }: { initial: StatsData; clients: C
                 ))}
               </tbody>
             </table>
+          ) : view === "clients" ? (
+            <ClientDayTable t={perClient} />
           ) : (
             <table className="data-table is-main">
               <thead>
@@ -374,7 +466,8 @@ export function StatsView({ initial, clients }: { initial: StatsData; clients: C
                   <SortTh k="domains" sort={daySort} onSort={sortDay} num>Domains sending</SortTh>
                   <SortTh k="sent" sort={daySort} onSort={sortDay} num className="st-vol st-start">Sent</SortTh>
                   <th className="st-vol" style={{ width: 160 }}></th>
-                  <SortTh k="replyRate" sort={daySort} onSort={sortDay} num className="st-rep st-start">Replies</SortTh>
+                  <SortTh k="slRate" sort={daySort} onSort={sortDay} num className="st-rep st-start" title={NO_OOO_TITLE}>Replies ex. OOO</SortTh>
+                  <SortTh k="replyRate" sort={daySort} onSort={sortDay} num className="st-rep" title={WITH_OOO_TITLE}>Replies incl. OOO</SortTh>
                   <SortTh k="humanRate" sort={daySort} onSort={sortDay} num className="st-rep">Human</SortTh>
                   <SortTh k="ooo" sort={daySort} onSort={sortDay} num className="st-rep">OOO</SortTh>
                   <SortTh k="negative" sort={daySort} onSort={sortDay} num className="st-rep">Negative</SortTh>
@@ -388,7 +481,8 @@ export function StatsView({ initial, clients }: { initial: StatsData; clients: C
                     <td className="is-num"><Z v={d.domains} /></td>
                     <td className="is-num st-vol st-start"><span className="strong text-ink"><Z v={d.sent} /></span></td>
                     <td className="st-vol"><span className="progress" style={{ width: 140 }}><span style={{ width: `${(100 * d.sent) / maxDay}%`, background: "color-mix(in srgb, var(--ink) 24%, transparent)" }} /></span></td>
-                    <td className="is-num st-rep st-start"><Pair n={d.replies} of={d.sent} tone="st-v-rep" /></td>
+                    <td className="is-num st-rep st-start"><Pair n={d.slReplies} of={d.sent} tone="st-v-rep" /></td>
+                    <td className="is-num st-rep"><Pair n={d.replies} of={d.sent} tone="st-v-rep" /></td>
                     <td className="is-num st-rep"><Pair n={d.human} of={d.sent} tone="st-v-hum" /></td>
                     <td className="is-num st-rep"><Z v={d.ooo} /></td>
                     <td className="is-num st-rep"><Z v={d.negative} /></td>
@@ -403,7 +497,9 @@ export function StatsView({ initial, clients }: { initial: StatsData; clients: C
           ) : null}
         </div>
         <div className="table-footer">
-          {view === "domain" ? <span><b>{int(rows.length)}</b> domains</span> : <span><b>{len}</b> days</span>}
+          {view === "domain" ? <span><b>{int(rows.length)}</b> domains</span>
+            : view === "clients" ? <span><b>{perClient.clients.length}</b> clients · <b>{perClient.days.length}</b> days with sends</span>
+            : <span><b>{len}</b> days</span>}
           <span><b>{int(t.sent)}</b> sent</span>
           <span><b>{int(t.replies)}</b> replies</span>
           <span><b>{int(t.human)}</b> human</span>

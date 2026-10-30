@@ -35,7 +35,7 @@ const pct = (n: number, d: number) => (d > 0 ? (100 * n) / d : null);
 const fx = (v: number | null, digits = 1) => (v == null ? "—" : `${v.toFixed(v < 1 && digits === 1 ? 2 : digits)}%`);
 const plural = (n: number, one: string, many = `${one}s`) => `${int(n)} ${n === 1 ? one : many}`;
 
-type SortKey = "verdict" | "name" | "client" | "signals" | "sent" | "human" | "quiet" | "rep" | "spam" | "missing" | "bounceRate";
+type SortKey = "verdict" | "name" | "client" | "signals" | "sent" | "replies" | "human" | "quiet" | "rep" | "spam" | "missing" | "bounceRate";
 const sortValue = (r: Judged, k: SortKey): string | number | null => {
   switch (k) {
     case "verdict": return -VERDICT_ORDER.indexOf(r.verdict) * 1e6 + r.strikes * 1e4 + r.spam;
@@ -374,10 +374,11 @@ export function ReviewView({ initial, clients }: { initial: ReviewData; clients:
                 <SortTh k="name" sort={sort} onSort={sortBy}>Domain</SortTh>
                 <SortTh k="client" sort={sort} onSort={sortBy}>Client</SortTh>
                 <SortTh k="verdict" sort={sort} onSort={sortBy}>Call</SortTh>
-                <SortTh k="signals" sort={sort} onSort={sortBy} title="Strikes first: spam, blocklisted, low reputation, no reply">Tags</SortTh>
+                <SortTh k="signals" sort={sort} onSort={sortBy} title="Strikes first: spam, blocklisted, low reputation, no reply, no response">Tags</SortTh>
                 <SortTh k="sent" sort={sort} onSort={sortBy} num>Sent</SortTh>
+                <SortTh k="replies" sort={sort} onSort={sortBy} num title="Every reply, out of office included">Replies</SortTh>
                 <SortTh k="human" sort={sort} onSort={sortBy} num>Human</SortTh>
-                <SortTh k="quiet" sort={sort} onSort={sortBy} num title="Days since the last human reply">Last reply</SortTh>
+                <SortTh k="quiet" sort={sort} onSort={sortBy} num title="Days since the last reply of any kind, out of office included">Last reply</SortTh>
                 <SortTh k="rep" sort={sort} onSort={sortBy} num title="Average warmup reputation of connected inboxes">Rep</SortTh>
                 <SortTh k="spam" sort={sort} onSort={sortBy} num title="Spam and blocklist rejections">Spam</SortTh>
                 <SortTh k="missing" sort={sort} onSort={sortBy} num title="Bounces to addresses that don't exist">No address</SortTh>
@@ -403,8 +404,9 @@ export function ReviewView({ initial, clients }: { initial: ReviewData; clients:
                     <td><span className={`badge tone-${m.tone}`} title={r.why}>{m.label}</span></td>
                     <td className="rv-sig-cell" title={r.why}>{r.chips.length ? <Chips chips={r.chips} /> : <span className="zero">—</span>}</td>
                     <td className="is-num">{r.sent ? int(r.sent) : <span className="zero">0</span>}</td>
+                    <td className="is-num">{r.replies ? int(r.replies) : <span className={r.sent >= RULES.silentSent ? "metric is-bad" : "zero"}>0</span>}</td>
                     <td className="is-num">{r.human ? int(r.human) : <span className="zero">0</span>}</td>
-                    <td className="is-num" title={r.quietDays == null ? "Nothing sent yet" : r.neverReplied ? `No human reply on record (${int(r.sentSinceReply)} sent)` : `${int(r.sentSinceReply)} sent since`}>
+                    <td className="is-num" title={r.quietDays == null ? "Nothing sent yet" : r.neverReplied ? `No reply on record (${int(r.sentSinceReply)} sent)` : `${int(r.sentSinceReply)} sent since`}>
                       {r.quietDays == null ? <span className="zero">—</span>
                         : <span className={`metric${r.quietDays >= RULES.longQuietDays && r.sentSinceReply >= RULES.quietSent ? " is-bad" : r.quietDays >= RULES.quietDays && r.sentSinceReply >= RULES.quietSent ? " is-warn" : ""}`}>
                           {r.neverReplied ? `${r.quietDays}d+` : r.quietDays === 0 ? "Today" : `${r.quietDays}d`}

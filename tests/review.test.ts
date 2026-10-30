@@ -88,11 +88,23 @@ describe("weekly review calls", () => {
     const j = judge(domain({ human: 0, rep: 84, lowRepInboxes: 3, quietDays: 9, sentSinceReply: 1200 }));
     expect(j.verdict).toBe("rest");
     expect(j.chips.map((c) => c.text)).toEqual(["Rep 84", "No reply 9d"]);
-    expect(j.why).toBe("Warmup reputation 84.0 (3 inboxes under 90), no human reply for 9 days (1,200 sent since); 0 human replies");
+    expect(j.why).toBe("Warmup reputation 84.0 (3 inboxes under 90), no reply of any kind for 9 days (1,200 sent since); 0 human replies");
     expect(judge(domain({ rep: 84 })).verdict).toBe("watch");
     expect(judge(domain({ quietDays: 4, sentSinceReply: 500 })).chips[0]).toMatchObject({ text: "No reply 4d", tone: "warning" });
     expect(judge(domain({ quietDays: 12, neverReplied: true, sentSinceReply: 900 })).chips[0].text).toBe("No reply 12+d");
     expect(judge(domain({ quietDays: 9, sentSinceReply: 120 })).chips).toEqual([]);
+  });
+
+  it("replaces a domain that got not one reply, not even an out of office, on real volume", () => {
+    const j = judge(domain({ sent: 640, replies: 0, human: 0, quietDays: 5, sentSinceReply: 900 }));
+    expect(j.verdict).toBe("rest");
+    expect(j.chips).toEqual([expect.objectContaining({ key: "silent", text: "No response · 640 sent", tone: "danger" })]);
+    expect(j.why).toBe("Not one reply on 640 sent, not even an out of office");
+    // Out-of-office replies alone show it lands: no strike at all.
+    expect(judge(domain({ sent: 640, replies: 3, human: 0, quietDays: 1, sentSinceReply: 80 })).verdict).toBe("ok");
+    // Too few sent, or replies still due from the last day or two: not yet.
+    expect(judge(domain({ sent: 250, replies: 0, human: 0, quietDays: 5, sentSinceReply: 250 })).chips).toEqual([]);
+    expect(judge(domain({ sent: 640, replies: 0, human: 0, quietDays: 2, sentSinceReply: 640 })).verdict).toBe("ok");
   });
 
   it("only watches two strikes while human replies still come in", () => {

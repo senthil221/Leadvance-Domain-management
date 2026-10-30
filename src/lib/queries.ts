@@ -626,10 +626,16 @@ export async function listSendingPlans() {
 export type StatDomain = {
   id: string; name: string; status: DomainStatus; clientId: string | null; clientName: string | null; clientHue: number | null;
   tags: string[]; inboxes: number; capacity: number;
+  /** Sender names on the domain's connected inboxes, and their mail provider (Outlook, Google, SMTP). */
+  senders: string[]; esp: string | null;
   prevSent: number; prevReplies: number; prevHuman: number; prevBounces: number;
 };
-/** One domain on one day; only days with any activity. */
-export type StatDay = { d: string; day: string; sent: number; replies: number; human: number; ooo: number; negative: number; bounces: number; rep: number | null };
+/**
+ * One domain on one day; only days with any activity. `replies` counts every
+ * reply, out of office included; `slReplies` is Smartlead's own count, which
+ * leaves out out-of-office replies.
+ */
+export type StatDay = { d: string; day: string; sent: number; replies: number; slReplies: number; human: number; ooo: number; negative: number; bounces: number; rep: number | null };
 export type StatsData = { from: string; to: string; today: string; domains: StatDomain[]; days: StatDay[] };
 
 /**
@@ -646,6 +652,10 @@ export async function getStats(from: string, to: string): Promise<StatsData> {
       select d.id, d.name, d.status, d.client_id, c.name as client_name, c.hue as client_hue, d.tags,
         (select count(*)::int from inboxes i where i.domain_id = d.id and i.status = 'connected') as inboxes,
         (select coalesce(sum(i.daily_limit), 0)::int from inboxes i where i.domain_id = d.id and i.status = 'connected') as capacity,
+        (select coalesce(array_agg(distinct trim(i.sender_name) order by trim(i.sender_name)), '{}') from inboxes i
+          where i.domain_id = d.id and i.status = 'connected' and trim(coalesce(i.sender_name, '')) <> '') as senders,
+        (select case when count(distinct i.provider_type) > 1 then 'MIXED' else max(i.provider_type) end from inboxes i
+          where i.domain_id = d.id and i.status = 'connected') as esp,
         coalesce(p.sent, 0) as prev_sent, coalesce(p.replies, 0) as prev_replies, coalesce(p.human, 0) as prev_human, coalesce(p.bounces, 0) as prev_bounces
       from domains d cross join r
       left join clients c on c.id = d.client_id
@@ -656,9 +666,11 @@ export async function getStats(from: string, to: string): Promise<StatsData> {
         or exists (select 1 from domain_daily_stats x where x.domain_id = d.id and (x.day between r.f and r.t or x.day between r.pf and r.pt))
       order by d.name`,
     sql<StatDay[]>`
-      select s.domain_id as d, to_char(s.day, 'YYYY-MM-DD') as day, s.sent, s.replies, s.human_replies as human, s.ooo, s.negative, s.bounces,
-        s.warmup_reputation::float8 as rep
+      select s.domain_id as d, to_char(s.day, 'YYYY-MM-DD') as day, s.sent, s.replies, coalesce(x.replies, 0) as sl_replies,
+        s.human_replies as human, s.ooo, s.negative, s.bounces, s.warmup_reputation::float8 as rep
       from domain_daily_stats s
+      join domains dd on dd.id = s.domain_id
+      left join smartlead_domain_daily x on x.domain_name = dd.name and x.day = s.day
       where s.day between ${from}::date and ${to}::date and (s.sent > 0 or s.replies > 0 or s.bounces > 0)
       order by s.day`,
   ]);
@@ -797,16 +809,17 @@ export async function getReview(from: string, to: string): Promise<import("./rev
       rep as (
         select domain_id, round(avg(warmup_reputation), 1)::float8 as rep, (count(*) filter (where warmup_reputation < 90))::int as low
         from inboxes where status = 'connected' and warmup_reputation is not null group by 1),
-      -- Human replies are on record from the day the webhook first brought one in.
-      since as (select min(day) as day from domain_daily_stats where human_replies > 0),
+      -- Any reply counts, out of office included: it shows the mail reached an
+      -- inbox. Replies are on record from the first day one came in.
+      since as (select min(day) as day from domain_daily_stats where replies > 0),
       hr as (
-        select domain_id, max(day) filter (where human_replies > 0) as last_human, min(day) filter (where sent > 0) as first_sent
+        select domain_id, max(day) filter (where replies > 0) as last_reply, min(day) filter (where sent > 0) as first_sent
         from domain_daily_stats where day <= ${to}::date group by 1),
       quiet as (
-        select hr.domain_id, hr.last_human is null as never,
-          (${to}::date - coalesce(hr.last_human, greatest(hr.first_sent, since.day)))::int as days,
+        select hr.domain_id, hr.last_reply is null as never,
+          (${to}::date - coalesce(hr.last_reply, greatest(hr.first_sent, since.day)))::int as days,
           (select coalesce(sum(s.sent), 0)::int from domain_daily_stats s
-            where s.domain_id = hr.domain_id and s.day <= ${to}::date and s.day > coalesce(hr.last_human, '-infinity'::date)) as sent_since
+            where s.domain_id = hr.domain_id and s.day <= ${to}::date and s.day > coalesce(hr.last_reply, '-infinity'::date)) as sent_since
         from hr cross join since where hr.first_sent is not null)
       select d.id, d.name, d.status::text as status, d.client_id, c.name as client_name, c.hue as client_hue, d.tags,
         (select count(*)::int from inboxes i where i.domain_id = d.id and i.status = 'connected') as inboxes,
