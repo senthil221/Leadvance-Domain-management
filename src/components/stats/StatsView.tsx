@@ -3,12 +3,12 @@
 import { DomainLink } from "@/components/domains/DomainLink";
 import { BarChart3, CalendarDays, ChevronRight, Copy, Download, Loader, Search } from "lucide-react";
 import { useSearchParams } from "next/navigation";
-import { type CSSProperties, Fragment, useMemo, useState, useTransition } from "react";
+import { Fragment, useMemo, useState, useTransition } from "react";
 import { toast } from "sonner";
 import { loadStats } from "@/app/actions";
 import { ColumnsMenu, useColumns, type ColumnDef } from "@/components/Columns";
 import { SortTh } from "@/components/SortTh";
-import { ClientCell, Empty, Metric, Rep, StatusDot } from "@/components/ui";
+import { ClientCell, Empty, Metric, Rep, StatusDot, TagList } from "@/components/ui";
 import { clientDays, clientDaySheet, rr, type ClientDays, type DayFigures } from "@/lib/client-days";
 import { int } from "@/lib/format";
 import type { ClientRow, StatDomain, StatsData } from "@/lib/queries";
@@ -37,12 +37,13 @@ const total = (rows: Row[]): Totals => {
   return t;
 };
 
-type SortKey = "name" | "status" | "client" | "sender" | "esp" | "inboxes" | "usage" | "sent" | "replies" | "human" | "ooo" | "negative" | "bounces" | "replyRate" | "slRate" | "humanRate" | "bounceRate" | "reputation";
+type SortKey = "name" | "status" | "client" | "sender" | "tags" | "esp" | "inboxes" | "usage" | "sent" | "replies" | "human" | "ooo" | "negative" | "bounces" | "replyRate" | "slRate" | "humanRate" | "bounceRate" | "reputation";
 const sortValue = (r: Row, k: SortKey, len: number): string | number | null => {
   switch (k) {
     case "status": return DOMAIN_STATUSES.indexOf(r.status);
     case "client": return r.clientName?.toLowerCase() ?? null;
     case "sender": return r.senders[0]?.toLowerCase() ?? null;
+    case "tags": return r.allTags[0]?.toLowerCase() ?? null;
     case "esp": return r.esp;
     case "replyRate": return rate(r.replies, r.sent);
     case "slRate": return rate(r.slReplies, r.sent);
@@ -60,6 +61,7 @@ const groupValue = (g: { name: string | null; rows: Row[] }, k: SortKey, len: nu
     case "client": return g.name?.toLowerCase() ?? null;
     case "status":
     case "sender":
+    case "tags":
     case "esp": return null;
     case "replyRate": return rate(t.replies, t.sent);
     case "slRate": return rate(t.slReplies, t.sent);
@@ -104,7 +106,7 @@ const gc = (key: string, on: (k: string) => boolean) => {
 };
 
 const COLUMNS: ColumnDef[] = [
-  { key: "client", label: "Client (when not grouped)" }, { key: "sender", label: "Sender name" }, { key: "esp", label: "ESP", hidden: true },
+  { key: "client", label: "Client (when not grouped)" }, { key: "sender", label: "Sender name" }, { key: "tags", label: "Tags", hidden: true }, { key: "esp", label: "ESP", hidden: true },
   { key: "inboxes", label: "Inboxes" }, { key: "usage", label: "Used" }, { key: "sent", label: "Sent" },
   { key: "slReplies", label: "Replies ex. OOO" }, { key: "replies", label: "Replies incl. OOO" },
   { key: "human", label: "Human" }, { key: "ooo", label: "Out of office", hidden: true }, { key: "negative", label: "Not interested", hidden: true },
@@ -126,7 +128,7 @@ function Pair({ n, of, digits = 2, tone, warn, bad }: { n: number; of: number; d
 }
 
 /** `agg` marks a client's summary row: each figure gets a small Sum or Avg caption. */
-function Cells({ r, len, on, maxSent = 0, agg = false }: { r: Totals; len: number; on: (k: string) => boolean; maxSent?: number; agg?: boolean }) {
+function Cells({ r, len, on, agg = false }: { r: Totals; len: number; on: (k: string) => boolean; agg?: boolean }) {
   const c = (k: string) => `is-num ${gc(k, on)}`;
   const cap = (t: "Sum" | "Avg") => (agg ? <span className="st-agg">{t}</span> : null);
   const before = r.prevSent ? `${int(r.prevSent)} sent, ${int(r.prevReplies)} replies, ${int(r.prevBounces)} bounces the ${len} day${len === 1 ? "" : "s"} before` : undefined;
@@ -139,7 +141,7 @@ function Cells({ r, len, on, maxSent = 0, agg = false }: { r: Totals; len: numbe
         </td>
       ) : null}
       {on("sent") ? (
-        <td className={`${c("sent")} st-bar`} title={before} style={maxSent ? ({ "--w": `${Math.round((100 * r.sent) / maxSent)}%` } as CSSProperties) : undefined}>
+        <td className={c("sent")} title={before}>
           {cap("Sum")}{r.sent ? <span className="strong text-ink">{int(r.sent)}</span> : <span className="zero">0</span>}
         </td>
       ) : null}
@@ -250,7 +252,7 @@ export function StatsView({ initial, clients }: { initial: StatsData; clients: C
   const visible = useMemo(() => data.domains.filter((d) =>
     (!clientId || d.clientId === clientId) &&
     (!statusSet || (statusSet === "active") === (d.status === "active")) &&
-    (!needle || d.name.includes(needle) || d.clientName?.toLowerCase().includes(needle) || d.tags.some((t) => t.toLowerCase().includes(needle)) ||
+    (!needle || d.name.includes(needle) || d.clientName?.toLowerCase().includes(needle) || d.allTags.some((t) => t.toLowerCase().includes(needle)) ||
       d.senders.some((s) => s.toLowerCase().includes(needle)))),
   [data.domains, clientId, statusSet, needle]);
 
@@ -306,12 +308,10 @@ export function StatsView({ initial, clients }: { initial: StatsData; clients: C
   };
 
   const t = total(rows);
-  const maxSent = Math.max(0, ...rows.map((r) => r.sent));
   const showClient = !byClient && on("client");
   const colCount = 1 + (showClient ? 1 : 0) + COLUMNS.filter((c) => c.key !== "client" && on(c.key)).length;
   const allOpen = byClient && groups.length > 0 && groups.every((g) => openClients.has(g.key));
   const toggleAll = () => setOpenClients(allOpen ? new Set() : new Set(groups.map((g) => g.key)));
-  const maxClientSent = Math.max(0, ...groups.map((g) => total(g.rows).sent));
   const maxDay = Math.max(1, ...days.map((d) => d.sent));
   const sortBy = (key: SortKey) => setSort((s) => flip(s, key, key === "name" || key === "client" || key === "status"));
   const sortDay = (key: DayKey) => setDaySort((s) => flip(s, key, false));
@@ -327,8 +327,8 @@ export function StatsView({ initial, clients }: { initial: StatsData; clients: C
         [...days].sort((a, b) => a.day.localeCompare(b.day)).map((d) => [d.day, d.domains, d.sent, d.slReplies, d.replies, d.human, d.ooo, d.negative, d.bounces]));
     } else {
       const fx = (v: number | null) => (v == null ? "" : v.toFixed(2));
-      download(`stats-by-domain-${data.from}-${data.to}.csv`, ["domain", "status", "client", "sender", "esp", "inboxes", "capacity_per_day", "sent", "replies_ex_ooo", "replies_incl_ooo", "human", "ooo", "negative", "bounces", "reply_rate_ex_ooo", "reply_rate_incl_ooo", "human_rate", "bounce_rate", "reputation"],
-        rows.map((r) => [r.name, r.status, r.clientName, r.senders.join(", "), r.esp, r.inboxes, r.capacity, r.sent, r.slReplies, r.replies, r.human, r.ooo, r.negative, r.bounces,
+      download(`stats-by-domain-${data.from}-${data.to}.csv`, ["domain", "status", "client", "sender", "tags", "esp", "inboxes", "capacity_per_day", "sent", "replies_ex_ooo", "replies_incl_ooo", "human", "ooo", "negative", "bounces", "reply_rate_ex_ooo", "reply_rate_incl_ooo", "human_rate", "bounce_rate", "reputation"],
+        rows.map((r) => [r.name, r.status, r.clientName, r.senders.join(", "), r.allTags.join("; "), r.esp, r.inboxes, r.capacity, r.sent, r.slReplies, r.replies, r.human, r.ooo, r.negative, r.bounces,
           fx(rate(r.slReplies, r.sent)), fx(rate(r.replies, r.sent)), fx(rate(r.human, r.sent)), fx(rate(r.bounces, r.sent)), fx(r.reputation)]));
     }
   };
@@ -398,6 +398,7 @@ export function StatsView({ initial, clients }: { initial: StatsData; clients: C
                   <SortTh k="name" sort={sort} onSort={sortBy}>{byClient ? "Client / domain" : "Domain"}</SortTh>
                   {showClient ? <SortTh k="client" sort={sort} onSort={sortBy}>Client</SortTh> : null}
                   {on("sender") ? <SortTh k="sender" sort={sort} onSort={sortBy} title="Sender names on the domain's connected inboxes">Sender</SortTh> : null}
+                  {on("tags") ? <SortTh k="tags" sort={sort} onSort={sortBy} title="The domain's tags and the Smartlead tags on its inboxes">Tags</SortTh> : null}
                   {on("esp") ? <SortTh k="esp" sort={sort} onSort={sortBy}>ESP</SortTh> : null}
                   {on("inboxes") ? <SortTh k="inboxes" sort={sort} onSort={sortBy} num className={gc("inboxes", on)}>Inboxes</SortTh> : null}
                   {on("usage") ? <SortTh k="usage" sort={sort} onSort={sortBy} num className={gc("usage", on)} title="Sent as a share of the inboxes' daily limits over the range">Used</SortTh> : null}
@@ -427,8 +428,9 @@ export function StatsView({ initial, clients }: { initial: StatsData; clients: C
                           </span>
                         </td>
                         {on("sender") ? <td /> : null}
+                        {on("tags") ? <td /> : null}
                         {on("esp") ? <td /> : null}
-                        <Cells r={{ ...total(g.rows), reputation: avgRep(g.rows) }} len={len} on={on} maxSent={maxClientSent} agg />
+                        <Cells r={{ ...total(g.rows), reputation: avgRep(g.rows) }} len={len} on={on} agg />
                       </tr>
                     ) : null}
                     {(!byClient || openClients.has(g.key)) && g.rows.map((r, i) => (
@@ -447,8 +449,13 @@ export function StatsView({ initial, clients }: { initial: StatsData; clients: C
                             {r.senders.length ? <>{r.senders[0]}{r.senders.length > 1 ? <span className="text-faint"> +{r.senders.length - 1}</span> : null}</> : <span className="zero">—</span>}
                           </td>
                         ) : null}
+                        {on("tags") ? (
+                          <td title={r.allTags.join(", ") || undefined}>
+                            {r.allTags.length ? <span className="inline-flex items-center gap-1"><TagList tags={r.allTags} max={3} /></span> : <span className="zero">—</span>}
+                          </td>
+                        ) : null}
                         {on("esp") ? <td className="text-muted text-[12px]">{r.esp ?? <span className="zero">—</span>}</td> : null}
-                        <Cells r={r} len={len} on={on} maxSent={maxSent} />
+                        <Cells r={r} len={len} on={on} />
                       </tr>
                     ))}
                     {byClient && openClients.has(g.key) ? <tr className="st-gap" aria-hidden><td colSpan={colCount} /></tr> : null}

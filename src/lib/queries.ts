@@ -628,6 +628,8 @@ export type StatDomain = {
   tags: string[]; inboxes: number; capacity: number;
   /** Sender names on the domain's connected inboxes, and their mail provider (Outlook, Google, SMTP). */
   senders: string[]; esp: string | null;
+  /** The domain's own tags, then the Smartlead tags on its inboxes that aren't already among them. */
+  allTags: string[];
   prevSent: number; prevReplies: number; prevHuman: number; prevBounces: number;
 };
 /**
@@ -656,6 +658,10 @@ export async function getStats(from: string, to: string): Promise<StatsData> {
           where i.domain_id = d.id and i.status = 'connected' and trim(coalesce(i.sender_name, '')) <> '') as senders,
         (select case when count(distinct i.provider_type) > 1 then 'MIXED' else max(i.provider_type) end from inboxes i
           where i.domain_id = d.id and i.status = 'connected') as esp,
+        coalesce(d.tags, '{}') || (select coalesce(array_agg(x.t order by x.n desc, x.t), '{}') from (
+          select trim(t) as t, count(*) as n from inboxes i cross join unnest(i.smartlead_tags) t
+          where i.domain_id = d.id and i.status <> 'removed' and trim(t) <> ''
+            and lower(trim(t)) <> all (select lower(dt) from unnest(coalesce(d.tags, '{}')) dt) group by 1) x) as all_tags,
         coalesce(p.sent, 0) as prev_sent, coalesce(p.replies, 0) as prev_replies, coalesce(p.human, 0) as prev_human, coalesce(p.bounces, 0) as prev_bounces
       from domains d cross join r
       left join clients c on c.id = d.client_id

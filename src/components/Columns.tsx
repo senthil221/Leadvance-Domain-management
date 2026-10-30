@@ -7,6 +7,10 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 // Per-table column visibility. The choice is remembered in this browser only
 // (it is a viewing preference), and the page renders fine without it.
 
+// Hidden-by-default columns added in the release that started saving the list
+// of columns a choice was made against.
+const ADDED_BEFORE_SEEN: string[] = ["tags"];
+
 export type ColumnDef<K extends string = string> = { key: K; label: string; hidden?: boolean; locked?: boolean };
 
 export function useColumns<K extends string>(table: string, defs: ColumnDef<K>[]) {
@@ -17,16 +21,24 @@ export function useColumns<K extends string>(table: string, defs: ColumnDef<K>[]
   useEffect(() => {
     try {
       const raw = window.localStorage.getItem(storageKey);
+      // Columns added since the choice was saved start the way they're defined,
+      // so a new hidden-by-default column stays hidden. Older saves have no list.
+      const seen = JSON.parse(window.localStorage.getItem(`${storageKey}:seen`) ?? "null") as K[] | null;
+      const saved = raw ? (JSON.parse(raw) as K[]).filter((k) => defs.some((d) => d.key === k && !d.locked)) : null;
+      const added = [...defaults].filter((k) => (seen ? !seen.includes(k) : ADDED_BEFORE_SEEN.includes(k)));
       // Restoring a saved preference after hydration is the point of this effect.
       // eslint-disable-next-line react-hooks/set-state-in-effect
-      if (raw) setHidden(new Set((JSON.parse(raw) as K[]).filter((k) => defs.some((d) => d.key === k && !d.locked))));
+      if (saved) setHidden(new Set([...saved, ...added]));
     } catch { /* storage unavailable: keep defaults */ }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [storageKey]);
 
   const save = (next: Set<K>) => {
     setHidden(next);
-    try { window.localStorage.setItem(storageKey, JSON.stringify([...next])); } catch { /* ignore */ }
+    try {
+      window.localStorage.setItem(storageKey, JSON.stringify([...next]));
+      window.localStorage.setItem(`${storageKey}:seen`, JSON.stringify(defs.map((d) => d.key)));
+    } catch { /* ignore */ }
   };
   const toggle = (k: K) => { const n = new Set(hidden); if (n.has(k)) n.delete(k); else n.add(k); save(n); };
   const reset = () => { save(new Set(defaults)); };
