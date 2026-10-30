@@ -123,7 +123,7 @@ export function judge(d: ReviewDomain): Judged {
   if (d.disconnected && !d.inboxes) return out("dead", said(["disconnected"]));
   if (ownSetup) return out("fix", `${said(["tenant", "dns", "disconnected"])}${against ? `; ${against}` : ""}`);
   if (d.status === "active" && d.sent === 0) return out("idle", ["Nothing sent", said(["disconnected", "lowrep"])].filter(Boolean).join("; "));
-  if (judged && d.human === 0 && (heavySpam || (c.blocklist ?? 0) >= RULES.restBlocklist)) return out("rest", `${against}, no human replies`);
+  if (judged && d.human === 0 && (heavySpam || (c.blocklist ?? 0) >= RULES.restBlocklist)) return out("rest", chips.some((x) => x.key === "quiet") ? against : `${against}, no human replies`);
   if (strikes >= 2 && !replying) return out("rest", `${against}; ${humans}`);
   if (strikes >= 1) return out("watch", `${against}; ${humans}`);
   if (d.disconnected) return out("fix", said(["disconnected"]));
@@ -142,6 +142,24 @@ export type ClientSummary = {
   id: string; name: string; hue: number | null; domains: number; counts: Record<Verdict, number>;
   sent: number; human: number; bounces: number; spam: number;
 };
+
+/** A cell Google Sheets pastes as plain text: no tabs or line breaks, and never read as a formula. */
+const cell = (v: string | number | null) => {
+  const t = v == null ? "" : String(v).replace(/[\t\r\n]+/g, " ").trim();
+  return /^[=+\-@]/.test(t) ? `'${t}` : t;
+};
+
+/** Tab-separated rows with a header, ready to paste into Google Sheets: one column per fact. */
+export function sheetRows(list: Judged[]): string {
+  const head = ["Domain", "Call", "Reason", "Signals", "Smartlead tags", "Client", "Status", "Sent", "Human replies", "Spam rejections",
+    "Bounce rate", "Warmup reputation", "Days since human reply", "Inboxes connected", "Inboxes disconnected"];
+  const rows = list.map((d) => [
+    d.name, VERDICT_META[d.verdict].label, d.why, d.chips.map((c) => c.text).join(", "), d.slTags.join(", "), d.clientName, d.status,
+    d.sent, d.human, d.spam, d.sent ? `${((100 * d.bounces) / d.sent).toFixed(2)}%` : "", d.rep,
+    d.quietDays == null ? "" : `${d.quietDays}${d.neverReplied ? "+" : ""}`, d.inboxes, d.disconnected,
+  ].map(cell).join("\t"));
+  return [head.join("\t"), ...rows].join("\n");
+}
 
 /** Rows of domains grouped by keys (a domain can sit in several), worst first: most to fix or replace, then to watch. */
 function summarize(domains: Judged[], keys: (d: Judged) => { id: string; name: string; hue: number | null }[]): ClientSummary[] {

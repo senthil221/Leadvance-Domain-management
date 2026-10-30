@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { bounceCauseOf, bounceReason } from "../src/lib/bounces";
 import { matchPreset, monday, presetRange, previousLabel, previousRange } from "../src/lib/range";
-import { badLists, byClient, bySmartleadTag, judge, type ReviewDomain } from "../src/lib/review";
+import { badLists, byClient, bySmartleadTag, judge, sheetRows, type ReviewDomain } from "../src/lib/review";
 
 const domain = (over: Partial<ReviewDomain> = {}): ReviewDomain => ({
   id: "d1", name: "welvion.com", status: "active", clientId: null, clientName: "Qualifi", clientHue: null, tags: [],
@@ -124,6 +124,16 @@ describe("weekly review calls", () => {
     ]);
     expect(rows.map((r) => r.name)).toEqual(["Mvinix", "No client", "Qualifi"]);
     expect(rows[0].counts.fix).toBe(1);
+  });
+
+  it("copies rows Google Sheets splits into columns, with a header", () => {
+    const [head, row] = sheetRows([judge(domain({ inboxes: 0, disconnected: 52, slTags: ["Remove", "-old"] }))]).split("\n");
+    expect(head.split("\t").slice(0, 3)).toEqual(["Domain", "Call", "Reason"]);
+    const cols = row.split("\t");
+    expect(cols.length).toBe(head.split("\t").length);
+    expect(cols.slice(0, 3)).toEqual(["welvion.com", "Disconnected", "52 of 52 inboxes disconnected"]);
+    expect(cols[4]).toBe("Remove, -old");
+    expect(sheetRows([judge(domain({ slTags: ["=cmd"] }))]).split("\n")[1].split("\t")[4]).toBe("'=cmd");
   });
 
   it("counts a domain under each of its Smartlead tags", () => {

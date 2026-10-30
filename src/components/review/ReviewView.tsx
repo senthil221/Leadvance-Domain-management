@@ -1,7 +1,7 @@
 "use client";
 
 import { DomainLink } from "@/components/domains/DomainLink";
-import { ChevronLeft, ChevronRight, ClipboardList, Copy, ListChecks, Search, Tag, TagsIcon, X } from "lucide-react";
+import { ChevronLeft, ChevronRight, Copy, ListChecks, Search, Sheet, Tag, TagsIcon, X } from "lucide-react";
 import { useMemo, useState, useTransition } from "react";
 import { toast } from "sonner";
 import { loadReview, tagDomains } from "@/app/actions";
@@ -13,7 +13,7 @@ import { int } from "@/lib/format";
 import type { ClientRow } from "@/lib/queries";
 import { nice, previousLabel } from "@/lib/range";
 import {
-  RULES, SIGNAL_META, SIGNAL_ORDER, VERDICT_META, VERDICT_ORDER, badLists, byClient, bySmartleadTag, judge,
+  RULES, SIGNAL_META, SIGNAL_ORDER, VERDICT_META, VERDICT_ORDER, badLists, byClient, bySmartleadTag, judge, sheetRows,
   type Chip, type ClientSummary, type Judged, type ReviewData, type Signal, type Verdict,
 } from "@/lib/review";
 
@@ -158,8 +158,6 @@ export function ReviewView({ initial, clients }: { initial: ReviewData; clients:
     setSelected(new Set(byVerdict.get(v)!.map((d) => d.id)));
     setTag(VERDICT_META[v].label.split(" ")[0]);
   };
-  const reasons = (list: Judged[]) => list.map((d) => [d.name, d.slTags.join(", "), d.clientName ?? "", VERDICT_META[d.verdict].label, d.chips.map((c) => c.text).join(", "), d.why].join("\t")).join("\n");
-  const withTags = (list: Judged[]) => list.map((d) => [d.name, d.slTags.join(", ")].join("\t")).join("\n");
   const applyTag = (on: boolean) => startTag(async () => {
     const r = await tagDomains({ domainIds: selectedRows.map((d) => d.id), tag, on });
     if (!r.ok) return void toast.error(r.error);
@@ -241,8 +239,7 @@ export function ReviewView({ initial, clients }: { initial: ReviewData; clients:
               {list.length ? (
                 <div className="rv-actions">
                   <button type="button" className="btn btn-sm" onClick={() => copy(list.map((d) => d.name).join("\n"), plural(list.length, "domain"))}><Copy size={13} /> Copy</button>
-                  <button type="button" className="btn btn-sm" title="Domain and its Smartlead tags, tab separated" onClick={() => copy(withTags(list), "with Smartlead tags")}><TagsIcon size={13} /> With tags</button>
-                  <button type="button" className="btn btn-sm" title="Domain, Smartlead tags, client, call, signals and reason, tab separated: paste into Sheets or Slack" onClick={() => copy(reasons(list), "with reasons")}><ClipboardList size={13} /> With reasons</button>
+                  <button type="button" className="btn btn-sm" title="Domain, call, reason, signals, Smartlead tags, client and numbers, one column each with a header row: paste into Google Sheets" onClick={() => copy(sheetRows(list), `${plural(list.length, "domain")} for Sheets`)}><Sheet size={13} /> Copy for Sheets</button>
                   <button type="button" className="btn btn-sm" onClick={() => pickList(v)}><Tag size={13} /> Tag</button>
                 </div>
               ) : null}
@@ -431,8 +428,7 @@ export function ReviewView({ initial, clients }: { initial: ReviewData; clients:
           <button type="button" className="btn btn-sm" disabled={!tag.trim() || tagging} onClick={() => applyTag(false)}>Remove</button>
           <span className="sep" />
           <button type="button" className="btn btn-sm" onClick={() => copy(selectedRows.map((d) => d.name).join("\n"), plural(selectedRows.length, "domain"))}><Copy size={14} /> Copy</button>
-          <button type="button" className="btn btn-sm" onClick={() => copy(withTags(selectedRows), "with Smartlead tags")}><TagsIcon size={14} /> With tags</button>
-          <button type="button" className="btn btn-sm" onClick={() => copy(reasons(selectedRows), "with reasons")}><ClipboardList size={14} /> With reasons</button>
+          <button type="button" className="btn btn-sm" title="One column per fact with a header row: paste into Google Sheets" onClick={() => copy(sheetRows(selectedRows), `${plural(selectedRows.length, "domain")} for Sheets`)}><Sheet size={14} /> Copy for Sheets</button>
           <span className="sep" />
           <button type="button" className="btn btn-sm" aria-label="Clear selection" onClick={() => setSelected(new Set())}><X size={14} /></button>
         </div>
