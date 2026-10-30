@@ -4,6 +4,7 @@ import { createPorkbun, type Porkbun } from "../integrations/porkbun";
 import { createSmartlead, type Smartlead } from "../integrations/smartlead";
 import { createSmartleadApp, type SmartleadApp } from "../integrations/smartlead-app";
 import { syncBlacklists } from "./blacklist";
+import { fillBounceCauses } from "./bounce-causes";
 import { syncPorkbunDomains } from "./porkbun-sync";
 import { syncHypertideOrders } from "./hypertide-sync";
 import { processInboxChanges, runDuePlans } from "./inbox-settings";
@@ -111,6 +112,12 @@ export const JOBS: Job[] = [
     label: "Porkbun domains",
     everyMinutes: 360,
     run: needsPorkbun(({ sql, porkbun }) => syncPorkbunDomains(sql, porkbun)),
+  },
+  {
+    name: "bounce-causes",
+    label: "Bounce reasons",
+    everyMinutes: 2,
+    run: ({ sql }) => fillBounceCauses(sql),
   },
   {
     name: "rollup",

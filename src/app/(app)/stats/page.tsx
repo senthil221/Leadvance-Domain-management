@@ -3,8 +3,7 @@ import { Suspense } from "react";
 import { StatsView } from "@/components/stats/StatsView";
 import { PageHead, TableSkeleton } from "@/components/ui";
 import { getCurrentUser } from "@/lib/auth";
-import { sql } from "@/lib/db";
-import { getStats, listClients } from "@/lib/queries";
+import { getStats, listClients, thisWeek } from "@/lib/queries";
 
 export const metadata: Metadata = { title: "Stats" };
 
@@ -23,10 +22,7 @@ export default function StatsPage() {
 
 async function StatsData() {
   await getCurrentUser();
-  // Today in the stats timezone; the date picker changes it.
-  const [{ from, to }] = await sql<{ from: string; to: string }[]>`
-    with t as (select (now() at time zone coalesce((select value #>> '{}' from settings where key = 'stats_timezone'), 'UTC'))::date as d)
-    select to_char(d, 'YYYY-MM-DD') as from, to_char(d, 'YYYY-MM-DD') as to from t`;
+  const { from, to } = await thisWeek(); // Monday to today; the date picker changes it
   const [data, clients] = await Promise.all([getStats(from, to), listClients()]);
   return <StatsView initial={data} clients={clients} />;
 }

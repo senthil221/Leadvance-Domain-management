@@ -58,7 +58,7 @@ export async function syncAccounts(sql: Sql, sl: Smartlead) {
       insert into domains (name, status, client_id, inbox_provider_id)
       select r.domain,
         (case when max(coalesce(r.daily_limit, 0)) > 0 then 'active' else 'warming' end)::domain_status,
-        (select c.id from clients c where c.smartlead_client_id = max(r.client_id)),
+        (select coalesce(c.merged_into, c.id) from clients c where c.smartlead_client_id = max(r.client_id)),
         (select v.id from vendors v where v.name = 'Hypertide')
       from ${recordset(tx)}
       where r.domain ~ '^[a-z0-9-]+(\\.[a-z0-9-]+)+$'
@@ -127,7 +127,7 @@ export async function syncAccounts(sql: Sql, sl: Smartlead) {
 
     // Domains without a client take the one their Smartlead inboxes belong to.
     await tx`
-      update domains d set client_id = c.id
+      update domains d set client_id = coalesce(c.merged_into, c.id)
       from (select r.domain, max(r.client_id) as sl_client from ${recordset(tx)} group by r.domain) x
       join clients c on c.smartlead_client_id = x.sl_client
       where d.name = x.domain and d.client_id is null and d.status <> 'in_storage'`;
@@ -235,7 +235,7 @@ export async function syncCampaigns(sql: Sql, sl: Smartlead) {
   if (campaigns.length) {
     await sql`
       insert into campaigns (id, name, status, client_id, synced_at)
-      select c.id, c.name, c.status, (select x.id from clients x where x.smartlead_client_id = c.client_id), now()
+      select c.id, c.name, c.status, (select coalesce(x.merged_into, x.id) from clients x where x.smartlead_client_id = c.client_id), now()
       from jsonb_to_recordset(${sql.json(campaigns.map((c) => ({ id: c.id, name: c.name, status: c.status, client_id: c.clientId })))})
         as c(id bigint, name text, status text, client_id bigint)
       on conflict (id) do update set name = excluded.name, status = excluded.status,

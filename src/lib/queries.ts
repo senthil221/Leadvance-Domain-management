@@ -2,6 +2,7 @@ import { parseSavedPairs } from "@/lib/tag-map";
 import { parseWarmupProgram } from "@/lib/warmup-program";
 import "server-only";
 import { attentionDomainCount } from "./attention";
+import { monday, previousRange } from "./range";
 import { senderOverview, tagOverview } from "./tag-list";
 import { sql } from "./db";
 import type { DomainStatus, ReplacementReason, StepStatus } from "./status";
@@ -633,14 +634,15 @@ export type StatsData = { from: string; to: string; today: string; domains: Stat
 
 /**
  * Per-domain, per-day numbers for any range (up to 92 days), plus each
- * domain's totals for the same-length period just before, for the change.
+ * domain's totals for the same weekdays before (previousRange), for the change.
  */
 export async function getStats(from: string, to: string): Promise<StatsData> {
+  const [pf, pt] = previousRange(from, to);
   const [[{ today }], domains, days] = await Promise.all([
     sql<{ today: string }[]>`
       select to_char((now() at time zone coalesce((select value #>> '{}' from settings where key = 'stats_timezone'), 'UTC'))::date, 'YYYY-MM-DD') as today`,
     sql<StatDomain[]>`
-      with r as (select ${from}::date as f, ${to}::date as t, (${to}::date - ${from}::date + 1) as len)
+      with r as (select ${from}::date as f, ${to}::date as t, ${pf}::date as pf, ${pt}::date as pt)
       select d.id, d.name, d.status, d.client_id, c.name as client_name, c.hue as client_hue, d.tags,
         (select count(*)::int from inboxes i where i.domain_id = d.id and i.status = 'connected') as inboxes,
         (select coalesce(sum(i.daily_limit), 0)::int from inboxes i where i.domain_id = d.id and i.status = 'connected') as capacity,
@@ -649,9 +651,9 @@ export async function getStats(from: string, to: string): Promise<StatsData> {
       left join clients c on c.id = d.client_id
       left join lateral (
         select sum(s.sent)::int as sent, sum(s.replies)::int as replies, sum(s.human_replies)::int as human, sum(s.bounces)::int as bounces
-        from domain_daily_stats s where s.domain_id = d.id and s.day between r.f - r.len and r.f - 1) p on true
+        from domain_daily_stats s where s.domain_id = d.id and s.day between r.pf and r.pt) p on true
       where d.status in ('warming', 'active', 'draining')
-        or exists (select 1 from domain_daily_stats x where x.domain_id = d.id and x.day between r.f - r.len and r.t)
+        or exists (select 1 from domain_daily_stats x where x.domain_id = d.id and (x.day between r.f and r.t or x.day between r.pf and r.pt))
       order by d.name`,
     sql<StatDay[]>`
       select s.domain_id as d, to_char(s.day, 'YYYY-MM-DD') as day, s.sent, s.replies, s.human_replies as human, s.ooo, s.negative, s.bounces,
@@ -698,6 +700,12 @@ export async function getEventDetail(id: number): Promise<EventDetail | null> {
   };
 }
 
+/** Monday to today, in the stats timezone. */
+export async function thisWeek() {
+  const { to } = await lastDays(1);
+  return { from: monday(to), to };
+}
+
 /** The last n days in the stats timezone, today included. */
 export async function lastDays(n: number) {
   const [r] = await sql<{ from: string; to: string }[]>`
@@ -718,6 +726,8 @@ export type EventRow = {
   bounceText: string | null;
   /** The receiving server's error quoted in the notice's HTML, e.g. "553 … badmailfrom list (#5.7.1)". */
   bounceRemote: string | null;
+  /** Why it bounced, worked out when it arrived (bounces only; older ones until the bounce_causes job reaches them). */
+  bounceCause: import("./bounces").BounceReason | null;
 };
 export type EventsData = { from: string; to: string; today: string; events: EventRow[]; sent: Record<string, number> };
 
@@ -734,14 +744,15 @@ export async function getEvents(kind: "reply" | "bounce", from: string, to: stri
       select e.id, e.occurred_at, e.reply_class, e.class_overridden, e.preview, e.subject, e.lead_email,
         nullif(trim(e.payload->>'to_name'), '') as lead_name, e.inbox_email,
         e.domain_id, coalesce(d.name, e.domain_name) as domain, e.campaign_name, e.sequence_number as sequence,
-        e.client_id, c.name as client_name, c.hue as client_hue, e.recipient_esp,
+        coalesce(d.client_id, e.client_id) as client_id, c.name as client_name, c.hue as client_hue, e.recipient_esp, e.bounce_cause,
         coalesce(e.payload->>'ui_master_inbox_link', e.payload->>'app_url') as link,
         case when e.kind = 'bounce' then left(coalesce(e.payload->'bounce_message'->>'text', e.payload->>'description'), 600) end as bounce_text,
         -- Office 365 quotes the receiving server's own error only in the HTML version.
         case when e.kind = 'bounce' then left(replace(substring(regexp_replace(coalesce(e.payload->'bounce_message'->>'html', ''), '<[^>]+>', ' ', 'g')
           from 'Remote server returned an error.{0,250}'), '&gt;', '>'), 300) end as bounce_remote
       from email_events e cross join tz
-      left join domains d on d.id = e.domain_id left join clients c on c.id = e.client_id
+      -- The sending domain's client, as on every other page; the event's own only when the domain has none.
+      left join domains d on d.id = e.domain_id left join clients c on c.id = coalesce(d.client_id, e.client_id)
       where e.kind = ${kind}::event_kind
         and (e.occurred_at at time zone tz.z)::date between ${from}::date and ${to}::date
       order by e.occurred_at desc
@@ -751,6 +762,63 @@ export async function getEvents(kind: "reply" | "bounce", from: string, to: stri
       where day between ${from}::date and ${to}::date group by domain_id`,
   ]);
   return { from, to, today: t.today, events, sent: Object.fromEntries(sent.map((s) => [s.domainId, s.sent])) };
+}
+
+/**
+ * Everything the weekly review judges, per domain: the range's numbers, the
+ * same weekdays before (previousRange), why its bounces happened, and its
+ * inboxes. Plus each campaign's bounces, to spot lists that need re-verifying.
+ */
+export async function getReview(from: string, to: string): Promise<import("./review").ReviewData> {
+  const [pf, pt] = previousRange(from, to);
+  const [[t], domains, campaigns] = await Promise.all([
+    sql<{ today: string }[]>`
+      select to_char((now() at time zone coalesce((select value #>> '{}' from settings where key = 'stats_timezone'), 'UTC'))::date, 'YYYY-MM-DD') as today`,
+    sql<import("./review").ReviewDomain[]>`
+      with tz as (select coalesce((select value #>> '{}' from settings where key = 'stats_timezone'), 'UTC') as z),
+      cur as (
+        select domain_id, sum(sent)::int as sent, sum(replies)::int as replies, sum(human_replies)::int as human, sum(bounces)::int as bounces
+        from domain_daily_stats where day between ${from}::date and ${to}::date group by 1),
+      prev as (
+        select domain_id, sum(sent)::int as sent, sum(human_replies)::int as human
+        from domain_daily_stats where day between ${pf}::date and ${pt}::date group by 1),
+      ev as (
+        select e.domain_id,
+          jsonb_object_agg(e.cause, e.n) filter (where e.cur) as causes,
+          coalesce(sum(e.n) filter (where not e.cur and e.cause in ('spam', 'blocklist')), 0)::int as prev_spam
+        from (
+          select domain_id, coalesce(bounce_cause, 'other') as cause, (occurred_at at time zone tz.z)::date >= ${from}::date as cur, count(*)::int as n
+          from email_events cross join tz
+          where kind = 'bounce' and domain_id is not null
+            and (occurred_at at time zone tz.z)::date between ${pf}::date and ${to}::date
+            and ((occurred_at at time zone tz.z)::date <= ${pt}::date or (occurred_at at time zone tz.z)::date >= ${from}::date)
+          group by 1, 2, 3) e
+        group by 1)
+      select d.id, d.name, d.status::text as status, d.client_id, c.name as client_name, c.hue as client_hue, d.tags,
+        (select count(*)::int from inboxes i where i.domain_id = d.id and i.status = 'connected') as inboxes,
+        (select count(*)::int from inboxes i where i.domain_id = d.id and i.status = 'disconnected') as disconnected,
+        (coalesce(d.blacklist_domain_count, 0) + coalesce(d.blacklist_ip_count, 0))::int as blacklisted,
+        coalesce(cur.sent, 0) as sent, coalesce(cur.replies, 0) as replies, coalesce(cur.human, 0) as human, coalesce(cur.bounces, 0) as bounces,
+        coalesce(ev.causes, '{}'::jsonb) as causes,
+        coalesce(prev.sent, 0) as prev_sent, coalesce(prev.human, 0) as prev_human, coalesce(ev.prev_spam, 0) as prev_spam
+      from domains d
+      left join clients c on c.id = d.client_id
+      left join cur on cur.domain_id = d.id
+      left join prev on prev.domain_id = d.id
+      left join ev on ev.domain_id = d.id
+      where d.status in ('warming', 'active', 'draining') or cur.sent > 0
+      order by d.name`,
+    sql<import("./review").ReviewCampaign[]>`
+      with tz as (select coalesce((select value #>> '{}' from settings where key = 'stats_timezone'), 'UTC') as z)
+      select e.campaign_id::int as id, max(e.campaign_name) as name, max(c.name) as client_name,
+        count(*)::int as bounces, (count(*) filter (where e.bounce_cause = 'missing'))::int as missing
+      from email_events e cross join tz
+      left join domains d on d.id = e.domain_id left join clients c on c.id = coalesce(d.client_id, e.client_id)
+      where e.kind = 'bounce' and e.campaign_id is not null
+        and (e.occurred_at at time zone tz.z)::date between ${from}::date and ${to}::date
+      group by e.campaign_id`,
+  ]);
+  return { from, to, today: t.today, domains, campaigns };
 }
 
 // ---------------------------------------------------------------------------

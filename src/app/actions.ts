@@ -412,6 +412,34 @@ export async function archiveEmptyClients(): Promise<ActionResult<{ archived: nu
   }
 }
 
+/**
+ * Folds one client into another: its domains, campaigns, replies, bounces,
+ * tags and sender names move over, and it is hidden. Smartlead clients keep
+ * pointing at the client they were merged into on every later sync.
+ */
+export async function mergeClient(input: { from: string; into: string }): Promise<ActionResult<{ name: string; into: string }>> {
+  try {
+    await requireActor();
+    const v = z.object({ from: z.uuid(), into: z.uuid() }).refine((x) => x.from !== x.into, "Pick a different client").parse(input);
+    const out = await sql.begin(async (tx) => {
+      const [src] = await tx<{ name: string }[]>`select name from clients where id = ${v.from} and merged_into is null`;
+      const [dst] = await tx<{ name: string }[]>`select name from clients where id = ${v.into} and archived_at is null and merged_into is null`;
+      if (!src || !dst) throw new UserError("That client is gone or already merged.");
+      for (const t of ["domains", "campaigns", "email_events", "replacement_items", "sending_plans", "client_tags", "client_senders"]) {
+        await tx`update ${tx(t)} set client_id = ${v.into} where client_id = ${v.from}`;
+      }
+      // Anything merged into the old client follows it.
+      await tx`update clients set merged_into = ${v.into} where merged_into = ${v.from}`;
+      await tx`update clients set merged_into = ${v.into}, archived_at = coalesce(archived_at, now()) where id = ${v.from}`;
+      return { name: src.name, into: dst.name };
+    });
+    refresh();
+    return { ok: true, data: out };
+  } catch (e) {
+    return fail(e);
+  }
+}
+
 export async function createClient(name: string): Promise<ActionResult<{ id: string }>> {
   try {
     await requireActor();
@@ -840,6 +868,38 @@ export async function loadStats(input: z.input<typeof statsRange>): Promise<Acti
     const { from, to } = statsRange.parse(input);
     const { getStats } = await import("@/lib/queries");
     return { ok: true, data: await getStats(from, to) };
+  } catch (e) {
+    return fail(e);
+  }
+}
+
+export async function loadReview(input: z.input<typeof statsRange>): Promise<ActionResult<import("@/lib/review").ReviewData>> {
+  try {
+    await requireActor();
+    const { from, to } = statsRange.parse(input);
+    const { getReview } = await import("@/lib/queries");
+    return { ok: true, data: await getReview(from, to) };
+  } catch (e) {
+    return fail(e);
+  }
+}
+
+/** Puts a tag on (or takes it off) domains in this app, to set them apart (Rest, Watch, …). Smartlead isn't touched. */
+export async function tagDomains(input: { domainIds: string[]; tag: string; on: boolean }): Promise<ActionResult<{ changed: number }>> {
+  try {
+    await requireActor();
+    const v = z.object({ domainIds: ids, tag: z.string().trim().min(1, "Name the tag").max(40), on: z.boolean() }).parse(input);
+    // Same spelling as a tag already in use, whatever the case typed.
+    const [known] = await sql<{ t: string }[]>`
+      select t from domains, unnest(tags) t where lower(t) = lower(${v.tag}) limit 1`;
+    const tag = known?.t ?? v.tag;
+    const rows = v.on
+      ? await sql`update domains set tags = array(select distinct x from unnest(tags || array[${tag}]::text[]) x order by 1)
+          where id = any(${v.domainIds}::uuid[]) and not (${tag} = any(tags)) returning id`
+      : await sql`update domains set tags = array(select x from unnest(tags) x where lower(x) <> lower(${tag}) order by 1)
+          where id = any(${v.domainIds}::uuid[]) and exists (select 1 from unnest(tags) x where lower(x) = lower(${tag})) returning id`;
+    refresh();
+    return { ok: true, data: { changed: rows.length } };
   } catch (e) {
     return fail(e);
   }

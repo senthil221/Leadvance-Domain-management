@@ -3,7 +3,7 @@
 import { Plus } from "lucide-react";
 import { useState, useTransition } from "react";
 import { toast } from "sonner";
-import { createClient, saveHypertideTemplate, saveSettings, saveWarmupProgram } from "@/app/actions";
+import { createClient, mergeClient, saveHypertideTemplate, saveSettings, saveWarmupProgram } from "@/app/actions";
 import { ClientCell } from "@/components/ui";
 import type { ClientRow } from "@/lib/queries";
 import type { WarmupProgram } from "@/lib/warmup-program";
@@ -123,6 +123,20 @@ export function ClientsList({ clients }: { clients: ClientRow[] }) {
           <div key={c.id} className="list-row">
             <ClientCell name={c.name} hue={c.hue} />
             <span className="list-meta ml-auto">{c.activeCount} active domain{c.activeCount === 1 ? "" : "s"}</span>
+            {/* A Smartlead client that is really another client (a sender's name like "Gia" for Qualifi). */}
+            <select className="select" style={{ width: 150 }} value="" disabled={pending} aria-label={`Merge ${c.name} into another client`}
+              onChange={(e) => {
+                const into = clients.find((x) => x.id === e.target.value);
+                if (!into || !confirm(`Merge ${c.name} into ${into.name}? Its domains, campaigns, replies and bounces move to ${into.name}, and Smartlead keeps sending them there.`)) return;
+                startTransition(async () => {
+                  const r = await mergeClient({ from: c.id, into: into.id });
+                  if (!r.ok) return void toast.error(r.error);
+                  toast.success(`${r.data.name} merged into ${r.data.into}`);
+                });
+              }}>
+              <option value="">Merge into…</option>
+              {clients.filter((x) => x.id !== c.id).map((x) => <option key={x.id} value={x.id}>{x.name}</option>)}
+            </select>
           </div>
         ))}
       </div>

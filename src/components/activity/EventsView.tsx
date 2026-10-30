@@ -26,7 +26,7 @@ const REPLY_TAGS = Object.keys(REPLY_CLASS_META) as ReplyClass[];
 const POSITIVE = new Set(["human", "referral"]);
 const NOT_A_FIT = new Set(["negative", "wrong_person", "unsubscribe"]);
 
-const tagOf = (kind: Kind, e: EventRow) => (kind === "reply" ? e.replyClass ?? "human" : bounceReason(`${e.bounceRemote ?? ""} ${e.bounceText ?? ""}`));
+const tagOf = (kind: Kind, e: EventRow) => (kind === "reply" ? e.replyClass ?? "human" : (e.bounceCause ?? bounceReason(`${e.bounceRemote ?? ""} ${e.bounceText ?? ""}`)));
 const metaOf = (kind: Kind, t: string): Meta => (kind === "reply" ? (REPLY_CLASS_META as Record<string, Meta>)[t] : BOUNCE_META[t as BounceReason]) ?? { label: t, tone: "faint" };
 const pct = (n: number, d: number) => (d > 0 ? `${((100 * n) / d).toFixed((100 * n) / d < 1 ? 2 : 1)}%` : "—");
 const companyOf = (email: string | null) => email?.split("@")[1]?.replace(/^mail\./, "") ?? null;

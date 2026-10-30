@@ -2,10 +2,10 @@
 
 import { CalendarDays, Loader } from "lucide-react";
 import { useState } from "react";
-import { PRESETS, daysBetween, nice, presetRange, type PresetKey } from "@/lib/range";
+import { PRESETS, daysBetween, matchPreset, nice, presetRange, type PresetKey } from "@/lib/range";
 
 /** A date range: a preset, or two dates and Apply. Calls onChange with the new range. */
-export function RangePicker({ from, to, today, loading, onChange, initial = from === to && to === today ? "today" : "7d" }: {
+export function RangePicker({ from, to, today, loading, onChange, initial = matchPreset(from, to, today) }: {
   from: string; to: string; today: string; loading?: boolean;
   onChange: (from: string, to: string) => void;
   initial?: PresetKey;

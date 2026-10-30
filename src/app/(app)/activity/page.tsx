@@ -3,7 +3,7 @@ import { Suspense } from "react";
 import { EventsView } from "@/components/activity/EventsView";
 import { PageHead, TableSkeleton } from "@/components/ui";
 import { getCurrentUser } from "@/lib/auth";
-import { getEvents, lastDays } from "@/lib/queries";
+import { getEvents, thisWeek } from "@/lib/queries";
 
 export const metadata: Metadata = { title: "Replies" };
 
@@ -22,6 +22,6 @@ export default function RepliesPage() {
 
 async function RepliesData() {
   await getCurrentUser();
-  const { from, to } = await lastDays(1); // today; the date picker changes it
+  const { from, to } = await thisWeek(); // Monday to today; the date picker changes it
   return <EventsView kind="reply" initial={await getEvents("reply", from, to)} />;
 }

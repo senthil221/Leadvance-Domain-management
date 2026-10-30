@@ -268,13 +268,13 @@ describe("bounce reasons", () => {
     const o365 = "Your message to akshat@ebizon.com couldn't be delivered.\nakshat wasn't found at ebizon.com.\ntwinklesingh_s  Office 365";
     expect(bounceReason(o365)).toBe("missing");
     expect(bounceLine(o365)).toBe("akshat wasn't found at ebizon.com.");
-    expect(bounceReason("550 5.7.1 Message rejected as spam by Content Filtering")).toBe("blocked");
+    expect(bounceReason("550 5.7.1 Message rejected as spam by Content Filtering")).toBe("spam");
     expect(bounceReason("552 5.2.2 The email account that you tried to reach is over quota")).toBe("full");
     expect(bounceReason("421 4.4.2 Connection timed out")).toBe("temporary");
     expect(bounceReason("The group sachin only accepts messages from people in its organization or on its allowed senders list")).toBe("restricted");
     expect(bounceReason("Your email couldn't be forwarded from a@b.com to another email address.")).toBe("restricted");
     const remote = "Remote server returned an error -> 553 sorry, your envelope sender is in my badmailfrom list (#5.7.1). REF-ID : MBFD Message rejected by: pro-155-67.rediffmailpro.com";
-    expect(bounceReason(remote)).toBe("blocked");
+    expect(bounceReason(remote)).toBe("blocklist");
     expect(bounceLine("When Office 365 tried to send your message, the receiving email server reported an error.", remote))
       .toBe("553 sorry, your envelope sender is in my badmailfrom list (#5.7.1). REF-ID : MBFD");
     expect(bounceReason("Something odd happened")).toBe("other");

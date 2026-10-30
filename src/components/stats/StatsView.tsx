@@ -12,7 +12,7 @@ import { ClientCell, Empty, Metric, Rep, StatusDot } from "@/components/ui";
 import { int } from "@/lib/format";
 import type { ClientRow, StatDomain, StatsData } from "@/lib/queries";
 import { DOMAIN_STATUSES } from "@/lib/status";
-import { PRESETS, addDays, daysBetween, nice, presetRange, weekday, type PresetKey } from "@/lib/range";
+import { PRESETS, addDays, daysBetween, matchPreset, nice, presetRange, previousLabel, weekday, type PresetKey } from "@/lib/range";
 
 // ---------------------------------------------------------------------------
 // Aggregation
@@ -152,7 +152,7 @@ function download(name: string, head: string[], lines: unknown[][]) {
 
 export function StatsView({ initial, clients }: { initial: StatsData; clients: ClientRow[] }) {
   const [data, setData] = useState(initial);
-  const [preset, setPreset] = useState<PresetKey>(initial.from === initial.to && initial.to === initial.today ? "today" : "7d");
+  const [preset, setPreset] = useState<PresetKey>(() => matchPreset(initial.from, initial.to, initial.today));
   const [from, setFrom] = useState(initial.from);
   const [to, setTo] = useState(initial.to);
   const [view, setView] = useState<"domain" | "day">("domain");
@@ -160,6 +160,8 @@ export function StatsView({ initial, clients }: { initial: StatsData; clients: C
   const params = useSearchParams();
   const [clientId, setClientId] = useState(() => params.get("client") ?? "");
   const [onlySending, setOnlySending] = useState(true);
+  // Active domains (in campaigns) apart from the rest (warming, draining, retired).
+  const [statusSet, setStatusSet] = useState<"" | "active" | "other">(() => (params.get("status") === "active" || params.get("status") === "other" ? params.get("status") as "active" | "other" : ""));
   // One line per client to start; open a client to see its domains.
   const [byClient, setByClient] = useState(true);
   const [openClients, setOpenClients] = useState<Set<string>>(new Set());
@@ -184,8 +186,9 @@ export function StatsView({ initial, clients }: { initial: StatsData; clients: C
   const needle = q.trim().toLowerCase();
   const visible = useMemo(() => data.domains.filter((d) =>
     (!clientId || d.clientId === clientId) &&
+    (!statusSet || (statusSet === "active") === (d.status === "active")) &&
     (!needle || d.name.includes(needle) || d.clientName?.toLowerCase().includes(needle) || d.tags.some((t) => t.toLowerCase().includes(needle)))),
-  [data.domains, clientId, needle]);
+  [data.domains, clientId, statusSet, needle]);
 
   const rows = useMemo(() => {
     const byId = new Map<string, Row>(visible.map((d) => [d.id, { ...d, ...zero(), reputation: null }]));
@@ -256,7 +259,7 @@ export function StatsView({ initial, clients }: { initial: StatsData; clients: C
   return (
     <div className="flex flex-col gap-3">
       <section className="stats" aria-label="Totals">
-        <div className="stat"><span className="stat-label">Sent · {rangeLabel}</span><span className="stat-value">{int(t.sent)}</span><span className="stat-foot">{t.prevSent ? <>vs {int(t.prevSent)} the {len} days before<Delta now={t.sent} before={t.prevSent} /></> : `${int(Math.round(t.sent / len))} a day on average`}</span></div>
+        <div className="stat"><span className="stat-label">Sent · {rangeLabel}</span><span className="stat-value">{int(t.sent)}</span><span className="stat-foot">{t.prevSent ? <>vs {int(t.prevSent)} {previousLabel(data.from, data.to)}<Delta now={t.sent} before={t.prevSent} /></> : `${int(Math.round(t.sent / len))} a day on average`}</span></div>
         <div className="stat"><span className="stat-label">Reply rate</span><span className="stat-value">{rate(t.replies, t.sent)?.toFixed(2) ?? "—"}%</span><span className="stat-foot">{int(t.replies)} replies · {int(t.ooo)} out of office<Delta now={rate(t.replies, t.sent)} before={rate(t.prevReplies, t.prevSent)} points /></span></div>
         <div className="stat"><span className="stat-label">Human replies</span><span className="stat-value">{int(t.human)}</span><span className="stat-foot">{rate(t.human, t.sent)?.toFixed(2) ?? "0.00"}% of sent · {int(t.negative)} not interested</span></div>
         <div className="stat"><span className="stat-label">Bounce rate</span><span className="stat-value">{rate(t.bounces, t.sent)?.toFixed(1) ?? "—"}%</span><span className="stat-foot">{int(t.bounces)} bounces<Delta now={rate(t.bounces, t.sent)} before={rate(t.prevBounces, t.prevSent)} points invert /></span></div>
@@ -285,6 +288,11 @@ export function StatsView({ initial, clients }: { initial: StatsData; clients: C
         <select className="select" style={{ width: 150 }} value={clientId} onChange={(e) => setClientId(e.target.value)} aria-label="Filter by client">
           <option value="">All clients</option>
           {clients.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+        </select>
+        <select className="select" style={{ width: 130 }} value={statusSet} onChange={(e) => setStatusSet(e.target.value as "" | "active" | "other")} aria-label="Filter by status">
+          <option value="">All domains</option>
+          <option value="active">Active</option>
+          <option value="other">Not active</option>
         </select>
         {view === "domain" ? (
           <>
