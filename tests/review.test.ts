@@ -109,6 +109,13 @@ describe("weekly review calls", () => {
     expect(judge(domain({ causes: { sender: 2 } })).chips).toEqual([]);
   });
 
+  it("keeps fully disconnected domains out of idle and fix", () => {
+    const j = judge(domain({ inboxes: 0, disconnected: 52, sent: 0, causes: { sender: 4 } }));
+    expect(j.verdict).toBe("dead");
+    expect(j.why).toBe("52 of 52 inboxes disconnected");
+    expect(judge(domain({ sent: 0, disconnected: 3 })).verdict).toBe("idle");
+  });
+
   it("puts the clients with most to fix or replace first", () => {
     const rows = byClient([
       judge(domain({ id: "a", clientId: "q", clientName: "Qualifi" })),

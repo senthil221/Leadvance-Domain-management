@@ -5,17 +5,18 @@ import type { BounceReason } from "./bounces";
 // warmup reputation and days without a human reply count against the domain;
 // addresses that don't exist count against the list.
 
-export type Verdict = "fix" | "rest" | "watch" | "idle" | "low" | "ok";
+export type Verdict = "fix" | "rest" | "dead" | "watch" | "idle" | "low" | "ok";
 
 export const VERDICT_META: Record<Verdict, { label: string; tone: "danger" | "warning" | "info" | "faint" | "success"; hint: string }> = {
   fix: { label: "Fix sender", tone: "danger", hint: "Our own setup is failing: tenant or mailbox blocked, DNS missing, or inboxes disconnected" },
   rest: { label: "Replace", tone: "danger", hint: "Two strikes (spam, blocklisted, low rep, no reply for days) or heavy spam with no replies: pull it and line up a replacement" },
+  dead: { label: "Disconnected", tone: "danger", hint: "Every inbox is disconnected: we can't get into them. Delete or replace in one go" },
   watch: { label: "Watch", tone: "warning", hint: "One strike so far: still worth sending, at lower volume" },
-  idle: { label: "Idle", tone: "info", hint: "Active, but nothing was sent in this range" },
+  idle: { label: "Idle", tone: "info", hint: "Active with inboxes connected, but nothing was sent in this range" },
   low: { label: "Too little sent", tone: "faint", hint: "Not enough sent in this range to judge" },
   ok: { label: "OK", tone: "success", hint: "Nothing to act on" },
 };
-export const VERDICT_ORDER: Verdict[] = ["fix", "rest", "watch", "idle", "low", "ok"];
+export const VERDICT_ORDER: Verdict[] = ["fix", "rest", "dead", "watch", "idle", "low", "ok"];
 
 /** The thresholds. A domain needs MIN_SENT in the range before it is judged on rates. */
 export const RULES = {
@@ -116,6 +117,8 @@ export function judge(d: ReviewDomain): Judged {
   // A human reply in the last few days says the domain still lands.
   const replying = d.quietDays != null && d.quietDays < RULES.quietDays && !d.neverReplied;
 
+  // No inbox left to log into: nothing else about the domain matters.
+  if (d.disconnected && !d.inboxes) return out("dead", said(["disconnected"]));
   if (ownSetup) return out("fix", `${said(["tenant", "dns", "disconnected"])}${against ? `; ${against}` : ""}`);
   if (d.status === "active" && d.sent === 0) return out("idle", ["Nothing sent", said(["disconnected", "lowrep"])].filter(Boolean).join("; "));
   if (judged && d.human === 0 && (heavySpam || (c.blocklist ?? 0) >= RULES.restBlocklist)) return out("rest", `${against}, no human replies`);
@@ -145,7 +148,7 @@ export function byClient(domains: Judged[]): ClientSummary[] {
     const id = d.clientId ?? "";
     let r = m.get(id);
     if (!r) {
-      r = { id, name: d.clientName ?? "No client", hue: d.clientHue, domains: 0, counts: { fix: 0, rest: 0, watch: 0, idle: 0, low: 0, ok: 0 }, sent: 0, human: 0, bounces: 0, spam: 0 };
+      r = { id, name: d.clientName ?? "No client", hue: d.clientHue, domains: 0, counts: { fix: 0, rest: 0, dead: 0, watch: 0, idle: 0, low: 0, ok: 0 }, sent: 0, human: 0, bounces: 0, spam: 0 };
       m.set(id, r);
     }
     r.domains++; r.counts[d.verdict]++;
