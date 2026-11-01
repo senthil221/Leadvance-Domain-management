@@ -1425,3 +1425,94 @@ export async function removeRegistrarAccount(id: string): Promise<ActionResult> 
     return fail(e);
   }
 }
+
+// ---------------------------------------------------------------------------
+// Icemail workspaces (Settings → Connections). Same as registrars: the key is
+// tested by reading the workspace, stored encrypted, and never sent back.
+// ---------------------------------------------------------------------------
+
+const icemailInput = z.object({
+  id: z.uuid().optional(),
+  label: z.string().trim().min(1, "Give the workspace a name").max(60, "Keep the name under 60 characters"),
+  apiKey: z.string().max(2000).optional(),
+});
+
+export async function saveIcemailAccount(input: z.input<typeof icemailInput>): Promise<ActionResult<{ message: string }>> {
+  try {
+    const actor = await requireActor();
+    const { id, label, apiKey: raw } = icemailInput.parse(input);
+    const typed = (raw ?? "").trim().replace(/^["']|["']$/g, "");
+    if (typed && /\s/.test(typed)) throw new UserError("The API key has a space in it; copy it again");
+    const { open, seal } = await import("@/lib/secret-box");
+    const [existing] = id ? await sql`select credentials from icemail_accounts where id = ${id}` : [];
+    if (id && !existing) throw new UserError("That workspace was removed");
+    const apiKey = typed || (existing ? open(existing.credentials as string).apiKey : "");
+    if (!apiKey) throw new UserError("Paste the Icemail API key");
+
+    const { createIcemail } = await import("@/integrations/icemail");
+    const client = createIcemail({ apiKey, sql: jobSql });
+    let workspace;
+    try {
+      workspace = await client.workspace();
+    } catch (e) {
+      throw new UserError(`Icemail didn't accept this key: ${e instanceof Error ? e.message : String(e)}`);
+    }
+    const dupe = await sql`select 1 from icemail_accounts where lower(label) = lower(${label}) and id is distinct from ${id ?? null}::uuid`;
+    if (dupe.length) throw new UserError(`There's already a workspace called ${label}`);
+
+    const { randomBytes } = await import("node:crypto");
+    const hint = apiKey.slice(-4);
+    const [row] = id
+      ? await sql`update icemail_accounts set label = ${label}, credentials = ${seal({ apiKey })}, key_hint = ${hint} where id = ${id} returning id`
+      : await sql`insert into icemail_accounts (label, credentials, key_hint, workspace_id, workspace_name, webhook_token, created_by)
+          values (${label}, ${seal({ apiKey })}, ${hint}, ${workspace.id}, ${workspace.name}, ${randomBytes(24).toString("hex")}, ${actor}) returning id`;
+
+    const { syncIcemailAccount } = await import("@/jobs/icemail-sync");
+    let r;
+    try {
+      r = await syncIcemailAccount(jobSql, { id: row.id as string, label, client });
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      await sql`update icemail_accounts set last_synced_at = now(), last_ok = false, last_error = ${msg.slice(0, 1000)} where id = ${row.id}`;
+      refresh();
+      return { ok: true, data: { message: `Saved, but the first sync failed: ${msg}` } };
+    }
+    refresh();
+    const name = workspace.name ? `${workspace.name}: ` : "";
+    return { ok: true, data: { message: `Connected. ${name}${r.domains} domains, ${r.mailboxes} mailboxes, ${r.linked} matched to Smartlead inboxes.` } };
+  } catch (e) {
+    if (e instanceof Error && /CREDENTIALS_SECRET|can't be read/.test(e.message)) return { ok: false, error: e.message };
+    return fail(e);
+  }
+}
+
+export async function syncIcemailNow(id: string): Promise<ActionResult<{ message: string }>> {
+  try {
+    await requireActor();
+    const accountId = z.uuid().parse(id);
+    const { loadIcemailAccounts, syncAllIcemail } = await import("@/jobs/icemail-sync");
+    const { accounts, broken } = await loadIcemailAccounts(jobSql);
+    const bad = broken.find((b) => b.id === accountId);
+    if (bad) throw new UserError(bad.error);
+    const account = accounts.find((a) => a.id === accountId);
+    if (!account) throw new UserError("That workspace was removed");
+    const r = await syncAllIcemail(jobSql, [account]).catch((e: Error) => { throw new UserError(e.message); });
+    refresh();
+    if (!("mailboxes" in r)) return { ok: true, data: { message: "Nothing to sync" } };
+    return { ok: true, data: { message: `${r.domains} domains, ${r.mailboxes} mailboxes, ${r.linked} matched to Smartlead inboxes.` } };
+  } catch (e) {
+    return fail(e);
+  }
+}
+
+export async function removeIcemailAccount(id: string): Promise<ActionResult> {
+  try {
+    await requireActor();
+    // Domains and inboxes stay; the mirrored Icemail rows and events go with it.
+    await sql`delete from icemail_accounts where id = ${z.uuid().parse(id)}`;
+    refresh();
+    return { ok: true, data: undefined };
+  } catch (e) {
+    return fail(e);
+  }
+}

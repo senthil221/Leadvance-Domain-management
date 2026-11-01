@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { headers } from "next/headers";
 import { Suspense } from "react";
 import { ClientSourcePicker, SenderMap, TagMap } from "@/components/settings/ClientAssignment";
+import { IcemailAccounts } from "@/components/settings/IcemailAccounts";
 import { RegistrarAccounts } from "@/components/settings/RegistrarAccounts";
 import { ClientsList, HypertideOrderForm, LifecycleForm, WarmupProgramForm } from "@/components/settings/SettingsForms";
 import { Panel, SettingsShell } from "@/components/settings/SettingsShell";
@@ -10,7 +11,7 @@ import { Badge, PageHead, Skeleton } from "@/components/ui";
 import { JOBS } from "@/jobs";
 import { getCurrentUser } from "@/lib/auth";
 import { summarize } from "@/lib/format";
-import { getSettings, listClients, listJobState, listRegistrarAccounts, listSenders, listTags } from "@/lib/queries";
+import { getSettings, listClients, listIcemailAccounts, listJobState, listRegistrarAccounts, listSenders, listTags } from "@/lib/queries";
 
 export const metadata: Metadata = { title: "Settings" };
 
@@ -36,13 +37,14 @@ export default function SettingsPage() {
 
 async function SettingsContent() {
   await getCurrentUser();
-  const [settings, clients, jobState, tags, senders, registrars] = await Promise.all([getSettings(), listClients(), listJobState(), listTags(), listSenders(), listRegistrarAccounts()]);
+  const [settings, clients, jobState, tags, senders, registrars, icemail] = await Promise.all([getSettings(), listClients(), listJobState(), listTags(), listSenders(), listRegistrarAccounts(), listIcemailAccounts()]);
   const envPorkbun = Boolean(process.env.PORKBUN_API_KEY && process.env.PORKBUN_SECRET_KEY);
   const dryRun = process.env.INTEGRATIONS_DRY_RUN !== "false";
   const token = process.env.SMARTLEAD_WEBHOOK_TOKEN;
   const webhookReady = Boolean(token);
   const host = process.env.APP_HOST ?? (await headers()).get("host") ?? "localhost:3000";
-  const webhookUrl = `${host.startsWith("localhost") ? "http" : "https"}://${host}/api/webhooks/smartlead/${token ?? ""}`;
+  const origin = `${host.startsWith("localhost") ? "http" : "https"}://${host}`;
+  const webhookUrl = `${origin}/api/webhooks/smartlead/${token ?? ""}`;
   const jobs: SyncJob[] = JOBS.map((j) => {
     const s = jobState.find((x) => x.job === j.name);
     return {
@@ -58,7 +60,7 @@ async function SettingsContent() {
     <SettingsShell sections={[
       {
         key: "connections", label: "Connections", title: "Connections", sub: "The services this app talks to. Keys never reach the browser: service keys live in the server's environment file, registrar keys are stored encrypted.",
-        badge: dryRun ? <span className="st-dot tone-warning" title="Dry run" /> : registrars.some((r) => r.lastOk === false) ? <span className="st-dot tone-danger" title="A registrar failed" /> : null,
+        badge: dryRun ? <span className="st-dot tone-warning" title="Dry run" /> : registrars.some((r) => r.lastOk === false) || icemail.some((a) => a.lastOk === false) ? <span className="st-dot tone-danger" title="A connection failed" /> : null,
         content: (
           <>
             <div className={`st-banner ${dryRun ? "tone-warning" : "tone-success"}`}>
@@ -68,6 +70,9 @@ async function SettingsContent() {
             </div>
             <Panel title="Domain registrars" sub="One row per login. Each account's domains are imported into Inventory, and the app sets their nameservers during setup and replacements." flush>
               <RegistrarAccounts accounts={registrars} envPorkbun={envPorkbun} />
+            </Panel>
+            <Panel title="Icemail" sub="Google inboxes bought on Icemail. Each workspace's mailboxes are matched to the inboxes Smartlead shows, with what they cost and when they bill. Order and mailbox events arrive through the webhook." flush>
+              <IcemailAccounts accounts={icemail} webhookBase={`${origin}/api/webhooks/icemail/`} />
             </Panel>
             <Panel title="Services" flush>
               <div className="list">

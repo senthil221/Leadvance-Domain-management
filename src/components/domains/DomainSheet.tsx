@@ -107,6 +107,16 @@ export function DomainSheet({
                 <dl className="kv">
                   <dt>Registrar</dt><dd>{d.domain.registrar ?? "—"}</dd>
                   <dt>Inbox provider</dt><dd>{d.domain.inboxProvider ?? "—"}</dd>
+                  {d.domain.icemailMailboxes || d.domain.icemailIssue ? (<>
+                    <dt>Icemail</dt>
+                    <dd className="flex flex-col">
+                      <span>
+                        {d.domain.icemailMailboxes ? `${d.domain.icemailMailboxes} mailbox${d.domain.icemailMailboxes === 1 ? "" : "es"} · $${(d.domain.icemailMonthly ?? 0).toFixed(2)}/month` : "No mailboxes"}
+                        {d.domain.icemailNextBill ? <span className="text-muted"> · next bill {shortDate(d.domain.icemailNextBill)}</span> : null}
+                      </span>
+                      {d.domain.icemailIssue ? <span className="text-[12px] text-danger-ink">{d.domain.icemailIssue}</span> : null}
+                    </dd>
+                  </>) : null}
                   <dt>Nameservers</dt>
                   <dd className="flex flex-col">
                     {d.domain.nameservers.length ? d.domain.nameservers.map((ns) => <span key={ns} className="mono">{ns}</span>) : "—"}

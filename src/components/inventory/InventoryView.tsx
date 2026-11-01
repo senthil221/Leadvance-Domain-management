@@ -19,16 +19,17 @@ import { LIFE, LIFE_ORDER, LIFE_TABS, htOf, lifeOf, nsOf, type Life } from "@/li
 
 // Ownership view of every domain: where it is in its life (free, setting up,
 // active, replaced, retired), where it is registered, where its nameservers
-// point and what Hypertide knows about it.
+// point, what Hypertide knows about it and what its Icemail inboxes cost.
 
 const COLUMNS: ColumnDef[] = [
   { key: "life", label: "Lifecycle" }, { key: "client", label: "Client" }, { key: "registrar", label: "Registrar" },
-  { key: "ns", label: "Nameservers" }, { key: "ht", label: "Hypertide" }, { key: "inboxes", label: "Inboxes" },
+  { key: "ns", label: "Nameservers" }, { key: "ht", label: "Hypertide" }, { key: "icemail", label: "Icemail" },
+  { key: "inboxes", label: "Inboxes" },
   { key: "capacity", label: "Per day" }, { key: "age", label: "Active for" }, { key: "bought", label: "Bought", hidden: true },
   { key: "renews", label: "Renews" },
 ];
 
-type SortKey = "name" | "life" | "client" | "registrar" | "ns" | "ht" | "inboxCount" | "capacity" | "purchasedAt" | "expiresAt" | "age";
+type SortKey = "name" | "life" | "client" | "registrar" | "ns" | "ht" | "icemailMonthly" | "inboxCount" | "capacity" | "purchasedAt" | "expiresAt" | "age";
 const sortValue = (d: DomainRow, k: SortKey): string | number | null => {
   switch (k) {
     case "life": return LIFE_ORDER.indexOf(lifeOf(d));
@@ -36,11 +37,14 @@ const sortValue = (d: DomainRow, k: SortKey): string | number | null => {
     case "registrar": return d.registrar?.toLowerCase() ?? null;
     case "ns": { const n = nsOf(d); return `${n.tone === "danger" ? 0 : n.tone === "warning" ? 1 : 2}${n.host ?? "~"}`; }
     case "ht": return htOf(d)?.label ?? null;
+    case "icemailMonthly": return d.icemailMailboxes ? d.icemailMonthly ?? 0 : null;
     case "purchasedAt": case "expiresAt": return d[k] ? new Date(d[k]!).getTime() : null;
     case "age": return d.activeSince ? new Date(d.activeSince).getTime() * -1 : null;
     default: return d[k] as string | number | null;
   }
 };
+
+const usd = (n: number) => `$${n.toFixed(n % 1 ? 2 : 0)}`;
 
 const replaceable = (d: DomainRow) => d.status === "active" || d.status === "warming";
 
@@ -162,10 +166,10 @@ export function InventoryView({ domains, clients }: { domains: DomainRow[]; clie
 
   const exportCsv = () => {
     const list = selectedRows.length ? selectedRows : rows;
-    const head = ["domain", "lifecycle", "status", "replaced_by", "client", "tags", "registrar", "registrar_account", "nameservers", "hypertide", "inboxes", "capacity_per_day", "purchased", "renews", "last_used", "reuse_from"];
+    const head = ["domain", "lifecycle", "status", "replaced_by", "client", "tags", "registrar", "registrar_account", "nameservers", "hypertide", "icemail_mailboxes", "icemail_per_month", "icemail_next_bill", "icemail_issue", "inboxes", "capacity_per_day", "purchased", "renews", "last_used", "reuse_from"];
     const esc = (v: unknown) => (v == null ? "" : /[",\n]/.test(String(v)) ? `"${String(v).replace(/"/g, '""')}"` : String(v));
     const day = (v: Date | null) => (v ? new Date(v).toISOString().slice(0, 10) : "");
-    const lines = list.map((d) => [d.name, LIFE[lifeOf(d)].label, d.status, d.replacedByName, d.clientName, d.tags.join("; "), d.registrar, d.registrarAccount, d.nameservers.join(" "), htOf(d)?.label, d.inboxCount, d.capacity, day(d.purchasedAt), day(d.expiresAt), day(d.lastUsedOn), day(d.coolingUntil)].map(esc).join(","));
+    const lines = list.map((d) => [d.name, LIFE[lifeOf(d)].label, d.status, d.replacedByName, d.clientName, d.tags.join("; "), d.registrar, d.registrarAccount, d.nameservers.join(" "), htOf(d)?.label, d.icemailMailboxes, d.icemailMonthly?.toFixed(2), day(d.icemailNextBill), d.icemailIssue, d.inboxCount, d.capacity, day(d.purchasedAt), day(d.expiresAt), day(d.lastUsedOn), day(d.coolingUntil)].map(esc).join(","));
     const url = URL.createObjectURL(new Blob([[head.join(","), ...lines].join("\n")], { type: "text/csv" }));
     Object.assign(document.createElement("a"), { href: url, download: `inventory-${new Date().toISOString().slice(0, 10)}.csv` }).click();
     URL.revokeObjectURL(url);
@@ -243,6 +247,7 @@ export function InventoryView({ domains, clients }: { domains: DomainRow[]; clie
                   {on("registrar") ? <Th k="registrar">Registrar</Th> : null}
                   {on("ns") ? <Th k="ns">Nameservers</Th> : null}
                   {on("ht") ? <Th k="ht">Hypertide</Th> : null}
+                  {on("icemail") ? <Th k="icemailMonthly">Icemail</Th> : null}
                   {on("inboxes") ? <Th k="inboxCount" num>Inboxes</Th> : null}
                   {on("capacity") ? <Th k="capacity" num>Per day</Th> : null}
                   {on("age") ? <Th k="age" num>Active</Th> : null}
@@ -309,6 +314,17 @@ export function InventoryView({ domains, clients }: { domains: DomainRow[]; clie
                       {on("ht") ? (
                       <td>{ht ? <Badge tone={ht.tone}>{ht.label}</Badge> : <span className="zero">—</span>}</td>
                       ) : null}
+                      {on("icemail") ? (
+                      <td>
+                        {d.icemailMailboxes ? (
+                          <span className="flex items-center gap-2" title={d.icemailNextBill ? `Next bill ${shortDate(d.icemailNextBill)}` : undefined}>
+                            <span className="text-muted">{int(d.icemailMailboxes)} · {usd(d.icemailMonthly ?? 0)}/mo</span>
+                            {d.icemailIssue ? <Badge tone="danger">{d.icemailIssue}</Badge> : null}
+                          </span>
+                        ) : d.icemailIssue ? <Badge tone="danger">{d.icemailIssue}</Badge> : <span className="zero">—</span>}
+                      </td>
+                      ) : null}
+
                       {on("inboxes") ? (
                       <td className="is-num">{d.inboxCount ? int(d.inboxCount) : <span className="zero">0</span>}</td>
                       ) : null}

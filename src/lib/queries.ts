@@ -214,6 +214,12 @@ export type DomainRow = {
   lastUsedOn: Date | null;
   /** A free domain used too recently to pick again, until this day. */
   coolingUntil: Date | null;
+  /** Live Icemail mailboxes on it, what they cost a month and when the next one bills. */
+  icemailMailboxes: number | null;
+  icemailMonthly: number | null;
+  icemailNextBill: Date | null;
+  /** What Icemail reports wrong with the domain: blacklisted, DNS records missing, not active. */
+  icemailIssue: string | null;
 };
 
 export async function listDomains() {
@@ -238,11 +244,26 @@ export async function listDomains() {
       ho.status as ht_order_status, ho.payment_status as ht_payment,
       nr.status as ns_request_status, nr.message as ns_request_message, nr.target as ns_request_target,
       rp.new_domain_id as replaced_by_id, rp.name as replaced_by_name, rp.created_at as replaced_at,
+      nullif(im.mailboxes, 0) as icemail_mailboxes, im.monthly as icemail_monthly, im.next_bill as icemail_next_bill,
+      case when ix.id is null then null
+        when ix.blacklisted then 'Blacklisted'
+        when false in (ix.spf, ix.dkim, ix.dmarc, ix.mx) then 'Missing ' || concat_ws(', ',
+          case when ix.spf is false then 'SPF' end, case when ix.dkim is false then 'DKIM' end,
+          case when ix.dmarc is false then 'DMARC' end, case when ix.mx is false then 'MX' end)
+        when ix.status is distinct from 'ACTIVE' then initcap(coalesce(ix.status, 'unknown'))
+      end as icemail_issue,
       (select coalesce(sum(i.daily_limit), 0)::int from inboxes i where i.domain_id = d.id and i.status = 'connected') as capacity
     from domains d
     left join clients c on c.id = d.client_id
     left join vendors v on v.id = d.registrar_id
     left join registrar_accounts ra on ra.id = d.registrar_account_id
+    left join lateral (
+      select count(*)::int as mailboxes,
+        sum(case when m.billing_cycle = 'YEARLY' then m.cost / 12 else m.cost end)::float8 as monthly,
+        min(m.next_billing_on) filter (where m.next_billing_on >= current_date) as next_bill
+      from icemail_mailboxes m where m.domain_id = d.id and m.gone_at is null) im on true
+    left join lateral (
+      select x.* from icemail_domains x where x.domain_id = d.id and x.gone_at is null order by x.last_seen_at desc limit 1) ix on true
     left join domain_health_7d h on h.domain_id = d.id
     left join smartlead_domain_7d s7 on s7.domain_name = d.name
     left join lateral (
@@ -311,11 +332,26 @@ export async function getDomainDetail(id: string): Promise<DomainDetail | null> 
       d.tags, grace_days_left(d.status, d.draining_since) as grace_days_left, d.registrar_api_access as api_access, d.nameservers_answering, ho.status as ht_order_status, ho.payment_status as ht_payment,
       nr.status as ns_request_status, nr.message as ns_request_message, nr.target as ns_request_target,
       null as replaced_by_id, null as replaced_by_name, null as replaced_at,
+      nullif(im.mailboxes, 0) as icemail_mailboxes, im.monthly as icemail_monthly, im.next_bill as icemail_next_bill,
+      case when ix.id is null then null
+        when ix.blacklisted then 'Blacklisted'
+        when false in (ix.spf, ix.dkim, ix.dmarc, ix.mx) then 'Missing ' || concat_ws(', ',
+          case when ix.spf is false then 'SPF' end, case when ix.dkim is false then 'DKIM' end,
+          case when ix.dmarc is false then 'DMARC' end, case when ix.mx is false then 'MX' end)
+        when ix.status is distinct from 'ACTIVE' then initcap(coalesce(ix.status, 'unknown'))
+      end as icemail_issue,
       (select coalesce(sum(i.daily_limit), 0)::int from inboxes i where i.domain_id = d.id and i.status = 'connected') as capacity
     from domains d
     left join clients c on c.id = d.client_id
     left join vendors v on v.id = d.registrar_id
     left join vendors ip on ip.id = d.inbox_provider_id
+    left join lateral (
+      select count(*)::int as mailboxes,
+        sum(case when m.billing_cycle = 'YEARLY' then m.cost / 12 else m.cost end)::float8 as monthly,
+        min(m.next_billing_on) filter (where m.next_billing_on >= current_date) as next_bill
+      from icemail_mailboxes m where m.domain_id = d.id and m.gone_at is null) im on true
+    left join lateral (
+      select x.* from icemail_domains x where x.domain_id = d.id and x.gone_at is null order by x.last_seen_at desc limit 1) ix on true
     left join domain_health_7d h on h.domain_id = d.id
     left join smartlead_domain_7d s7 on s7.domain_name = d.name
     left join lateral (
@@ -955,6 +991,35 @@ export async function listRegistrarAccounts() {
     select a.id, a.provider, a.label, a.key_hint, a.created_by, a.created_at, a.last_synced_at, a.last_ok, a.last_error,
       (select count(*)::int from domains d where d.registrar_account_id = a.id) as domains
     from registrar_accounts a order by a.provider, a.created_at`;
+}
+
+export type IcemailAccountRow = {
+  id: string; label: string; keyHint: string | null; workspaceName: string | null; webhookToken: string;
+  walletBalance: number | null; walletCurrency: string | null;
+  lastSyncedAt: Date | null; lastOk: boolean | null; lastError: string | null;
+  domains: number; mailboxes: number; linked: number; monthly: number;
+  /** Mailboxes billing in the next 7 days, and what they cost then. */
+  renewing: number; renewingCost: number;
+  events: { id: number; event: string; receivedAt: Date; data: Record<string, unknown> | null }[];
+};
+
+export async function listIcemailAccounts() {
+  return sql<IcemailAccountRow[]>`
+    select a.id, a.label, a.key_hint, a.workspace_name, a.webhook_token,
+      a.wallet_balance::float8 as wallet_balance, a.wallet_currency, a.last_synced_at, a.last_ok, a.last_error,
+      (select count(*)::int from icemail_domains x where x.account_id = a.id and x.gone_at is null) as domains,
+      coalesce(m.mailboxes, 0) as mailboxes, coalesce(m.linked, 0) as linked, coalesce(m.monthly, 0) as monthly,
+      coalesce(m.renewing, 0) as renewing, coalesce(m.renewing_cost, 0) as renewing_cost,
+      coalesce((select jsonb_agg(jsonb_build_object('id', e.id, 'event', e.event, 'receivedAt', e.received_at, 'data', e.payload -> 'data') order by e.received_at desc)
+        from (select * from icemail_events e where e.account_id = a.id order by e.received_at desc limit 6) e), '[]'::jsonb) as events
+    from icemail_accounts a
+    left join lateral (
+      select count(*)::int as mailboxes, (count(*) filter (where x.inbox_id is not null))::int as linked,
+        coalesce(sum(case when x.billing_cycle = 'YEARLY' then x.cost / 12 else x.cost end), 0)::float8 as monthly,
+        (count(*) filter (where x.next_billing_on between current_date and current_date + 7))::int as renewing,
+        coalesce(sum(x.cost) filter (where x.next_billing_on between current_date and current_date + 7), 0)::float8 as renewing_cost
+      from icemail_mailboxes x where x.account_id = a.id and x.gone_at is null) m on true
+    order by a.created_at`;
 }
 
 // ---------------------------------------------------------------------------

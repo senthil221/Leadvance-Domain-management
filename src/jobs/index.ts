@@ -7,6 +7,7 @@ import { createSmartleadApp, type SmartleadApp } from "../integrations/smartlead
 import { syncBlacklists } from "./blacklist";
 import { fillBounceCauses } from "./bounce-causes";
 import { syncHypertideOrders } from "./hypertide-sync";
+import { loadIcemailAccounts, syncAllIcemail } from "./icemail-sync";
 import { processInboxChanges, runDuePlans } from "./inbox-settings";
 import { checkNameservers, processNameserverRequests } from "./nameservers";
 import { advanceReplacements, trackHypertideOrders } from "./replacements";
@@ -54,6 +55,15 @@ export const JOBS: Job[] = [
       const synced = await syncHypertideOrders(ctx.sql, stepCtx);
       const tracked = await trackHypertideOrders(ctx.sql, stepCtx);
       return { ...synced, tracking: tracked.open };
+    },
+  },
+  {
+    name: "icemail",
+    label: "Icemail domains and mailboxes",
+    everyMinutes: 30,
+    run: async ({ sql }) => {
+      const { accounts, broken } = await loadIcemailAccounts(sql);
+      return syncAllIcemail(sql, accounts, broken);
     },
   },
   {

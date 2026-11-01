@@ -45,7 +45,7 @@ function JobRow({ job }: { job: SyncJob }) {
   );
 }
 
-export function CopyUrl({ url }: { url: string }) {
+export function CopyUrl({ url, where = "Smartlead → Settings → Webhooks" }: { url: string; where?: string }) {
   const [copied, setCopied] = useState(false);
   return (
     <button
@@ -55,7 +55,7 @@ export function CopyUrl({ url }: { url: string }) {
         try {
           await navigator.clipboard.writeText(url);
           setCopied(true);
-          toast("Webhook URL copied", { description: "Paste it into Smartlead → Settings → Webhooks." });
+          toast("Webhook URL copied", { description: `Paste it into ${where}.` });
           setTimeout(() => setCopied(false), 2000);
         } catch {
           toast.error("Couldn't copy. Your browser blocked clipboard access.");
