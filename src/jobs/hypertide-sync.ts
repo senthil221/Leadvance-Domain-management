@@ -54,10 +54,13 @@ export async function syncHypertideOrders(sql: Sql, ctx: StepContext & { hyperti
           payment_status = excluded.payment_status, subscription_id = coalesce(excluded.subscription_id, hypertide_orders.subscription_id),
           forwarding_domain = excluded.forwarding_domain, sending_tool = excluded.sending_tool,
           organization_name = excluded.organization_name, ordered_on = coalesce(excluded.ordered_on, hypertide_orders.ordered_on),
+          -- First seen cancelled: the closest thing to a cancel date the API gives.
+          ended_on = case when excluded.status in ('NPC', 'Cancelled') and coalesce(hypertide_orders.status, '') not in ('NPC', 'Cancelled')
+            then current_date else hypertide_orders.ended_on end,
           last_seen_at = now(), gone_at = null`;
     }
     const gone = await tx`
-      update hypertide_orders set gone_at = now()
+      update hypertide_orders set gone_at = now(), ended_on = coalesce(ended_on, current_date)
       where gone_at is null and not (id = any(${valid.map((r) => r.id)}::text[])) returning id`;
 
     await tx`
@@ -65,14 +68,15 @@ export async function syncHypertideOrders(sql: Sql, ctx: StepContext & { hyperti
       from hypertide_orders o where o.domain_id = d.id and o.gone_at is null and d.inbox_provider_id is distinct from ${ht.id}`;
 
     // Ordered domains still sitting in storage are being set up. A cancelled
-    // order (NPC in the API) doesn't count.
+    // order (NPC or Cancelled in the API) doesn't count.
     const provisioning = await tx`
       select transition_domain(d.id, 'provisioning', 'ordered on Hypertide', 'hypertide sync') as id
       from domains d
       where d.status = 'in_storage'
-        and exists (select 1 from hypertide_orders o where o.domain_id = d.id and o.gone_at is null and o.status is distinct from 'NPC')`;
+        and exists (select 1 from hypertide_orders o where o.domain_id = d.id and o.gone_at is null and coalesce(o.status, '') not in ('NPC', 'Cancelled'))`;
 
-    return { added: added.length, gone: gone.length, provisioning: provisioning.length };
+    const [{ n: lastUsed }] = await tx`select refresh_last_used() as n`;
+    return { added: added.length, gone: gone.length, provisioning: provisioning.length, lastUsedChanged: Number(lastUsed) };
   });
 
   // Hand-ordered replacements: the inbox step finishes when the order is Done.

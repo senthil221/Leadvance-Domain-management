@@ -129,10 +129,10 @@ export function InventoryView({ domains, clients }: { domains: DomainRow[]; clie
 
   const exportCsv = () => {
     const list = selectedRows.length ? selectedRows : rows;
-    const head = ["domain", "lifecycle", "status", "replaced_by", "client", "tags", "registrar", "nameservers", "hypertide", "inboxes", "capacity_per_day", "purchased", "renews"];
+    const head = ["domain", "lifecycle", "status", "replaced_by", "client", "tags", "registrar", "registrar_account", "nameservers", "hypertide", "inboxes", "capacity_per_day", "purchased", "renews", "last_used", "reuse_from"];
     const esc = (v: unknown) => (v == null ? "" : /[",\n]/.test(String(v)) ? `"${String(v).replace(/"/g, '""')}"` : String(v));
     const day = (v: Date | null) => (v ? new Date(v).toISOString().slice(0, 10) : "");
-    const lines = list.map((d) => [d.name, LIFE[lifeOf(d)].label, d.status, d.replacedByName, d.clientName, d.tags.join("; "), d.registrar, d.nameservers.join(" "), htOf(d)?.label, d.inboxCount, d.capacity, day(d.purchasedAt), day(d.expiresAt)].map(esc).join(","));
+    const lines = list.map((d) => [d.name, LIFE[lifeOf(d)].label, d.status, d.replacedByName, d.clientName, d.tags.join("; "), d.registrar, d.registrarAccount, d.nameservers.join(" "), htOf(d)?.label, d.inboxCount, d.capacity, day(d.purchasedAt), day(d.expiresAt), day(d.lastUsedOn), day(d.coolingUntil)].map(esc).join(","));
     const url = URL.createObjectURL(new Blob([[head.join(","), ...lines].join("\n")], { type: "text/csv" }));
     Object.assign(document.createElement("a"), { href: url, download: `inventory-${new Date().toISOString().slice(0, 10)}.csv` }).click();
     URL.revokeObjectURL(url);
@@ -222,7 +222,10 @@ export function InventoryView({ domains, clients }: { domains: DomainRow[]; clie
                       {on("life") ? (
                       <td>
                         <span className="flex items-center gap-1.5">
-                          <span className={`status-dot tone-${life.tone}`}>{life.label}</span>
+                          <span className={`status-dot tone-${life.tone}`}
+                            title={d.coolingUntil ? `Last used ${shortDate(d.lastUsedOn)}; free to reuse from ${shortDate(d.coolingUntil)}` : d.status === "in_storage" && d.lastUsedOn ? `Used before, last on ${shortDate(d.lastUsedOn)}` : undefined}>
+                            {life.label}{d.coolingUntil ? <span className="text-muted"> · until {shortDate(d.coolingUntil)}</span> : null}
+                          </span>
                           {d.replacedById ? (
                             <DomainLink id={d.replacedById} className="flex items-center gap-1 truncate text-muted hover:text-ink" title={`Replaced ${shortDate(d.replacedAt)}`}>
                               <ArrowRight size={12} />{d.replacedByName}

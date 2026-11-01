@@ -13,7 +13,8 @@ import { REPLACEMENT_REASONS, type ReplacementReason } from "@/lib/status";
 
 export type ReplaceTarget = { id: string; name: string; tld: string | null; clientName: string | null; clientHue: number | null };
 
-// One storage domain per old domain: same TLD first, then the oldest purchase.
+// One storage domain per old domain: same TLD first, otherwise the first rested
+// candidate (never-used domains come first, then the oldest purchase).
 // Domains Hypertide refuses (hyphens, over 35 characters) are never auto-picked.
 function autoAssign(targets: ReplaceTarget[], candidates: StorageCandidate[]) {
   const free = candidates.filter((c) => hypertideAcceptsDomain(c.name));
@@ -193,7 +194,7 @@ export function ReplaceDialog({
             <div className="card">
               <div className="card-head">
                 <span className="card-title">Replacements</span>
-                <span className="card-sub">{candidates ? `${candidates.length} in storage${skipped.size ? ` · ${skipped.size} skipped` : ""}` : "Checking storage…"}</span>
+                <span className="card-sub">{candidates ? `${candidates.length} rested in storage${skipped.size ? ` · ${skipped.size} skipped` : ""}` : "Checking storage…"}</span>
               </div>
               <div className="card-body" style={{ paddingTop: 4, paddingBottom: 4, maxHeight: 300, overflowY: "auto" }}>
                 {targets.map((t) => (
@@ -221,7 +222,7 @@ export function ReplaceDialog({
                           .filter((c) => c.id === assign[t.id] || !used.has(c.id))
                           .map((c) => (
                             <option key={c.id} value={c.id}>
-                              {c.name}{c.registrar ? ` · ${c.registrar}` : ""}{hypertideAcceptsDomain(c.name) ? "" : " · Hypertide won't accept"}
+                              {c.name}{c.registrar ? ` · ${c.registrar}` : " · no registrar account"}{c.lastUsedOn ? ` · last used ${new Date(c.lastUsedOn).toLocaleDateString("en-US", { month: "short", year: "numeric", timeZone: "UTC" })}` : ""}{hypertideAcceptsDomain(c.name) ? "" : " · Hypertide won't accept"}
                             </option>
                           ))}
                       </select>

@@ -521,6 +521,7 @@ const hostname = z.string().trim().toLowerCase().regex(/^[a-z0-9-]+(.[a-z0-9-]+)
 const settingsInput = z.object({
   drainDays: z.number().int().min(1).max(60),
   storageLowThreshold: z.number().int().min(0).max(10_000),
+  reuseAfterDays: z.number().int().min(0, "Use 0 or more days").max(730, "Keep it under two years"),
   hypertideNameservers: z.array(hostname).max(13),
 });
 
@@ -532,6 +533,7 @@ export async function saveSettings(input: z.input<typeof settingsInput>): Promis
     await sql`insert into settings (key, value) values
         ('drain_days', ${sql.json(s.drainDays)}),
         ('storage_low_threshold', ${sql.json(s.storageLowThreshold)}),
+        ('reuse_after_days', ${sql.json(s.reuseAfterDays)}),
         ('hypertide_nameservers', ${sql.json(ns)})
       on conflict (key) do update set value = excluded.value, updated_at = now()`;
     refresh();

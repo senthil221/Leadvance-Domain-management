@@ -123,7 +123,7 @@ async function SettingsContent() {
         key: "lifecycle", label: "Lifecycle & orders", title: "Lifecycle and orders", sub: "How long replaced domains drain, when storage runs low, and how Hypertide orders replacement inboxes.",
         content: (
           <>
-            <Panel title="Lifecycle" flush><LifecycleForm drainDays={settings.drainDays} storageLowThreshold={settings.storageLowThreshold} hypertideNameservers={settings.hypertideNameservers} /></Panel>
+            <Panel title="Lifecycle" flush><LifecycleForm drainDays={settings.drainDays} storageLowThreshold={settings.storageLowThreshold} reuseAfterDays={settings.reuseAfterDays} hypertideNameservers={settings.hypertideNameservers} /></Panel>
             <Panel title="Hypertide orders" sub="Used when a replacement orders inboxes" flush><HypertideOrderForm template={settings.hypertideTemplate} /></Panel>
           </>
         ),

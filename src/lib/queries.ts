@@ -210,6 +210,10 @@ export type DomainRow = {
   apiAccess: boolean | null;
   nameserversCheckedAt: Date | null;
   nameserversAnswering: boolean | null;
+  /** Last day it was in use: a Hypertide order, a send, or being replaced. */
+  lastUsedOn: Date | null;
+  /** A free domain used too recently to pick again, until this day. */
+  coolingUntil: Date | null;
 };
 
 export async function listDomains() {
@@ -230,6 +234,7 @@ export async function listDomains() {
         order by g.day
       ) as spark,
       d.tags, grace_days_left(d.status, d.draining_since) as grace_days_left, d.nameservers, d.draining_since, d.burned_at, d.cost_cents, d.registrar_api_access as api_access, d.nameservers_checked_at, d.nameservers_answering,
+      d.last_used_on, case when d.status = 'in_storage' and d.last_used_on + reuse_after_days() > current_date then d.last_used_on + reuse_after_days() end as cooling_until,
       ho.status as ht_order_status, ho.payment_status as ht_payment,
       nr.status as ns_request_status, nr.message as ns_request_message, nr.target as ns_request_target,
       rp.new_domain_id as replaced_by_id, rp.name as replaced_by_name, rp.created_at as replaced_at,
@@ -361,14 +366,16 @@ export async function getDomainDetail(id: string): Promise<DomainDetail | null> 
 
 // Free domains for the replace dialog, preferring the given TLDs. Nothing is
 // locked here: start_replacement re-checks each pick inside its transaction.
-export type StorageCandidate = { id: string; name: string; tld: string | null; registrar: string | null; purchasedAt: Date | null };
+// Domains used within the reuse window (Settings → Lifecycle) are left out;
+// never-used ones come first, then those at a known registrar.
+export type StorageCandidate = { id: string; name: string; tld: string | null; registrar: string | null; purchasedAt: Date | null; lastUsedOn: Date | null };
 
 export async function listStorageCandidates(limit = 200) {
   return sql<StorageCandidate[]>`
-    select d.id, d.name, d.tld, v.name as registrar, d.purchased_at
+    select d.id, d.name, d.tld, v.name as registrar, d.purchased_at, d.last_used_on
     from domains d left join vendors v on v.id = d.registrar_id
-    where d.status = 'in_storage'
-    order by d.purchased_at nulls last, d.created_at, d.name
+    where d.status = 'in_storage' and (d.last_used_on is null or d.last_used_on + reuse_after_days() <= current_date)
+    order by (d.last_used_on is not null), (d.registrar_id is null), d.purchased_at nulls last, d.created_at, d.name
     limit ${limit}`;
 }
 
@@ -378,26 +385,46 @@ export async function listStorageCandidates(limit = 200) {
 
 export type RenewalRow = { id: string; name: string; status: DomainStatus; registrar: string | null; expiresAt: Date; costCents: number | null; clientName: string | null; clientHue: number | null };
 
+/** Where domains stand, counted per group (registrar account or TLD). */
+export type Breakdown = {
+  key: string; label: string; sub: string | null; total: number; active: number; setup: number;
+  free: number; cooling: number; replaced: number; usedBefore: number; expiring30: number; annualCents: number;
+};
+
+const breakdownCounts = (s: typeof sql) => s`
+  count(*)::int as total,
+  count(*) filter (where d.status = 'active')::int as active,
+  count(*) filter (where d.status in ('provisioning', 'warming'))::int as setup,
+  count(*) filter (where d.status = 'in_storage' and (d.last_used_on is null or d.last_used_on + reuse_after_days() <= current_date))::int as free,
+  count(*) filter (where d.status = 'in_storage' and d.last_used_on + reuse_after_days() > current_date)::int as cooling,
+  count(*) filter (where d.status in ('draining', 'burned', 'resting'))::int as replaced,
+  count(*) filter (where d.status = 'in_storage' and d.last_used_on is not null)::int as used_before,
+  count(*) filter (where d.expires_at between current_date and current_date + 30 and d.status not in ('burned', 'resting'))::int as expiring30,
+  coalesce(sum(d.cost_cents) filter (where d.status not in ('burned', 'resting')), 0)::int as annual_cents`;
+
 export async function getInventory() {
-  const [registrars, renewals, [totals]] = await Promise.all([
-    sql<{ registrar: string; total: number; storage: number; annualCents: number }[]>`
-      select coalesce(v.name, 'Unknown') as registrar, count(*)::int as total,
-        count(*) filter (where d.status = 'in_storage')::int as storage,
-        coalesce(sum(d.cost_cents) filter (where d.status not in ('burned', 'resting')), 0)::int as annual_cents
-      from domains d left join vendors v on v.id = d.registrar_id
-      group by 1 order by total desc`,
+  const [accounts, tlds, renewals, [totals]] = await Promise.all([
+    sql<Breakdown[]>`
+      select coalesce(ra.id::text, v.name, 'none') as key, coalesce(v.name, 'No registrar account') as label, ra.label as sub, ${breakdownCounts(sql)}
+      from domains d left join vendors v on v.id = d.registrar_id left join registrar_accounts ra on ra.id = d.registrar_account_id
+      group by ra.id, v.name, ra.label order by (v.name is null), total desc`,
+    sql<Breakdown[]>`
+      select coalesce(d.tld, '?') as key, '.' || coalesce(d.tld, '?') as label, null as sub, ${breakdownCounts(sql)}
+      from domains d group by d.tld order by total desc`,
     sql<RenewalRow[]>`
       select d.id, d.name, d.status, v.name as registrar, d.expires_at, d.cost_cents, c.name as client_name, c.hue as client_hue
       from domains d left join vendors v on v.id = d.registrar_id left join clients c on c.id = d.client_id
       where d.expires_at between current_date and current_date + 60
       order by d.expires_at, d.name`,
-    sql<{ owned: number; storage: number; annualCents: number; retiredRenewing: number }[]>`
+    sql<{ owned: number; storage: number; cooling: number; reuseAfterDays: number; annualCents: number; retiredRenewing: number }[]>`
       select count(*)::int as owned, count(*) filter (where status = 'in_storage')::int as storage,
+        count(*) filter (where status = 'in_storage' and last_used_on + reuse_after_days() > current_date)::int as cooling,
+        reuse_after_days() as reuse_after_days,
         coalesce(sum(cost_cents) filter (where status not in ('burned', 'resting')), 0)::int as annual_cents,
         count(*) filter (where status in ('burned', 'resting') and auto_renew is not false and expires_at between current_date and current_date + 60)::int as retired_renewing
       from domains`,
   ]);
-  return { registrars, renewals, totals };
+  return { accounts, tlds, renewals, totals };
 }
 
 export type HypertideSummary = {
@@ -415,12 +442,12 @@ export async function getHypertideSummary(): Promise<HypertideSummary> {
       select count(*)::int as orders,
         count(*) filter (where payment_status ilike 'paid%')::int as paid,
         count(*) filter (where payment_status not ilike 'paid%' and payment_status not ilike '%recovery%')::int as unpaid,
-        count(*) filter (where payment_status ilike 'paid%' and status is distinct from 'Done' and status is distinct from 'NPC')::int as in_setup,
-        count(*) filter (where status = 'NPC' and payment_status not ilike '%recovery%')::int as cancelled,
+        count(*) filter (where payment_status ilike 'paid%' and coalesce(status, '') not in ('Done', 'NPC', 'Cancelled'))::int as in_setup,
+        count(*) filter (where status in ('NPC', 'Cancelled') and payment_status not ilike '%recovery%')::int as cancelled,
         count(*) filter (where payment_status ilike '%recovery%')::int as recovery,
         count(*) filter (where status = 'Done')::int as done,
         (select count(*)::int from domains d where d.status in ('active', 'warming')
-          and not exists (select 1 from hypertide_orders o where o.domain_id = d.id and o.gone_at is null and o.status is distinct from 'NPC')) as sending_without,
+          and not exists (select 1 from hypertide_orders o where o.domain_id = d.id and o.gone_at is null and coalesce(o.status, '') not in ('NPC', 'Cancelled'))) as sending_without,
         (select count(*)::int from domain_status_history where to_status = 'draining' and at > now() - interval '28 days') as replaced_last28
       from hypertide_orders where gone_at is null`,
     sql<HypertideSummary["retiredBilled"]>`
@@ -899,6 +926,7 @@ export async function getSettings() {
     warmupProgram: parseWarmupProgram(map.warmup_program),
     clientTagList: parseSavedPairs(map.client_tag_list),
     storageLowThreshold: Number(map.storage_low_threshold ?? 20),
+    reuseAfterDays: Number(map.reuse_after_days ?? 120),
     inboxLimit: Number(map.inbox_limit ?? 60) || 60,
     hypertideNameservers: Array.isArray(map.hypertide_nameservers) ? (map.hypertide_nameservers as string[]) : [],
     hypertideTemplate: {
@@ -954,8 +982,8 @@ export async function getInsights() {
         (select count(*)::int from inboxes i join domains d on d.id = i.domain_id where i.status = 'connected' and i.warmup_reputation < 90 and d.status in ('active', 'warming')) as low_rep,
         (select count(*)::int from hypertide_orders where gone_at is null and payment_status not ilike 'paid%' and payment_status not ilike '%recovery%') as ht_unpaid,
         (select count(distinct o.domain_id)::int from hypertide_orders o join domains d on d.id = o.domain_id
-          where o.gone_at is null and o.status = 'NPC' and d.status in ('active', 'warming', 'provisioning')
-          and not exists (select 1 from hypertide_orders o2 where o2.domain_id = d.id and o2.gone_at is null and o2.status is distinct from 'NPC')) as ht_cancelled_live,
+          where o.gone_at is null and o.status in ('NPC', 'Cancelled') and d.status in ('active', 'warming', 'provisioning')
+          and not exists (select 1 from hypertide_orders o2 where o2.domain_id = d.id and o2.gone_at is null and coalesce(o2.status, '') not in ('NPC', 'Cancelled'))) as ht_cancelled_live,
         (select count(distinct o.domain_id)::int from hypertide_orders o join domains d on d.id = o.domain_id
           where o.gone_at is null and o.status = 'Done' and d.status in ('burned', 'resting')) as billed_retired,
         (select count(*)::int from domains where expires_at between current_date and current_date + 14 and status not in ('burned', 'resting')) as renew14,
@@ -964,8 +992,8 @@ export async function getInsights() {
         (select count(distinct inbox_id)::int from inbox_setting_changes where status = 'failed' and created_at > now() - interval '2 days') as settings_failed,
         (select count(*)::int from domains d where d.status = 'provisioning'
           and coalesce((select max(h.at) from domain_status_history h where h.domain_id = d.id), d.created_at) < now() - interval '10 days') as stuck_setup,
-        (select count(*)::int from domains where status = 'in_storage') as free,
-        (select count(*) from domains where status = 'in_storage') <= coalesce((select (value #>> '{}')::int from settings where key = 'storage_low_threshold'), 20) as free_low`,
+        (select count(*)::int from domains where status = 'in_storage' and (last_used_on is null or last_used_on + reuse_after_days() <= current_date)) as free,
+        (select count(*) from domains where status = 'in_storage' and (last_used_on is null or last_used_on + reuse_after_days() <= current_date)) <= coalesce((select (value #>> '{}')::int from settings where key = 'storage_low_threshold'), 20) as free_low`,
     sql<{ capacity: number; sentToday: number; inboxes: number }[]>`
       select coalesce(sum(i.daily_limit), 0)::int as capacity, coalesce(sum(i.daily_sent), 0)::int as sent_today, count(*)::int as inboxes
       from inboxes i join domains d on d.id = i.domain_id

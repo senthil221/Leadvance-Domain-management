@@ -124,6 +124,18 @@ export function createHypertide({ baseUrl, apiKey, sql, dryRun = true, minSpacin
     }
   }
 
+  async function allPages(path: string) {
+    const out: OrderStatus[] = [];
+    let cursor: string | null = null;
+    for (let page = 0; page < 500; page++) {
+      const json = obj(await call("GET", cursor ? `${path}?cursor=${encodeURIComponent(cursor)}` : path));
+      out.push(...readOrders(json));
+      cursor = json.hasMore === true && typeof json.nextCursor === "string" && json.nextCursor ? json.nextCursor : null;
+      if (!cursor) return out;
+    }
+    throw new HypertideError(`Hypertide ${path} kept returning more pages; stopped after 500`, null, null);
+  }
+
   return {
     dryRun,
     health: () => call("GET", "/health"),
@@ -195,11 +207,15 @@ export function createHypertide({ baseUrl, apiKey, sql, dryRun = true, minSpacin
       return { ...readReplacement(r, newDomain), raw: JSON.stringify(r).slice(0, 4000) };
     },
 
-    /** Paid orders on the account. */
-    activeOrders: async () => readOrders(await call("GET", "/orders/active")),
+    /**
+     * Every order on the account, cancelled (NPC) ones included. Hypertide
+     * sends 100 a page with hasMore/nextCursor; all pages are read, so a sync
+     * never mistakes the orders past the first page for gone ones.
+     */
+    activeOrders: () => allPages("/orders/active"),
 
     /** Placed but not yet charged. */
-    pendingOrders: async () => readOrders(await call("GET", "/orders/pending")),
+    pendingOrders: () => allPages("/orders/pending"),
   };
 }
 

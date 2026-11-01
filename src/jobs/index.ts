@@ -129,6 +129,7 @@ export const JOBS: Job[] = [
     run: async ({ sql, timezone }) => {
       const [r] = await sql`select rollup_daily_stats(${dayIn(timezone, -2)}::date, ${timezone}) as n`;
       const [h] = await sql`select opened, resolved from evaluate_health_rules()`;
+      await sql`select refresh_last_used()`;
       return { statRows: Number(r.n), alertsOpened: Number(h.opened), alertsResolved: Number(h.resolved) };
     },
   },

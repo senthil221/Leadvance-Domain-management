@@ -8,13 +8,14 @@ import { ClientCell } from "@/components/ui";
 import type { ClientRow } from "@/lib/queries";
 import type { WarmupProgram } from "@/lib/warmup-program";
 
-export function LifecycleForm({ drainDays, storageLowThreshold, hypertideNameservers }: { drainDays: number; storageLowThreshold: number; hypertideNameservers: string[] }) {
+export function LifecycleForm({ drainDays, storageLowThreshold, reuseAfterDays, hypertideNameservers }: { drainDays: number; storageLowThreshold: number; reuseAfterDays: number; hypertideNameservers: string[] }) {
   const [drain, setDrain] = useState(String(drainDays));
   const [low, setLow] = useState(String(storageLowThreshold));
+  const [reuse, setReuse] = useState(String(reuseAfterDays));
   const [ns, setNs] = useState(hypertideNameservers.join("\n"));
   const [pending, startTransition] = useTransition();
   const nsList = ns.split(/[\s,]+/).map((x) => x.trim()).filter(Boolean);
-  const dirty = drain !== String(drainDays) || low !== String(storageLowThreshold) || nsList.join(",") !== hypertideNameservers.join(",");
+  const dirty = drain !== String(drainDays) || low !== String(storageLowThreshold) || reuse !== String(reuseAfterDays) || nsList.join(",") !== hypertideNameservers.join(",");
 
   return (
     <form
@@ -22,7 +23,7 @@ export function LifecycleForm({ drainDays, storageLowThreshold, hypertideNameser
       onSubmit={(e) => {
         e.preventDefault();
         startTransition(async () => {
-          const r = await saveSettings({ drainDays: Number(drain), storageLowThreshold: Number(low), hypertideNameservers: nsList });
+          const r = await saveSettings({ drainDays: Number(drain), storageLowThreshold: Number(low), reuseAfterDays: Number(reuse), hypertideNameservers: nsList });
           if (!r.ok) toast.error(r.error);
           else toast.success("Settings saved");
         });
@@ -44,6 +45,14 @@ export function LifecycleForm({ drainDays, storageLowThreshold, hypertideNameser
             <span className="text-muted">domains</span>
           </div>
           <span className="field-hint">Overview turns amber when free domains drop to this.</span>
+        </label>
+        <label className="field">
+          <span className="field-label">Reuse a domain after</span>
+          <div className="flex items-center gap-2">
+            <input className="input num" style={{ width: 90 }} inputMode="numeric" value={reuse} onChange={(e) => setReuse(e.target.value)} />
+            <span className="text-muted">days</span>
+          </div>
+          <span className="field-hint">Counted from its last Hypertide order, last send or replacement. Until then it shows as Cooling down and isn&apos;t offered as a replacement.</span>
         </label>
       </div>
       <label className="field">
