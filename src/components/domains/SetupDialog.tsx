@@ -7,6 +7,7 @@ import { useMemo, useState, useTransition } from "react";
 import { toast } from "sonner";
 import { setupDomains } from "@/app/actions";
 import type { ClientRow } from "@/lib/queries";
+import { API_REGISTRARS } from "@/lib/registrar-providers";
 import type { DomainStatus } from "@/lib/status";
 
 export type SetupTarget = { id: string; name: string; status: DomainStatus; tags: string[]; registrar: string | null };
@@ -33,7 +34,7 @@ export function SetupDialog({
 }) {
   const router = useRouter();
   const inStorage = targets.filter((t) => t.status === "in_storage").length;
-  const notPorkbun = targets.filter((t) => t.registrar !== "Porkbun").length;
+  const manualNs = targets.filter((t) => !t.registrar || !API_REGISTRARS.has(t.registrar)).length;
   const current = useMemo(() => [...new Set(targets.flatMap((t) => t.tags))].sort(), [targets]);
 
   const [client, setClient] = useState<string>("keep");
@@ -158,8 +159,8 @@ export function SetupDialog({
               <div className="callout tone-info">
                 <Info size={15} strokeWidth={1.75} />
                 <span>
-                  Porkbun domains switch within a minute and are read back to confirm.
-                  {notPorkbun ? ` ${plural(notPorkbun, "domain")} at other registrars will list the pair to set by hand in Inventory.` : ""}
+                  Domains at a connected registrar (Porkbun, Dynadot, Spaceship, Unstoppable) switch within a minute and are read back to confirm.
+                  {manualNs ? ` ${plural(manualNs, "domain")} at other registrars will list the pair to set by hand in Inventory.` : ""}
                   {" "}Once the order shows up on Hypertide and the inboxes connect in Smartlead, the status moves on by itself.
                 </span>
               </div>

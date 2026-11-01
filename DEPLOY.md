@@ -114,12 +114,23 @@ docker compose run --rm migrate && docker compose up -d --build web worker
 
 1. Add the API key from your computer (it asks for the key, hidden, and restarts the app and worker):
    `ssh -t -i ~/.ssh/hostinger_vps root@200.97.170.1 bash /docker/domain-engine/deploy/set-secret.sh SMARTLEAD_API_KEY`
-   The same script sets `PORKBUN_API_KEY`, `PORKBUN_SECRET_KEY`, `UNSTOPPABLE_API_KEY`, `HYPERTIDE_API_KEY` and `INTEGRATIONS_DRY_RUN`.
+   The same script sets `PORKBUN_API_KEY`, `PORKBUN_SECRET_KEY`, `HYPERTIDE_API_KEY` and `INTEGRATIONS_DRY_RUN`. Registrar keys are added in the app instead (see below).
 2. Settings → Background sync → **Run now** on *Smartlead inboxes*. Domains already sending in Smartlead are added to inventory automatically.
 3. Settings → Smartlead webhook → **Copy URL**, and add it in Smartlead (Settings → Webhooks, user level) for *Email Sent*, *Email Reply* and *Email Bounce*. Keep the n8n webhook running alongside until the numbers match.
 4. Writes to Smartlead (limits, warmup, campaigns) stay off until `INTEGRATIONS_DRY_RUN=false`.
 
 Worker logs: `docker compose logs -f worker`.
+
+## Registrars (Unstoppable Domains, Dynadot, Spaceship, Porkbun)
+
+Add each registrar login in the app: Settings → Connections → Domain registrars → **Add account**. Add as many accounts per registrar as you have (two Unstoppable logins are two rows). The app reads the account's domain list to test the keys, stores them encrypted on the server (AES-256-GCM, keyed by `CREDENTIALS_SECRET`, or `SUPABASE_SERVICE_ROLE_KEY` when that isn't set), imports the domains into storage and never shows the keys again. Every domain remembers its account, so nameserver changes during setup and replacements go to the right login.
+
+- **Unstoppable Domains**: Account Settings → Advanced → API key (`ud_…`). Nameserver changes are queued at Unstoppable and show within minutes.
+- **Dynadot**: Tools → API → API key. If an IP allowlist is on, add the server's IP.
+- **Spaceship**: API Manager → new key with `domains:read` and `domains:write`; paste the key and the secret.
+- **Porkbun**: see below; it can also stay in `.env`.
+
+*Registrar domains* in Background sync re-imports every account every 6 hours. If `CREDENTIALS_SECRET` (or the service key) ever changes, saved keys can't be read: the account turns red and has to be added again.
 
 ## Porkbun
 
@@ -128,7 +139,7 @@ Worker logs: `docker compose logs -f worker`.
 3. Save both keys:
    `ssh -t -i ~/.ssh/hostinger_vps root@200.97.170.1 bash /docker/domain-engine/deploy/set-secret.sh PORKBUN_API_KEY`
    `ssh -t -i ~/.ssh/hostinger_vps root@200.97.170.1 bash /docker/domain-engine/deploy/set-secret.sh PORKBUN_SECRET_KEY`
-4. Settings → Background sync → **Run now** on *Porkbun domains*. New domains land in storage; ones already sending in Smartlead become active on the next Smartlead sync.
+4. Settings → Background sync → **Run now** on *Registrar domains*. New domains land in storage; ones already sending in Smartlead become active on the next Smartlead sync.
 5. Settings → Lifecycle → **Hypertide nameservers**: the nameservers new domains are pointed at during a replacement.
 6. While `INTEGRATIONS_DRY_RUN=true`, the nameserver step only logs what it would do and asks you to mark it done. Set it to `false` with set-secret.sh to let it change nameservers.
 

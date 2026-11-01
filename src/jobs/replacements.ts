@@ -1,6 +1,8 @@
 import type postgres from "postgres";
 import { buildOrderPayload, type Hypertide, type OrderTemplate, type SmartleadCredentials } from "../integrations/hypertide";
-import { sameNameservers, type Porkbun } from "../integrations/porkbun";
+import type { Porkbun } from "../integrations/porkbun";
+import { accountName, applyNameservers, registrarFor, type RegistrarAccount } from "../integrations/registrars";
+import { API_REGISTRARS } from "../lib/registrar-providers";
 import type { Smartlead } from "../integrations/smartlead";
 import type { SmartleadApp, SmartleadTag } from "../integrations/smartlead-app";
 
@@ -30,7 +32,7 @@ type Item = {
   id: string;
   nameservers: string; inboxes: string; smartlead: string; campaigns: string;
   completed: Date | null;
-  newid: string; newname: string; newstatus: string; registrar: string | null; apiaccess: boolean | null;
+  newid: string; newname: string; newstatus: string; registrar: string | null; accountid: string | null; apiaccess: boolean | null;
   oldid: string; oldname: string; oldstatus: string;
   client: string | null;
   htns: string[] | null; htorder: string | null; htstatus: string | null; htpaid: Date | null; htverified: Date | null;
@@ -45,7 +47,7 @@ async function loadItem(sql: Sql, id: string): Promise<Item | undefined> {
   const [row] = await sql`
     select ri.id, ri.step_nameservers as nameservers, ri.step_inboxes as inboxes, ri.step_smartlead as smartlead,
       ri.step_campaigns as campaigns, ri.completed_at as completed,
-      nd.id as newid, nd.name as newname, nd.status as newstatus, v.name as registrar, nd.registrar_api_access as apiaccess,
+      nd.id as newid, nd.name as newname, nd.status as newstatus, v.name as registrar, nd.registrar_account_id as accountid, nd.registrar_api_access as apiaccess,
       od.id as oldid, od.name as oldname, od.status as oldstatus, c.name as client,
       ri.hypertide_ns as htns, ri.hypertide_order_id as htorder, ri.hypertide_status as htstatus,
       ri.hypertide_paid_at as htpaid, ri.hypertide_ns_verified_at as htverified, rb.manual_inboxes as manual,
@@ -137,6 +139,7 @@ async function syncStatuses(sql: Sql, item: Item, actor: string) {
 
 export type StepContext = {
   porkbun: Porkbun | null;
+  registrars?: RegistrarAccount[];
   hypertide?: Hypertide | null;
   hypertideCredentials?: Partial<SmartleadCredentials>;
   smartlead?: Smartlead | null;
@@ -193,25 +196,28 @@ export async function advanceItem(sql: Sql, ctx: StepContext, id: string, actor 
           : "Connect Hypertide (or add its nameservers in Settings → Lifecycle) and press Retry, or set them by hand and mark this done.");
         return;
       }
-      const isPorkbun = item.registrar === "Porkbun";
-      if (!isPorkbun || !ctx.porkbun || item.apiaccess === false) {
-        const why = !isPorkbun ? "" : !ctx.porkbun ? " (Porkbun isn't connected)" : " (API access is off for this domain at Porkbun)";
+      const pick = registrarFor(ctx, item.registrar, item.accountid);
+      if (!pick.account || (pick.account.provider === "porkbun" && item.apiaccess === false)) {
+        const why = pick.account ? " (API access is off for this domain at Porkbun)"
+          : item.registrar && API_REGISTRARS.has(item.registrar) ? ` (${pick.why})` : "";
         await setStep(sql, id, step, "manual", `Point ${item.newname} to ${ns.join(", ")} at ${item.registrar ?? "its registrar"}${why}, then mark this done.`);
         return;
       }
-      if (ctx.porkbun.dryRun) {
-        await ctx.porkbun.updateNs(item.newname, ns);
-        await setStep(sql, id, step, "manual", `Dry run: would set ${item.newname} to ${ns.join(", ")} at Porkbun. Set them by hand and mark this done, or turn dry run off and press Retry.`);
+      const at = accountName(ctx, pick.account);
+      if (pick.account.client.dryRun) {
+        await pick.account.client.updateNs(item.newname, ns);
+        await setStep(sql, id, step, "manual", `Dry run: would set ${item.newname} to ${ns.join(", ")} at ${at}. Set them by hand and mark this done, or turn dry run off and press Retry.`);
         return;
       }
-      await setStep(sql, id, step, "running", `Setting nameservers at Porkbun…`);
+      await setStep(sql, id, step, "running", `Setting nameservers at ${at}…`);
       try {
-        await ctx.porkbun.updateNs(item.newname, ns);
-        const now = await ctx.porkbun.getNs(item.newname);
-        if (!sameNameservers(now, ns)) {
-          await setStep(sql, id, step, "failed", null, `Porkbun accepted the change but still reports ${now.join(", ") || "no nameservers"}. Press Retry in a few minutes.`);
+        const res = await applyNameservers(pick.account, item.newname, ns);
+        if (res.outcome === "mismatch") {
+          await setStep(sql, id, step, "failed", null, `${at} accepted the change but still reports ${res.now.join(", ") || "no nameservers"}. Press Retry in a few minutes.`);
           return;
         }
+        // A queued change (Unstoppable) is trusted; the DNS check confirms it later.
+        const now = res.outcome === "done" ? res.now : ns;
         await sql`update domains set nameservers = ${now}, nameservers_checked_at = now() where id = ${item.newid}`;
         await setStep(sql, id, step, "done", null);
       } catch (e) {

@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { headers } from "next/headers";
 import { Suspense } from "react";
 import { ClientSourcePicker, SenderMap, TagMap } from "@/components/settings/ClientAssignment";
+import { RegistrarAccounts } from "@/components/settings/RegistrarAccounts";
 import { ClientsList, HypertideOrderForm, LifecycleForm, WarmupProgramForm } from "@/components/settings/SettingsForms";
 import { Panel, SettingsShell } from "@/components/settings/SettingsShell";
 import { CopyUrl, SyncPanel, type SyncJob } from "@/components/settings/SyncPanel";
@@ -9,14 +10,12 @@ import { Badge, PageHead, Skeleton } from "@/components/ui";
 import { JOBS } from "@/jobs";
 import { getCurrentUser } from "@/lib/auth";
 import { summarize } from "@/lib/format";
-import { getSettings, listClients, listJobState, listSenders, listTags } from "@/lib/queries";
+import { getSettings, listClients, listJobState, listRegistrarAccounts, listSenders, listTags } from "@/lib/queries";
 
 export const metadata: Metadata = { title: "Settings" };
 
 const INTEGRATIONS = [
   { name: "Smartlead", env: ["SMARTLEAD_API_KEY"], use: "Inbox sync, warmup and limits, campaigns" },
-  { name: "Porkbun", env: ["PORKBUN_API_KEY", "PORKBUN_SECRET_KEY"], use: "Imports your domains; reads and updates nameservers" },
-  { name: "Unstoppable Domains", env: ["UNSTOPPABLE_API_KEY"], use: "Nameserver updates (reseller API)" },
   { name: "Hypertide", env: ["HYPERTIDE_API_KEY"], use: "Nameserver pairs, ordering inboxes, order status" },
   { name: "Smartlead login for Hypertide", env: ["HYPERTIDE_SMARTLEAD_USERNAME", "HYPERTIDE_SMARTLEAD_PASSWORD"], use: "Hypertide uses it to connect new inboxes to Smartlead" },
   { name: "Smartlead Microsoft OAuth link", env: ["HYPERTIDE_SMARTLEAD_OAUTH_LINK"], use: "Needed for Microsoft (Entra) orders" },
@@ -37,7 +36,8 @@ export default function SettingsPage() {
 
 async function SettingsContent() {
   await getCurrentUser();
-  const [settings, clients, jobState, tags, senders] = await Promise.all([getSettings(), listClients(), listJobState(), listTags(), listSenders()]);
+  const [settings, clients, jobState, tags, senders, registrars] = await Promise.all([getSettings(), listClients(), listJobState(), listTags(), listSenders(), listRegistrarAccounts()]);
+  const envPorkbun = Boolean(process.env.PORKBUN_API_KEY && process.env.PORKBUN_SECRET_KEY);
   const dryRun = process.env.INTEGRATIONS_DRY_RUN !== "false";
   const token = process.env.SMARTLEAD_WEBHOOK_TOKEN;
   const webhookReady = Boolean(token);
@@ -57,15 +57,18 @@ async function SettingsContent() {
   return (
     <SettingsShell sections={[
       {
-        key: "connections", label: "Connections", title: "Connections", sub: "The services this app talks to. Keys live only in the server's environment file and never reach the browser.",
-        badge: dryRun ? <span className="st-dot tone-warning" title="Dry run" /> : null,
+        key: "connections", label: "Connections", title: "Connections", sub: "The services this app talks to. Keys never reach the browser: service keys live in the server's environment file, registrar keys are stored encrypted.",
+        badge: dryRun ? <span className="st-dot tone-warning" title="Dry run" /> : registrars.some((r) => r.lastOk === false) ? <span className="st-dot tone-danger" title="A registrar failed" /> : null,
         content: (
           <>
             <div className={`st-banner ${dryRun ? "tone-warning" : "tone-success"}`}>
               <span className="st-banner-dot" />
               <span className="flex flex-col"><span className="strong">{dryRun ? "Dry run" : "Live"}</span>
-                <span className="st-panel-sub">{dryRun ? "Calls to Smartlead, Porkbun and Hypertide are logged, not sent." : "Changes are sent to Smartlead, Porkbun and Hypertide."}</span></span>
+                <span className="st-panel-sub">{dryRun ? "Changes to Smartlead, registrars and Hypertide are logged, not sent. Domain lists are still read." : "Changes are sent to Smartlead, registrars and Hypertide."}</span></span>
             </div>
+            <Panel title="Domain registrars" sub="One row per login. Each account's domains are imported into Inventory, and the app sets their nameservers during setup and replacements." flush>
+              <RegistrarAccounts accounts={registrars} envPorkbun={envPorkbun} />
+            </Panel>
             <Panel title="Services" flush>
               <div className="list">
                 {INTEGRATIONS.map((i) => {

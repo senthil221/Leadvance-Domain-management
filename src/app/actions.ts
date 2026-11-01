@@ -568,7 +568,7 @@ export async function actOnReplacementStep(input: z.input<typeof stepInput>): Pr
     const { jobContext } = await import("@/jobs");
     const { actOnStep } = await import("@/jobs/replacements");
     const ctx = await jobContext(jobSql);
-    const r = await actOnStep(jobSql, { porkbun: ctx.porkbun, hypertide: ctx.hypertide, hypertideCredentials: ctx.hypertideCredentials, smartlead: ctx.smartlead }, itemId, step, action, actor);
+    const r = await actOnStep(jobSql, { porkbun: ctx.porkbun, registrars: ctx.registrars, hypertide: ctx.hypertide, hypertideCredentials: ctx.hypertideCredentials, smartlead: ctx.smartlead }, itemId, step, action, actor);
     refresh();
     return { ok: true, data: r };
   } catch (e) {
@@ -604,7 +604,7 @@ export async function approveHypertidePayment(itemIds: string[]): Promise<Action
     const { approveHypertidePayment: approve } = await import("@/jobs/replacements");
     const ctx = await jobContext(jobSql);
     if (!ctx.hypertide) return { ok: false, error: "Hypertide isn't connected" };
-    const r = await approve(sql, { porkbun: ctx.porkbun, hypertide: ctx.hypertide, hypertideCredentials: ctx.hypertideCredentials }, ids, actor);
+    const r = await approve(sql, { porkbun: ctx.porkbun, registrars: ctx.registrars, hypertide: ctx.hypertide, hypertideCredentials: ctx.hypertideCredentials }, ids, actor);
     refresh();
     return { ok: true, data: r };
   } catch (e) {
@@ -1324,6 +1324,102 @@ export async function reconnectInboxes(): Promise<ActionResult<{ message: string
     return { ok: true, data: { message: `Smartlead is reconnecting ${n} disconnected inbox${n === 1 ? "" : "es"}. Statuses refresh in about a minute.` } };
   } catch (e) {
     if (e instanceof Error && /Smartlead|token/.test(e.message)) return { ok: false, error: e.message };
+    return fail(e);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Registrar accounts (Settings → Connections). Keys arrive once, are tested
+// against the registrar, then stored encrypted; they never go back out.
+// ---------------------------------------------------------------------------
+
+const registrarInput = z.object({
+  id: z.uuid().optional(),
+  provider: z.enum(["porkbun", "dynadot", "spaceship", "unstoppable"]),
+  label: z.string().trim().min(1, "Give the account a name").max(60, "Keep the name under 60 characters"),
+  keys: z.record(z.string(), z.string().max(2000)),
+});
+
+export async function saveRegistrarAccount(input: z.input<typeof registrarInput>): Promise<ActionResult<{ message: string }>> {
+  try {
+    const actor = await requireActor();
+    const { id, provider, label, keys: raw } = registrarInput.parse(input);
+    const { PROVIDERS } = await import("@/lib/registrar-providers");
+    const info = PROVIDERS[provider];
+    const keys: Record<string, string> = {};
+    for (const f of info.fields) {
+      const name = f.label.replace(/^(?!API)\w/, (c) => c.toLowerCase());
+      const v = (raw[f.key] ?? "").trim().replace(/^bearer\s+/i, "").replace(/^["']|["']$/g, "");
+      if (!v && !id) throw new UserError(`Paste the ${info.label} ${name}`);
+      if (v && /\s/.test(v)) throw new UserError(`The ${name} has a space in it; copy it again`);
+      if (v && f.prefix && !v.startsWith(f.prefix)) throw new UserError(`${info.label} ${name}s start with ${f.prefix}`);
+      if (v) keys[f.key] = v;
+    }
+    const { open, seal } = await import("@/lib/secret-box");
+    const [existing] = id ? await sql`select provider, credentials from registrar_accounts where id = ${id}` : [];
+    if (id && !existing) throw new UserError("That account was removed");
+    if (existing && existing.provider !== provider) throw new UserError("An account can't change registrar; add a new one instead");
+    // Re-keying may change one field and keep the other.
+    const merged = existing ? { ...(Object.keys(keys).length < info.fields.length ? open(existing.credentials as string) : {}), ...keys } : keys;
+    if (info.fields.some((f) => !merged[f.key])) throw new UserError(`Paste every ${info.label} key`);
+
+    // Reading the domain list is the test: it proves the keys and permissions.
+    const { createRegistrarClient } = await import("@/integrations/registrars");
+    const dryRun = process.env.INTEGRATIONS_DRY_RUN !== "false";
+    const client = createRegistrarClient(provider, merged, { sql: jobSql, dryRun });
+    let list;
+    try {
+      list = await client.listAll();
+    } catch (e) {
+      throw new UserError(`${info.label} didn't accept these keys: ${e instanceof Error ? e.message : String(e)}`);
+    }
+
+    const hint = merged[info.fields[0].key].slice(-4);
+    const [row] = id
+      ? await sql`update registrar_accounts set label = ${label}, credentials = ${seal(merged)}, key_hint = ${hint} where id = ${id} returning id`
+      : await sql`insert into registrar_accounts (provider, label, credentials, key_hint, created_by)
+          values (${provider}, ${label}, ${seal(merged)}, ${hint}, ${actor}) returning id`;
+
+    const { syncRegistrarDomains } = await import("@/jobs/registrar-sync");
+    const account = { id: row.id as string, provider, vendor: info.vendor, label, client: { ...client, listAll: async () => list } };
+    const r = await syncRegistrarDomains(jobSql, account);
+    await sql`update registrar_accounts set last_synced_at = now(), last_ok = true, last_error = null, domain_count = ${r.domains} where id = ${row.id}`;
+    refresh();
+    const found = `${r.domains} domain${r.domains === 1 ? "" : "s"}`;
+    return { ok: true, data: { message: r.domains ? `Connected. Found ${found}: ${r.added} new in Inventory (in storage), ${r.updated} already there.` : `Connected. ${info.label} shows no domains on this account yet.` } };
+  } catch (e) {
+    if (e instanceof Error && /CREDENTIALS_SECRET|can't be read/.test(e.message)) return { ok: false, error: e.message };
+    return fail(e);
+  }
+}
+
+export async function syncRegistrarAccount(id: string): Promise<ActionResult<{ message: string }>> {
+  try {
+    await requireActor();
+    const accountId = z.uuid().parse(id);
+    const { loadRegistrars } = await import("@/integrations/registrars");
+    const { accounts, broken } = await loadRegistrars(jobSql, { dryRun: process.env.INTEGRATIONS_DRY_RUN !== "false", porkbun: null });
+    const bad = broken.find((b) => b.id === accountId);
+    if (bad) throw new UserError(bad.error);
+    const account = accounts.find((a) => a.id === accountId);
+    if (!account) throw new UserError("That account was removed");
+    const { syncAllRegistrars } = await import("@/jobs/registrar-sync");
+    const r = await syncAllRegistrars(jobSql, [account]).catch((e: Error) => { throw new UserError(e.message); });
+    refresh();
+    return { ok: true, data: { message: `Synced ${"domains" in r ? r.domains : 0} domains, ${"added" in r ? r.added : 0} new.` } };
+  } catch (e) {
+    return fail(e);
+  }
+}
+
+export async function removeRegistrarAccount(id: string): Promise<ActionResult> {
+  try {
+    await requireActor();
+    // Domains stay in Inventory with their registrar; only the link goes.
+    await sql`delete from registrar_accounts where id = ${z.uuid().parse(id)}`;
+    refresh();
+    return { ok: true, data: undefined };
+  } catch (e) {
     return fail(e);
   }
 }

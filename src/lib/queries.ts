@@ -173,6 +173,8 @@ export type DomainRow = {
   clientName: string | null;
   clientHue: number | null;
   registrar: string | null;
+  /** The registrar login it came from, when added in Settings. */
+  registrarAccount: string | null;
   inboxCount: number;
   sent: number;
   humanReplies: number;
@@ -213,7 +215,7 @@ export type DomainRow = {
 export async function listDomains() {
   return sql<DomainRow[]>`
     select d.id, d.name, d.tld, d.status, d.client_id, c.name as client_name, c.hue as client_hue,
-      v.name as registrar,
+      v.name as registrar, ra.label as registrar_account,
       (select count(*)::int from inboxes i where i.domain_id = d.id and i.status <> 'removed') as inbox_count,
       h.sent, h.human_replies, h.replies, h.bounces,
       h.bounce_rate::float8 as bounce_rate, h.human_reply_rate::float8 as human_reply_rate,
@@ -235,6 +237,7 @@ export async function listDomains() {
     from domains d
     left join clients c on c.id = d.client_id
     left join vendors v on v.id = d.registrar_id
+    left join registrar_accounts ra on ra.id = d.registrar_account_id
     left join domain_health_7d h on h.domain_id = d.id
     left join smartlead_domain_7d s7 on s7.domain_name = d.name
     left join lateral (
@@ -911,6 +914,19 @@ export type JobStateRow = { job: string; lastStartedAt: Date | null; lastFinishe
 
 export async function listJobState() {
   return sql<JobStateRow[]>`select job, last_started_at, last_finished_at, last_ok, last_error, last_detail from job_state`;
+}
+
+/** Registrar accounts added in Settings, without their keys. */
+export type RegistrarAccountRow = {
+  id: string; provider: import("@/lib/registrar-providers").Provider; label: string; keyHint: string | null;
+  createdBy: string; createdAt: Date; lastSyncedAt: Date | null; lastOk: boolean | null; lastError: string | null; domains: number;
+};
+
+export async function listRegistrarAccounts() {
+  return sql<RegistrarAccountRow[]>`
+    select a.id, a.provider, a.label, a.key_hint, a.created_by, a.created_at, a.last_synced_at, a.last_ok, a.last_error,
+      (select count(*)::int from domains d where d.registrar_account_id = a.id) as domains
+    from registrar_accounts a order by a.provider, a.created_at`;
 }
 
 // ---------------------------------------------------------------------------

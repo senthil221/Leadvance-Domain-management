@@ -1,15 +1,17 @@
 import { Resolver } from "node:dns/promises";
 import type postgres from "postgres";
 import type { Hypertide } from "../integrations/hypertide";
-import { sameNameservers, type Porkbun } from "../integrations/porkbun";
+import type { Porkbun } from "../integrations/porkbun";
+import { API_REGISTRARS } from "../lib/registrar-providers";
+import { accountName, applyNameservers, registrarFor, type RegistrarAccount, type RegistrarScope } from "../integrations/registrars";
 
 // Nameserver changes queued from the app (Set up dialog). Each request gets
 // its pair (from Hypertide's reservation for that domain, or as typed), then
-// Porkbun domains are switched and read back; other registrars get "manual"
-// with the pair to copy. Shared by the worker and the app.
+// domains at a connected registrar are switched and read back; the rest get
+// "manual" with the pair to copy. Shared by the worker and the app.
 
 type Sql = postgres.Sql;
-export type NsContext = { porkbun: Porkbun | null; hypertide: Hypertide | null };
+export type NsContext = { porkbun: Porkbun | null; registrars?: RegistrarAccount[]; hypertide: Hypertide | null };
 
 async function finish(sql: Sql, id: string, status: string, message: string | null, target?: string[]) {
   await sql`update nameserver_requests set status = ${status}, message = ${message}, finished_at = now(),
@@ -24,7 +26,7 @@ export async function processNameserverRequests(sql: Sql, ctx: NsContext, limit 
     from domains d left join vendors v on v.id = d.registrar_id
     where r.id in (select id from nameserver_requests where status = 'pending' order by created_at limit ${limit} for update skip locked)
       and d.id = r.domain_id
-    returning r.id, r.source, r.target, d.id as domainid, d.name, v.name as registrar, d.registrar_api_access as apiaccess`;
+    returning r.id, r.source, r.target, d.id as domainid, d.name, v.name as registrar, d.registrar_account_id as accountid, d.registrar_api_access as apiaccess`;
   if (!claimed.length) return { requests: 0 };
 
   // One Hypertide call reserves (or returns) the pair for up to 100 domains.
@@ -61,27 +63,29 @@ export async function processNameserverRequests(sql: Sql, ctx: NsContext, limit 
       count("failed");
       continue;
     }
-    const isPorkbun = r.registrar === "Porkbun";
-    if (!isPorkbun || !ctx.porkbun || r.apiaccess === false) {
-      const why = !isPorkbun ? `Set these at ${r.registrar ?? "the registrar"}` : !ctx.porkbun ? "Porkbun isn't connected; set these by hand" : "API access is off for this domain at Porkbun; set these by hand";
+    const pick = registrarFor(ctx, r.registrar as string | null, r.accountid as string | null);
+    if (!pick.account || (pick.account.provider === "porkbun" && r.apiaccess === false)) {
+      const why = !pick.account
+        ? (r.registrar && API_REGISTRARS.has(r.registrar) ? `${pick.why}; set these by hand` : `Set these at ${r.registrar ?? "the registrar"}`)
+        : "API access is off for this domain at Porkbun; set these by hand";
       await finish(sql, id, "manual", why, ns);
       count("manual");
       continue;
     }
+    const at = accountName(ctx, pick.account);
     try {
-      await ctx.porkbun.updateNs(name, ns);
-      if (ctx.porkbun.dryRun) {
-        await finish(sql, id, "dry_run", "Dry run: Porkbun wasn't changed", ns);
+      const res = await applyNameservers(pick.account, name, ns);
+      if (res.outcome === "dry_run") {
+        await finish(sql, id, "dry_run", `Dry run: ${at} wasn't changed`, ns);
         count("dry_run");
         continue;
       }
-      const now = await ctx.porkbun.getNs(name);
-      await sql`update domains set nameservers = ${now}, nameservers_checked_at = now() where id = ${r.domainid}`;
-      if (sameNameservers(now, ns)) {
-        await finish(sql, id, "done", null, ns);
+      if (res.outcome === "done" || res.outcome === "pending") {
+        await sql`update domains set nameservers = ${res.outcome === "done" ? res.now : ns}, nameservers_checked_at = now() where id = ${r.domainid}`;
+        await finish(sql, id, "done", res.outcome === "pending" ? `${at} accepted the change; it can take a few minutes to show` : null, ns);
         count("done");
       } else {
-        await finish(sql, id, "failed", `Porkbun accepted the change but still reports ${now.join(", ") || "no nameservers"}`, ns);
+        await finish(sql, id, "failed", `${at} accepted the change but still reports ${res.now.join(", ") || "no nameservers"}`, ns);
         count("failed");
       }
     } catch (e) {
@@ -101,22 +105,24 @@ export type Records = { spf: boolean; dkim: boolean; dmarc: boolean; mx: boolean
  * - Public DNS answers for healthy domains at any registrar. When it can't
  *   (SERVFAIL: the registry points at nameservers that don't serve the zone),
  *   the registry's own record (RDAP) says where it points, and the domain is
- *   flagged as not answering. Porkbun's API is the last resort.
+ *   flagged as not answering. The registrar's API is the last resort.
  * - Answering domains get their SPF, DKIM, DMARC and MX records checked.
  * - Domains whose registrar gave no purchase date get one from RDAP (domain age).
  */
 export async function checkNameservers(
-  sql: Sql, porkbun: Porkbun | null, batch = 150,
+  sql: Sql, scope: RegistrarScope | Porkbun | null, batch = 150,
   lookup = dnsLookup, registry: (name: string) => Promise<Registry> = rdapLookup, records: (name: string, esps: string[]) => Promise<Records> = recordsLookup,
 ) {
   const due = await sql`
-    select d.id, d.name, v.name as registrar, d.registrar_api_access as apiaccess,
+    select d.id, d.name, v.name as registrar, d.registrar_account_id as accountid, d.registrar_api_access as apiaccess,
       (d.purchased_at is null and d.registered_at is null) as needsage,
       coalesce((select array_agg(distinct i.provider_type) from inboxes i where i.domain_id = d.id and i.provider_type is not null), '{}') as esps
     from domains d left join vendors v on v.id = d.registrar_id
     where d.status not in ('burned', 'resting')
     order by d.nameservers_checked_at nulls first, d.name
     limit ${batch}`;
+  // Older callers pass the .env Porkbun on its own.
+  const accounts: RegistrarScope = scope && "getNs" in scope ? { porkbun: scope } : (scope ?? {});
   let checked = 0, notAnswering = 0, empty = 0, failed = 0, dnsMissing = 0;
   const queue = [...due];
   const worker = async () => {
@@ -132,7 +138,10 @@ export async function checkNameservers(
         reg = await registry(name).catch(() => null);
         ns = reg?.ns ?? null;
         if (ns?.length) answering = false;
-        else if (porkbun && d.registrar === "Porkbun" && d.apiaccess !== false) ns = await porkbun.getNs(name).catch(() => null);
+        else {
+          const { account } = registrarFor(accounts, d.registrar as string | null, d.accountid as string | null);
+          if (account && !(account.provider === "porkbun" && d.apiaccess === false)) ns = await account.client.getNs(name).catch(() => null);
+        }
       }
       if (d.needsage && !reg) reg = await registry(name).catch(() => null);
       const rec = answering ? await records(name, d.esps as string[]).catch(() => null) : null;

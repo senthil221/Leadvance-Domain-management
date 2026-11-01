@@ -237,6 +237,7 @@ export function InventoryView({ domains, clients }: { domains: DomainRow[]; clie
                       {on("registrar") ? (
                       <td>
                         {d.registrar ?? <span className="zero">—</span>}
+                        {d.registrarAccount ? <span className="text-muted"> · {d.registrarAccount}</span> : null}
                         {d.registrar === "Porkbun" && d.apiAccess === false ? (
                           <span className="badge tone-warning ml-1.5" title="API access is off for this domain at Porkbun, so the app can read but not change its nameservers. Turn it on in Porkbun → Domain → Details → API Access.">API off</span>
                         ) : null}

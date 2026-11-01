@@ -1,15 +1,16 @@
 import type postgres from "postgres";
 import { createHypertide, type Hypertide, type SmartleadCredentials } from "../integrations/hypertide";
 import { createPorkbun, type Porkbun } from "../integrations/porkbun";
+import { loadRegistrars, type RegistrarAccount } from "../integrations/registrars";
 import { createSmartlead, type Smartlead } from "../integrations/smartlead";
 import { createSmartleadApp, type SmartleadApp } from "../integrations/smartlead-app";
 import { syncBlacklists } from "./blacklist";
 import { fillBounceCauses } from "./bounce-causes";
-import { syncPorkbunDomains } from "./porkbun-sync";
 import { syncHypertideOrders } from "./hypertide-sync";
 import { processInboxChanges, runDuePlans } from "./inbox-settings";
 import { checkNameservers, processNameserverRequests } from "./nameservers";
 import { advanceReplacements, trackHypertideOrders } from "./replacements";
+import { syncAllRegistrars } from "./registrar-sync";
 import { enrolNewDomains } from "./warmup-program";
 import { syncAccounts, syncCampaigns, syncClients, syncDomainStats, dayIn } from "./smartlead-sync";
 
@@ -20,7 +21,12 @@ export type JobContext = {
   sql: postgres.Sql;
   smartlead: Smartlead | null;
   smartleadApp: SmartleadApp | null;
+  /** Porkbun from the server's .env, if set. */
   porkbun: Porkbun | null;
+  /** Every registrar account: the .env Porkbun plus those added in Settings. */
+  registrars: RegistrarAccount[];
+  /** Accounts whose saved keys can't be read. */
+  brokenRegistrars: { id: string; error: string }[];
   hypertide: Hypertide | null;
   hypertideCredentials: Partial<SmartleadCredentials>;
   timezone: string;
@@ -30,16 +36,13 @@ export type Job = { name: string; label: string; everyMinutes: number; run: (ctx
 const needsSmartlead = (fn: (ctx: JobContext & { smartlead: Smartlead }) => Promise<Record<string, unknown>>) =>
   async (ctx: JobContext) => (ctx.smartlead ? fn({ ...ctx, smartlead: ctx.smartlead }) : { skipped: "SMARTLEAD_API_KEY not set" });
 
-const needsPorkbun = (fn: (ctx: JobContext & { porkbun: Porkbun }) => Promise<Record<string, unknown>>) =>
-  async (ctx: JobContext) => (ctx.porkbun ? fn({ ...ctx, porkbun: ctx.porkbun }) : { skipped: "PORKBUN_API_KEY / PORKBUN_SECRET_KEY not set" });
-
 export const JOBS: Job[] = [
   {
     name: "replacement-steps",
     label: "Replacement steps",
     everyMinutes: 1,
-    run: ({ sql, porkbun, hypertide, hypertideCredentials, smartlead, smartleadApp }) =>
-      advanceReplacements(sql, { porkbun, hypertide, hypertideCredentials, smartlead, smartleadApp }),
+    run: ({ sql, porkbun, registrars, hypertide, hypertideCredentials, smartlead, smartleadApp }) =>
+      advanceReplacements(sql, { porkbun, registrars, hypertide, hypertideCredentials, smartlead, smartleadApp }),
   },
   {
     name: "hypertide-orders",
@@ -47,7 +50,7 @@ export const JOBS: Job[] = [
     everyMinutes: 5,
     run: async (ctx) => {
       if (!ctx.hypertide) return { skipped: "HYPERTIDE_API_KEY not set" };
-      const stepCtx = { porkbun: ctx.porkbun, hypertide: ctx.hypertide, hypertideCredentials: ctx.hypertideCredentials, smartlead: ctx.smartlead };
+      const stepCtx = { porkbun: ctx.porkbun, registrars: ctx.registrars, hypertide: ctx.hypertide, hypertideCredentials: ctx.hypertideCredentials, smartlead: ctx.smartlead };
       const synced = await syncHypertideOrders(ctx.sql, stepCtx);
       const tracked = await trackHypertideOrders(ctx.sql, stepCtx);
       return { ...synced, tracking: tracked.open };
@@ -66,13 +69,13 @@ export const JOBS: Job[] = [
     name: "nameserver-check",
     label: "Nameserver lookups (DNS)",
     everyMinutes: 30,
-    run: ({ sql, porkbun }) => checkNameservers(sql, porkbun),
+    run: ({ sql, porkbun, registrars }) => checkNameservers(sql, { porkbun, registrars }),
   },
   {
     name: "nameserver-requests",
     label: "Nameserver changes",
     everyMinutes: 1,
-    run: ({ sql, porkbun, hypertide }) => processNameserverRequests(sql, { porkbun, hypertide }),
+    run: ({ sql, porkbun, registrars, hypertide }) => processNameserverRequests(sql, { porkbun, registrars, hypertide }),
   },
   {
     name: "smartlead-accounts",
@@ -108,10 +111,10 @@ export const JOBS: Job[] = [
     run: async ({ sql, smartleadApp }) => (smartleadApp ? syncBlacklists(sql, smartleadApp) : { skipped: "SMARTLEAD_JWT not set" }),
   },
   {
-    name: "porkbun-domains",
-    label: "Porkbun domains",
+    name: "registrar-domains",
+    label: "Registrar domains",
     everyMinutes: 360,
-    run: needsPorkbun(({ sql, porkbun }) => syncPorkbunDomains(sql, porkbun)),
+    run: ({ sql, registrars, brokenRegistrars }) => syncAllRegistrars(sql, registrars, brokenRegistrars),
   },
   {
     name: "bounce-causes",
@@ -147,6 +150,8 @@ export async function jobContext(sql: postgres.Sql): Promise<JobContext> {
   const pbKey = process.env.PORKBUN_API_KEY, pbSecret = process.env.PORKBUN_SECRET_KEY;
   const htUrl = process.env.HYPERTIDE_API_URL || "https://backend.hypertide.io/api/v1";
   const htKey = process.env.HYPERTIDE_API_KEY;
+  const porkbun = pbKey && pbSecret ? createPorkbun({ apiKey: pbKey, secretKey: pbSecret, sql, dryRun }) : null;
+  const { accounts, broken } = await loadRegistrars(sql, { dryRun, porkbun });
   return {
     sql,
     hypertide: htKey ? createHypertide({ baseUrl: htUrl, apiKey: htKey, sql, dryRun }) : null,
@@ -157,7 +162,9 @@ export async function jobContext(sql: postgres.Sql): Promise<JobContext> {
       password: process.env.HYPERTIDE_SMARTLEAD_PASSWORD,
       oauth_link: process.env.HYPERTIDE_SMARTLEAD_OAUTH_LINK,
     },
-    porkbun: pbKey && pbSecret ? createPorkbun({ apiKey: pbKey, secretKey: pbSecret, sql, dryRun }) : null,
+    porkbun,
+    registrars: accounts,
+    brokenRegistrars: broken,
     timezone: (tz?.tz as string) || "UTC",
     smartlead: apiKey ? createSmartlead({ apiKey, sql, dryRun }) : null,
     smartleadApp: process.env.SMARTLEAD_JWT ? createSmartleadApp({ jwt: process.env.SMARTLEAD_JWT.trim().replace(/^bearer\s+/i, ""), sql, dryRun }) : null,

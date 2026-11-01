@@ -239,7 +239,7 @@ export function ReplaceDialog({
               </div>
               <span className="field-hint">
                 {mode === "hypertide"
-                  ? "The app sends the swap to Hypertide (no new order, no payment), sets the nameservers it returns at Porkbun and follows it until the inboxes are in Smartlead."
+                  ? "The app sends the swap to Hypertide (no new order, no payment), sets the nameservers it returns at the domain's registrar and follows it until the inboxes are in Smartlead."
                   : "The app sets the nameservers and ticks the inbox step off when the new domain's Hypertide order shows Done."}
               </span>
             </div>
