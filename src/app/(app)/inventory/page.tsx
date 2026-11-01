@@ -109,8 +109,16 @@ async function InventoryContent() {
         </div>
       ) : null}
 
+      <div className="grid gap-5 xl:grid-cols-2">
+        <BreakdownCard id="accounts" title="By registrar account" rows={accounts} cooling={totals.reuseAfterDays}
+          hint="Every login in Settings → Connections. No registrar account: domains Hypertide or Smartlead know about that no connected account holds." />
+        <BreakdownCard id="tlds" title="By TLD" rows={tlds} cooling={totals.reuseAfterDays} />
+      </div>
+
       {domains.some((d) => d.nsRequestStatus === "pending" || d.nsRequestStatus === "running") ? <AutoRefresh seconds={5} /> : null}
-      <InventoryView domains={domains} clients={clients} />
+      <div id="domains" style={{ scrollMarginTop: 12 }}>
+        <InventoryView domains={domains} clients={clients} />
+      </div>
 
       {totals.retiredRenewing > 0 ? (
         <div className="callout tone-warning">
@@ -118,12 +126,6 @@ async function InventoryContent() {
           <span>{totals.retiredRenewing} retired domain{totals.retiredRenewing === 1 ? " renews" : "s renew"} in the next 60 days. Turn off auto-renew at the registrar unless you plan to rest and reuse them.</span>
         </div>
       ) : null}
-
-      <div className="grid gap-5 xl:grid-cols-2">
-        <BreakdownCard id="accounts" title="By registrar account" rows={accounts} cooling={totals.reuseAfterDays}
-          hint="Every login in Settings → Connections. No registrar account: domains Hypertide or Smartlead know about that no connected account holds." />
-        <BreakdownCard id="tlds" title="By TLD" rows={tlds} cooling={totals.reuseAfterDays} />
-      </div>
 
       <section className="card" aria-labelledby="renewals-title">
         <div className="card-head">
@@ -163,13 +165,22 @@ function BreakdownCard({ id, title, rows, cooling, hint }: { id: string; title: 
   const sum = (k: keyof Breakdown) => rows.reduce((a, r) => a + (r[k] as number), 0);
   const showCost = rows.some((r) => r.annualCents > 0);
   const tld = id === "tlds";
+  // The list below, filtered to this row and, for a number, its lifecycle tab.
+  const href = (r: Breakdown, view = "all") => {
+    const p = new URLSearchParams({ view });
+    if (tld) p.set("tld", r.key);
+    else p.set("registrar", r.sub ? `a:${r.label}|${r.sub}` : r.label === "No registrar account" ? "v:Unknown" : `v:${r.label}`);
+    return `/inventory?${p}#domains`;
+  };
+  const cell = (r: Breakdown, v: number, view: string) =>
+    v ? <Link href={href(r, view)} className="hover:underline">{int(v)}</Link> : <span className="zero">0</span>;
   return (
     <section className="card" aria-labelledby={`${id}-title`}>
       <div className="card-head">
         <h2 id={`${id}-title`} className="card-title">{title}</h2>
-        <span className="card-sub" title={hint}>{rows.length} {tld ? "TLDs" : "accounts"}</span>
+        <span className="card-sub" title={hint}>{rows.length} {tld ? "TLDs" : "accounts"} · click a row or number to list those domains</span>
       </div>
-      <div className="table-scroll" style={{ maxHeight: 420 }}>
+      <div className="table-scroll" style={{ maxHeight: 300 }}>
         <table className="data-table">
           <thead>
             <tr>
@@ -188,14 +199,16 @@ function BreakdownCard({ id, title, rows, cooling, hint }: { id: string; title: 
             {rows.map((r) => (
               <tr key={r.key}>
                 <td className="strong" title={r.usedBefore ? `${int(r.usedBefore)} of the domains in storage were used before` : undefined}>
-                  {r.label}{r.sub ? <span className="text-muted" style={{ fontWeight: 400 }}> · {r.sub}</span> : null}
+                  <Link href={href(r)} className="hover:underline">
+                    {r.label}{r.sub ? <span className="text-muted" style={{ fontWeight: 400 }}> · {r.sub}</span> : null}
+                  </Link>
                 </td>
-                <td className="is-num">{int(r.total)}</td>
-                <td className="is-num">{n(r.active)}</td>
+                <td className="is-num">{cell(r, r.total, "all")}</td>
+                <td className="is-num">{cell(r, r.active, "active")}</td>
                 <td className="is-num">{n(r.setup)}</td>
-                <td className="is-num">{n(r.free)}</td>
-                <td className="is-num">{n(r.cooling)}</td>
-                <td className="is-num">{n(r.replaced)}</td>
+                <td className="is-num">{cell(r, r.free, "free")}</td>
+                <td className="is-num">{cell(r, r.cooling, "cooling")}</td>
+                <td className="is-num">{cell(r, r.replaced, "replaced")}</td>
                 <td className="is-num">{r.expiring30 ? <span className="text-warning-ink">{int(r.expiring30)}</span> : <span className="zero">0</span>}</td>
                 {showCost ? <td className="is-num">{r.annualCents ? `$${int(Math.round(r.annualCents / 100))}` : <span className="zero">—</span>}</td> : null}
               </tr>

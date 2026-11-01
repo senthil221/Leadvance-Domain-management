@@ -58,7 +58,17 @@ export function InventoryView({ domains, clients }: { domains: DomainRow[]; clie
   const [q, setQ] = useState("");
   const [clientId, setClientId] = useState(() => params.get("client") ?? "");
   const [tag, setTag] = useState("");
-  const [registrar, setRegistrar] = useState("");
+  // "v:<registrar>" for every account at a registrar, "a:<registrar>|<account>"
+  // for one login. The breakdown tables link here with ?registrar= / ?tld=.
+  const [registrar, setRegistrar] = useState(() => params.get("registrar") ?? "");
+  const [tld, setTld] = useState(() => params.get("tld") ?? "");
+  const urlRegistrar = params.get("registrar") ?? "", urlTld = params.get("tld") ?? "";
+  const [lastUrlFilter, setLastUrlFilter] = useState(`${urlRegistrar}\n${urlTld}`);
+  if (`${urlRegistrar}\n${urlTld}` !== lastUrlFilter) {
+    setLastUrlFilter(`${urlRegistrar}\n${urlTld}`);
+    setRegistrar(urlRegistrar);
+    setTld(urlTld);
+  }
   const [sort, setSort] = useState<{ key: SortKey; dir: 1 | -1 }>({ key: "life", dir: 1 });
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [setupOpen, setSetupOpen] = useState(false);
@@ -72,15 +82,38 @@ export function InventoryView({ domains, clients }: { domains: DomainRow[]; clie
   useEffect(() => {
     const p = new URLSearchParams(window.location.search);
     if (view === "active") p.delete("view"); else p.set("view", view);
+    if (registrar) p.set("registrar", registrar); else p.delete("registrar");
+    if (tld) p.set("tld", tld); else p.delete("tld");
     const s = p.toString();
     window.history.replaceState(null, "", s ? `?${s}` : window.location.pathname);
-  }, [view]);
+  }, [view, registrar, tld]);
 
   const allTags = useMemo(() => [...new Set(domains.flatMap((d) => d.tags))].sort((a, b) => a.localeCompare(b)), [domains]);
-  const registrars = useMemo(() => [...new Set(domains.map((d) => d.registrar ?? "Unknown"))].sort(), [domains]);
-  const base = useMemo(() => domains.filter((d) =>
-    (!clientId || d.clientId === clientId) && (!tag || d.tags.includes(tag)) && (!registrar || (d.registrar ?? "Unknown") === registrar),
-  ), [domains, clientId, tag, registrar]);
+  // Registrars with their accounts and counts, for the filter.
+  const registrars = useMemo(() => {
+    const by = new Map<string, { total: number; accounts: Map<string, number> }>();
+    for (const d of domains) {
+      const v = d.registrar ?? "Unknown";
+      const r = by.get(v) ?? { total: 0, accounts: new Map() };
+      r.total++;
+      if (d.registrarAccount) r.accounts.set(d.registrarAccount, (r.accounts.get(d.registrarAccount) ?? 0) + 1);
+      by.set(v, r);
+    }
+    return [...by.entries()].sort((a, b) => (a[0] === "Unknown" ? 1 : b[0] === "Unknown" ? -1 : b[1].total - a[1].total))
+      .map(([name, r]) => ({ name, total: r.total, accounts: [...r.accounts.entries()].sort((a, b) => b[1] - a[1]) }));
+  }, [domains]);
+  const tlds = useMemo(() => {
+    const c = new Map<string, number>();
+    for (const d of domains) c.set(d.tld ?? "?", (c.get(d.tld ?? "?") ?? 0) + 1);
+    return [...c.entries()].sort((a, b) => b[1] - a[1]);
+  }, [domains]);
+  const base = useMemo(() => {
+    const [kind, value] = [registrar.slice(0, 2), registrar.slice(2)];
+    const [vendor, account] = kind === "a:" ? value.split("|") : [value, null];
+    return domains.filter((d) =>
+      (!clientId || d.clientId === clientId) && (!tag || d.tags.includes(tag)) && (!tld || (d.tld ?? "?") === tld) &&
+      (!registrar || ((d.registrar ?? "Unknown") === vendor && (account == null || d.registrarAccount === account))));
+  }, [domains, clientId, tag, registrar, tld]);
   const counts = useMemo(() => {
     const c: Record<string, number> = { all: base.length };
     for (const d of base) c[lifeOf(d)] = (c[lifeOf(d)] ?? 0) + 1;
@@ -138,7 +171,7 @@ export function InventoryView({ domains, clients }: { domains: DomainRow[]; clie
     URL.revokeObjectURL(url);
   };
 
-  const filtered = q || clientId || tag || registrar;
+  const filtered = q || clientId || tag || registrar || tld;
   const capacity = rows.reduce((a, r) => a + r.capacity, 0);
   const COLS = 2 + cols.count;
 
@@ -163,13 +196,28 @@ export function InventoryView({ domains, clients }: { domains: DomainRow[]; clie
               {allTags.map((t) => <option key={t} value={t}>{t}</option>)}
             </select>
           ) : null}
-          {registrars.length > 1 ? (
-            <select className="select" style={{ width: 150 }} value={registrar} onChange={(e) => setRegistrar(e.target.value)} aria-label="Filter by registrar">
-              <option value="">All registrars</option>
-              {registrars.map((r) => <option key={r} value={r}>{r}</option>)}
+          {registrars.length > 1 || registrars.some((r) => r.accounts.length > 1) ? (
+            <select className="select" style={{ width: 210 }} value={registrar} onChange={(e) => setRegistrar(e.target.value)} aria-label="Filter by registrar account">
+              <option value="">All registrar accounts</option>
+              {registrars.map((r) => r.accounts.length > 1 ? (
+                <optgroup key={r.name} label={r.name}>
+                  <option value={`v:${r.name}`}>All {r.name} ({int(r.total)})</option>
+                  {r.accounts.map(([a, n]) => <option key={a} value={`a:${r.name}|${a}`}>{r.name} · {a} ({int(n)})</option>)}
+                </optgroup>
+              ) : (
+                <option key={r.name} value={r.accounts.length === 1 ? `a:${r.name}|${r.accounts[0][0]}` : `v:${r.name}`}>
+                  {r.name === "Unknown" ? "No registrar account" : r.name}{r.accounts.length === 1 ? ` · ${r.accounts[0][0]}` : ""} ({int(r.total)})
+                </option>
+              ))}
             </select>
           ) : null}
-          {filtered ? <button type="button" className="btn btn-ghost btn-sm" onClick={() => { setQ(""); setClientId(""); setTag(""); setRegistrar(""); }}>Clear</button> : null}
+          {tlds.length > 1 ? (
+            <select className="select" style={{ width: 120 }} value={tld} onChange={(e) => setTld(e.target.value)} aria-label="Filter by TLD">
+              <option value="">All TLDs</option>
+              {tlds.map(([t, n]) => <option key={t} value={t}>.{t} ({int(n)})</option>)}
+            </select>
+          ) : null}
+          {filtered ? <button type="button" className="btn btn-ghost btn-sm" onClick={() => { setQ(""); setClientId(""); setTag(""); setRegistrar(""); setTld(""); }}>Clear</button> : null}
           <span className="spacer-auto" />
           <label className="search-input">
             <Search size={14} strokeWidth={1.5} />
