@@ -71,6 +71,8 @@ export type ReviewDomain = {
   quietDays: number | null; neverReplied: boolean; sentSinceReply: number;
   /** The Smartlead tags on the domain's inboxes, most used first. */
   slTags: string[];
+  /** Smartlead's provider type of the domain's inboxes (OUTLOOK, GMAIL, SMTP), MIXED when they differ. */
+  esp: string | null; tld: string | null;
   /**
    * Where the domain stands on Hypertide: the order is live, cancelled, gone from
    * the order list, the domain was replaced (by replacedBy), or there's no order
@@ -87,6 +89,11 @@ export const HT_META: Record<Ht, { label: string; chip: string; why: string }> =
   replaced: { label: "Replaced", chip: "Replaced", why: "replaced" },
   none: { label: "No order", chip: "No HT order", why: "no Hypertide order on this account" },
 };
+/** The mail provider as people say it. */
+export const espName = (esp: string | null | undefined) =>
+  !esp ? "Unknown" : esp === "OUTLOOK" ? "Outlook" : esp === "GMAIL" || esp === "GOOGLE" ? "Google" : esp === "MIXED" ? "Mixed" : esp === "SMTP" ? "SMTP" : esp.charAt(0) + esp.slice(1).toLowerCase();
+export const ESP_ORDER = ["Outlook", "Google", "SMTP", "Mixed", "Unknown"];
+
 const htText = (d: ReviewDomain) => (d.ht === "replaced" && d.replacedBy ? `Replaced by ${d.replacedBy}` : d.ht ? HT_META[d.ht].label : "");
 export type ReviewCampaign = { id: number; name: string; clientName: string | null; bounces: number; missing: number };
 export type ReviewData = { from: string; to: string; today: string; domains: ReviewDomain[]; campaigns: ReviewCampaign[] };
@@ -191,10 +198,10 @@ const cell = (v: string | number | null) => {
 
 /** Tab-separated rows with a header, ready to paste into Google Sheets: one column per fact. */
 export function sheetRows(list: Judged[]): string {
-  const head = ["Domain", "Call", "Reason", "Signals", "Smartlead tags", "Hypertide", "Client", "Status", "Sent", "Human replies", "Spam rejections",
+  const head = ["Domain", "Call", "Reason", "Signals", "ESP", "TLD", "Smartlead tags", "Hypertide", "Client", "Status", "Sent", "Human replies", "Spam rejections",
     "Bounce rate", "Warmup reputation", "Days since any reply", "Inboxes connected", "Inboxes disconnected", "Replies incl. OOO"];
   const rows = list.map((d) => [
-    d.name, VERDICT_META[d.verdict].label, d.why, d.chips.map((c) => c.text).join(", "), d.slTags.join(", "), htText(d), d.clientName, d.status,
+    d.name, VERDICT_META[d.verdict].label, d.why, d.chips.map((c) => c.text).join(", "), espName(d.esp), d.tld ? `.${d.tld}` : "", d.slTags.join(", "), htText(d), d.clientName, d.status,
     d.sent, d.human, d.spam, d.sent ? `${((100 * d.bounces) / d.sent).toFixed(2)}%` : "", d.rep,
     d.quietDays == null ? "" : `${d.quietDays}${d.neverReplied ? "+" : ""}`, d.inboxes, d.disconnected, d.replies,
   ].map(cell).join("\t"));
@@ -223,6 +230,54 @@ function summarize(domains: Judged[], keys: (d: Judged) => { id: string; name: s
 export const byClient = (domains: Judged[]) =>
   summarize(domains, (d) => [{ id: d.clientId ?? "", name: d.clientName ?? "No client", hue: d.clientHue }]);
 
+/** One row per mail provider. */
+export const byEsp = (domains: Judged[]) =>
+  summarize(domains, (d) => [{ id: espName(d.esp), name: espName(d.esp), hue: null }]);
+
+/** One row per TLD. */
+export const byTld = (domains: Judged[]) =>
+  summarize(domains, (d) => [{ id: d.tld ?? "?", name: d.tld ? `.${d.tld}` : "No TLD", hue: null }]);
+
 /** One row per Smartlead tag; a domain with two tags counts under both. "" is the untagged domains. */
 export const bySmartleadTag = (domains: Judged[]) =>
   summarize(domains, (d) => (d.slTags.length ? d.slTags : [""]).map((t) => ({ id: t, name: t || "No tag", hue: null })));
+
+export type Advice = { tone: Tone | "success"; text: string };
+
+/**
+ * What to do about a domain, in words, from its call and what its bounces
+ * say. The first is the one that matters most; the rest are worth knowing.
+ */
+export function advise(d: Judged): Advice[] {
+  const out: Advice[] = [];
+  const add = (tone: Advice["tone"], text: string) => out.push({ tone, text });
+  const c = d.causes;
+  const total = Object.values(c).reduce((a, b) => a + (b ?? 0), 0);
+  const br = pct(d.bounces, d.sent);
+  const share = (k: BounceReason) => (total ? (c[k] ?? 0) / total : 0);
+  const tenant = c.sender ?? 0, dns = c.dns ?? 0, recipient = (c.restricted ?? 0) + (c.policy ?? 0) + (c.full ?? 0);
+
+  if (d.verdict === "drop") add("danger", `Delete its inboxes in Smartlead: ${d.ht === "replaced" && d.replacedBy ? `replaced by ${d.replacedBy}` : "Hypertide has cancelled it"}, nothing to reconnect`);
+  if (d.verdict === "dead") add("warning", "Reconnect the inboxes in Smartlead; if they don't come back, cancel it on Hypertide and replace it");
+  if (tenant >= RULES.senderBounces) add("danger", `${s(tenant, "bounce")} say the tenant or mailbox is blocked or over its limit: pause it in campaigns, check the Microsoft tenant, then lower the daily limit`);
+  if (dns >= RULES.senderBounces) add("danger", `${s(dns, "bounce")} say SPF, DKIM or DMARC failed: run Validate DNS and fix the records before sending more`);
+  if (d.disconnected && d.inboxes) add("warning", `${n(d.disconnected)} of ${n(d.inboxes + d.disconnected)} inboxes disconnected: reconnect them`);
+  if (d.blacklisted || (c.blocklist ?? 0) >= RULES.restBlocklist) add("danger", `${d.blacklisted ? `On ${s(d.blacklisted, "blocklist")}` : `${n(c.blocklist ?? 0)} blocklist bounces`}: take it out of campaigns and replace it`);
+  if (d.verdict === "rest" && !out.some((a) => a.tone === "danger")) add("danger", "Replace it: line up a rested domain and move its campaigns over");
+  const spamRate = pct(d.spam, d.sent) ?? 0;
+  if (d.spam >= RULES.watchSpam && spamRate >= RULES.watchSpamRate && d.verdict !== "rest") {
+    add("warning", `${p(spamRate)} rejected as spam: lower the daily limit by about half and keep warmup on; replace it if it rises again next week`);
+  }
+  if (br != null && br >= 2 && total) {
+    if (share("missing") >= 0.5) add("info", `${p(br)} bounce, but ${Math.round(100 * share("missing"))}% are addresses that don't exist: re-verify the list, the domain is fine`);
+    else if (recipient / total >= 0.5) add("info", `${p(br)} bounce, mostly the recipients' own rules (groups, filters, full mailboxes): drop those leads, not the domain`);
+    else if (share("other") + share("temporary") >= 0.5) add("info", `${p(br)} bounce with no clear reason in the notices: open the bounces to read them`);
+  }
+  if (d.rep != null && d.rep < RULES.lowRep) add("warning", `Warmup reputation ${d.rep.toFixed(0)}: keep warmup on and send less until it is back over ${RULES.lowRep}`);
+  if (d.chips.some((x) => x.key === "silent")) add("danger", `${n(d.sent)} sent and not one reply: it's likely landing in spam; rest or replace it`);
+  else if (d.chips.some((x) => x.key === "quiet")) add("warning", `No reply for ${n(d.quietDays ?? 0)} days: check inbox placement and lower the volume`);
+  if (d.verdict === "idle") add("info", "Connected but sent nothing: add it to a campaign or check its Smartlead tag");
+  if (d.verdict === "low" && !out.length) add("faint", `Only ${n(d.sent)} sent: too little to judge yet`);
+  if (!out.length && d.sent) add("success", "Healthy: nothing to change");
+  return out;
+}

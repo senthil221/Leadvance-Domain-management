@@ -8,6 +8,7 @@ import { createSmartleadTag, loadSmartleadTags, updateInboxSettings, updateInbox
 import { int } from "@/lib/format";
 
 type LimitMode = "set" | "random" | "split";
+type TagMode = "add" | "remove" | "replace";
 type Current = {
   dailyLimit: number | null; minWait: number | null; warmupMin: number | null; warmupPerDay: number | null;
   /** Null when unknown: Smartlead's API doesn't report ramp-up. */
@@ -53,7 +54,7 @@ function Card({ title, children, foot }: { title: string; children: ReactNode; f
 
 // Smartlead's "Configure settings", for the selected inboxes: tags, outbound
 // (daily limit and gap between emails) and warmup, each applied on its own.
-export function InboxSettingsDialog({ open, onOpenChange, inboxIds, domains, current, selectedTags, knownTags, dryRun, appProblem }: {
+export function InboxSettingsDialog({ open, onOpenChange, inboxIds, domains, current, selectedTags, knownTags, dryRun, appProblem, note, onDone }: {
   open: boolean;
   onOpenChange: (o: boolean) => void;
   inboxIds: string[];
@@ -66,9 +67,14 @@ export function InboxSettingsDialog({ open, onOpenChange, inboxIds, domains, cur
   dryRun: boolean;
   /** Why the Smartlead token can't be used, or null when it can. */
   appProblem: string | null;
+  /** A line under the title, such as inboxes left out. */
+  note?: string | null;
+  /** After a change is applied. */
+  onDone?: () => void;
 }) {
   const count = inboxIds.length;
   const [tags, setTags] = useState("");
+  const [tagMode, setTagMode] = useState<TagMode>("replace");
   const [newTag, setNewTag] = useState("");
   const [workspaceTags, setWorkspaceTags] = useState<Tag[] | null>(null);
   const [mode, setMode] = useState<LimitMode>("set");
@@ -94,7 +100,7 @@ export function InboxSettingsDialog({ open, onOpenChange, inboxIds, domains, cur
   if (key !== lastKey) {
     setLastKey(key);
     if (key !== null) {
-      setTags(selectedTags.join(", ")); setNewTag("");
+      setTags(selectedTags.join(", ")); setNewTag(""); setTagMode("replace");
       setMode("set"); setMax(r(current.dailyLimit, 15)); setWait(r(current.minWait, 15)); setKeepMax(false);
       setLo(""); setHi(""); setTotal(current.dailyLimit != null ? String(Math.round(current.dailyLimit * count)) : "");
       setWMin(r(current.warmupMin, 4)); setWMax(r(current.warmupPerDay, 9)); setRampup(current.warmupRampup == null ? "" : String(Math.round(current.warmupRampup))); setReply(r(current.warmupReplyRate, 60));
@@ -114,6 +120,7 @@ export function InboxSettingsDialog({ open, onOpenChange, inboxIds, domains, cur
       setBusy(null);
       if (!res.ok) return void setError({ card, text: res.error });
       toast.success(message(res.data as never));
+      onDone?.();
     });
   };
   const fail = (card: string, text: string) => setError({ card, text });
@@ -131,7 +138,7 @@ export function InboxSettingsDialog({ open, onOpenChange, inboxIds, domains, cur
   const applyTags = () => {
     const list = splitTags(tags);
     if (!list.length) return fail("tags", "Enter at least one tag");
-    run("tags", () => updateInboxTags({ inboxIds, tags: list }), (d: { message: string }) => d.message);
+    run("tags", () => updateInboxTags({ inboxIds, tags: list, mode: tagMode }), (d: { message: string }) => d.message);
   };
   const create = () => {
     const name = newTag.trim();
@@ -185,13 +192,19 @@ export function InboxSettingsDialog({ open, onOpenChange, inboxIds, domains, cur
               <Dialog.Description className="dialog-desc">
                 {int(count)} inbox{count === 1 ? "" : "es"} on {domains} domain{domains === 1 ? "" : "s"}. Each card is applied on its own.
                 {dryRun ? " Dry run is on: nothing is written to Smartlead." : ""}
+                {note ? <> {note}</> : null}
               </Dialog.Description>
             </div>
             <Dialog.Close asChild><button type="button" className="btn btn-sm btn-icon" aria-label="Close"><X size={15} /></button></Dialog.Close>
           </div>
           <div className="dialog-body">
             <div className="cfg-grid">
-              <Card title="Tag management" foot={<button type="button" className="btn btn-primary cfg-apply" disabled={Boolean(appProblem) || busy !== null} onClick={applyTags}>{busy === "tags" ? "Updating…" : "Update tags"}</button>}>
+              <Card title="Tag management" foot={<button type="button" className="btn btn-primary cfg-apply" disabled={Boolean(appProblem) || busy !== null} onClick={applyTags}>{busy === "tags" ? "Updating…" : tagMode === "add" ? "Add tags" : tagMode === "remove" ? "Remove tags" : "Replace tags"}</button>}>
+                <div className="seg cfg-seg" role="group" aria-label="How to apply the tags">
+                  {([["add", "Add"], ["remove", "Remove"], ["replace", "Replace all"]] as const).map(([k, label]) => (
+                    <button key={k} type="button" aria-pressed={tagMode === k} onClick={() => { setTagMode(k); setTags(k === "replace" ? selectedTags.join(", ") : ""); }}>{label}</button>
+                  ))}
+                </div>
                 <label className="field" htmlFor="cfg-tags">
                   <span className="cfg-label">Tags</span>
                   <input id="cfg-tags" className="input" value={tags} onChange={(e) => setTags(e.target.value)} placeholder="warmup, client-name" />
@@ -214,7 +227,11 @@ export function InboxSettingsDialog({ open, onOpenChange, inboxIds, domains, cur
                       </button>
                     )) : <span className="field-hint">{workspaceTags === null && !appProblem ? "Loading…" : "No tags yet"}</span>}
                   </div>
-                  <span className="field-hint">Click a tag to add or remove it. Updating replaces each inbox&apos;s tags.</span>
+                  <span className="field-hint">
+                    {tagMode === "add" ? "Click tags to pick them. Each inbox keeps the tags it has and gets these too."
+                      : tagMode === "remove" ? "Click tags to pick them. Only these come off; each inbox keeps its other tags."
+                      : "Click a tag to add or remove it. Every inbox ends up with exactly these tags."}
+                  </span>
                 </div>
                 {appProblem ? <p className="cfg-note is-warn">{appProblem.replace("Reconnecting", "Tags")}</p> : null}
                 {err("tags")}

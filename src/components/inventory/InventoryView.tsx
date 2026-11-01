@@ -10,6 +10,7 @@ import { ColumnsMenu, useColumns, type ColumnDef } from "@/components/Columns";
 import { ChangeStatusDialog } from "@/components/domains/ChangeStatusDialog";
 import { ReplaceDialog } from "@/components/domains/ReplaceDialog";
 import { SetupDialog } from "@/components/domains/SetupDialog";
+import { ConfigureDomains, PasteSelect } from "@/components/domains/DomainBulk";
 import { MarkReplacedDialog } from "./MarkReplacedDialog";
 import { useCompact } from "@/components/ThemeToggle";
 import { Badge, ClientCell, Empty, TagList } from "@/components/ui";
@@ -227,6 +228,8 @@ export function InventoryView({ domains, clients }: { domains: DomainRow[]; clie
             <Search size={14} strokeWidth={1.5} />
             <input className="input" value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search" aria-label="Search inventory" />
           </label>
+          <PasteSelect rows={domains} selected={selected} where="in your domains"
+            onSelect={(s) => { setSelected(s); if ([...s].some((id) => !rows.some((r) => r.id === id))) { setView("all"); setQ(""); } }} />
           <button type="button" className="btn btn-sm" onClick={exportCsv}><Download size={14} /> Export</button>
           <ColumnsMenu cols={cols} />
         </div>
@@ -324,7 +327,6 @@ export function InventoryView({ domains, clients }: { domains: DomainRow[]; clie
                         ) : d.icemailIssue ? <Badge tone="danger">{d.icemailIssue}</Badge> : <span className="zero">—</span>}
                       </td>
                       ) : null}
-
                       {on("inboxes") ? (
                       <td className="is-num">{d.inboxCount ? int(d.inboxCount) : <span className="zero">0</span>}</td>
                       ) : null}
@@ -364,7 +366,8 @@ export function InventoryView({ domains, clients }: { domains: DomainRow[]; clie
       {selected.size > 0 ? (
         <div className="bulk-bar" role="toolbar" aria-label="Selected domains">
           <span className="bulk-count">{selected.size} selected</span>
-          <button type="button" className="btn btn-primary btn-sm" onClick={() => setSetupOpen(true)}><Tag size={14} /> Set up</button>
+          <ConfigureDomains domainIds={[...selected]} />
+          <button type="button" className="btn btn-sm" onClick={() => setSetupOpen(true)}><Tag size={14} /> Set up</button>
           <button type="button" className="btn btn-sm" disabled={!selectedRows.some(replaceable)} title="Swap the selected active or warming domains for free ones" onClick={() => setReplaceOpen(true)}><ArrowLeftRight size={14} /> Replace</button>
           <button type="button" className="btn btn-sm" disabled={!selectedRows.some((d) => lifeOf(d) !== "replaced")} onClick={() => setMoveTo("replaced")}><Archive size={14} /> Mark as replaced</button>
           <button type="button" className="btn btn-sm" disabled={!selectedRows.some((d) => lifeOf(d) !== "recovery")} onClick={() => setMoveTo("recovery")}><LifeBuoy size={14} /> Move to recovery</button>

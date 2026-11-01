@@ -905,6 +905,8 @@ export async function getReview(from: string, to: string): Promise<import("./rev
         (select coalesce(array_agg(x.t order by x.n desc, x.t), '{}') from (
           select trim(t) as t, count(*) as n from inboxes i cross join unnest(i.smartlead_tags) t
           where i.domain_id = d.id and i.status <> 'removed' and trim(t) <> '' group by 1) x) as sl_tags,
+        (select case when count(distinct i.provider_type) > 1 then 'MIXED' else max(i.provider_type) end from inboxes i
+          where i.domain_id = d.id and i.status <> 'removed') as esp, d.tld,
         rp.name as replaced_by,
         -- NPC is what Hypertide's dashboard shows as Cancelled. "none": a Hypertide
         -- domain this account has no order for (only once orders have been synced).
@@ -945,6 +947,23 @@ export async function getReview(from: string, to: string): Promise<import("./rev
       group by e.campaign_id`,
   ]);
   return { from, to, today: t.today, domains, campaigns };
+}
+
+/** One domain's bounces in a range, for Performance. */
+export async function getBounceDetail(domainId: string, from: string, to: string): Promise<import("./bounce-detail").BounceDetail> {
+  const events = await sql<import("./bounce-detail").BounceEvent[]>`
+    with tz as (select coalesce((select value #>> '{}' from settings where key = 'stats_timezone'), 'UTC') as z)
+    select e.bounce_cause as cause, e.occurred_at as at, e.campaign_id::int as campaign_id, e.campaign_name, e.recipient_esp as esp,
+      left(coalesce(e.payload->'bounce_message'->>'text', e.payload->>'description', e.payload->>'bounce_reason'), 600) as text,
+      left(replace(substring(regexp_replace(coalesce(e.payload->'bounce_message'->>'html', ''), '<[^>]+>', ' ', 'g')
+        from 'Remote server returned an error.{0,250}'), '&gt;', '>'), 300) as remote
+    from email_events e cross join tz
+    where e.kind = 'bounce' and e.domain_id = ${domainId}
+      and (e.occurred_at at time zone tz.z)::date between ${from}::date and ${to}::date
+    order by e.occurred_at desc
+    limit 2000`;
+  const { summarizeBounces } = await import("./bounce-detail");
+  return summarizeBounces(events);
 }
 
 // ---------------------------------------------------------------------------

@@ -1,10 +1,11 @@
 "use client";
 
 import { DomainLink } from "@/components/domains/DomainLink";
-import { ChevronLeft, ChevronRight, Copy, ListChecks, Search, Sheet, Tag, TagsIcon, X } from "lucide-react";
+import { ChevronLeft, ChevronRight, Copy, ListChecks, Search, Sheet, TagsIcon, X } from "lucide-react";
 import { useMemo, useState, useTransition } from "react";
 import { toast } from "sonner";
 import { loadReview, markDomains, tagDomains } from "@/app/actions";
+import { ConfigureDomains, PasteSelect } from "@/components/domains/DomainBulk";
 import { RangePicker } from "@/components/RangePicker";
 import { SortTh } from "@/components/SortTh";
 import { ClientCell, Empty, Rep, StatusDot, TagList } from "@/components/ui";
@@ -14,13 +15,13 @@ import type { ClientRow } from "@/lib/queries";
 import { nice, previousLabel } from "@/lib/range";
 import { MARK_CHOICES, markOf, type Mark } from "@/lib/tag-map";
 import {
-  RULES, SIGNAL_META, SIGNAL_ORDER, VERDICT_META, VERDICT_ORDER, badLists, byClient, bySmartleadTag, judge, sheetRows,
+  ESP_ORDER, RULES, SIGNAL_META, SIGNAL_ORDER, VERDICT_META, VERDICT_ORDER, badLists, byClient, byEsp, bySmartleadTag, byTld, espName, judge, sheetRows,
   type Chip, type ClientSummary, type Judged, type ReviewData, type Signal, type Verdict,
 } from "@/lib/review";
 
-// The weekly review: every sending domain sorted into what to do with it,
-// with short tags for the evidence behind the call, client by client, ready
-// to copy or tag.
+// The weekly review: every sending domain sorted into what to do with it, a
+// tab per call with the reason beside each domain, split by mail provider and
+// TLD, ready to copy, tag or reconfigure in Smartlead.
 
 const LISTS: Verdict[] = ["fix", "rest", "drop", "dead", "watch", "idle"];
 // The tag each list's Tag button suggests. Marks also go to Smartlead.
@@ -35,12 +36,13 @@ const pct = (n: number, d: number) => (d > 0 ? (100 * n) / d : null);
 const fx = (v: number | null, digits = 1) => (v == null ? "—" : `${v.toFixed(v < 1 && digits === 1 ? 2 : digits)}%`);
 const plural = (n: number, one: string, many = `${one}s`) => `${int(n)} ${n === 1 ? one : many}`;
 
-type SortKey = "verdict" | "name" | "client" | "signals" | "sent" | "replies" | "human" | "quiet" | "rep" | "spam" | "missing" | "bounceRate";
+type SortKey = "verdict" | "name" | "client" | "esp" | "signals" | "sent" | "replies" | "human" | "quiet" | "rep" | "spam" | "missing" | "bounceRate";
 const sortValue = (r: Judged, k: SortKey): string | number | null => {
   switch (k) {
     case "verdict": return -VERDICT_ORDER.indexOf(r.verdict) * 1e6 + r.strikes * 1e4 + r.spam;
     case "signals": return r.strikes * 100 + r.chips.length;
     case "client": return r.clientName?.toLowerCase() ?? null;
+    case "esp": return espName(r.esp);
     case "name": return r.name;
     case "quiet": return r.quietDays;
     case "rep": return r.rep;
@@ -71,6 +73,26 @@ function SlTags({ tags }: { tags: string[] }) {
   );
 }
 
+function EspBadge({ esp }: { esp: string | null }) {
+  const name = espName(esp);
+  return <span className={`badge${name === "Outlook" ? " tone-info" : name === "Google" ? " tone-success" : ""}`}>{name}</span>;
+}
+
+/** Facet buttons with counts: click one to show only those, again to show all. */
+function Facets({ label, items, value, onPick }: { label: string; items: [string, number, string?][]; value: string | null; onPick: (v: string | null) => void }) {
+  if (!items.length && value == null) return null;
+  return (
+    <span className="rv-facet" role="group" aria-label={label}>
+      <span className="rv-sig-filter-k">{label}</span>
+      {items.map(([k, n, shown]) => (
+        <button key={k} type="button" className="rv-sig-btn" aria-pressed={value === k} onClick={() => onPick(value === k ? null : k)}>
+          {shown ?? k} <span>{int(n)}</span>
+        </button>
+      ))}
+    </span>
+  );
+}
+
 function Chips({ chips }: { chips: Chip[] }) {
   if (!chips.length) return null;
   return (
@@ -87,7 +109,9 @@ export function ReviewView({ initial, clients }: { initial: ReviewData; clients:
   const [scope, setScope] = useState<"active" | "other">("active");
   const [clientId, setClientId] = useState<string | null>(null);
   const [slTag, setSlTag] = useState<string | null>(null);
-  const [groupBy, setGroupBy] = useState<"client" | "tag">("client");
+  const [groupBy, setGroupBy] = useState<"client" | "tag" | "esp" | "tld">("client");
+  const [esp, setEsp] = useState<string | null>(null);
+  const [tld, setTld] = useState<string | null>(null);
   const [q, setQ] = useState("");
   const [only, setOnly] = useState<Verdict | "">("");
   const [signals, setSignals] = useState<Set<Signal>>(new Set());
@@ -124,9 +148,26 @@ export function ReviewView({ initial, clients }: { initial: ReviewData; clients:
     return m;
   }, [inScope]);
   const needle = q.trim().toLowerCase();
-  const listed = useMemo(() => inScope.filter((d) => (!only || d.verdict === only) &&
-    (!needle || d.name.includes(needle) || d.clientName?.toLowerCase().includes(needle) || [...d.tags, ...d.slTags].some((t) => t.toLowerCase().includes(needle)))),
-  [inScope, only, needle]);
+  const searched = useMemo(() => inScope.filter((d) =>
+    !needle || d.name.includes(needle) || d.clientName?.toLowerCase().includes(needle) || [...d.tags, ...d.slTags].some((t) => t.toLowerCase().includes(needle))),
+  [inScope, needle]);
+  const ofEsp = (d: Judged) => esp == null || espName(d.esp) === esp;
+  const ofTld = (d: Judged) => tld == null || (d.tld ?? "?") === tld;
+  const ofCall = (d: Judged) => !only || d.verdict === only;
+  const facets = useMemo(() => {
+    const tabs = new Map<Verdict | "", number>([["", 0]]), esps = new Map<string, number>(), tlds = new Map<string, number>();
+    for (const d of searched) {
+      if (ofEsp(d) && ofTld(d)) { tabs.set(d.verdict, (tabs.get(d.verdict) ?? 0) + 1); tabs.set("", tabs.get("")! + 1); }
+      if (ofCall(d) && ofTld(d)) esps.set(espName(d.esp), (esps.get(espName(d.esp)) ?? 0) + 1);
+      if (ofCall(d) && ofEsp(d)) tlds.set(d.tld ?? "?", (tlds.get(d.tld ?? "?") ?? 0) + 1);
+    }
+    return {
+      tabs,
+      esps: [...esps.entries()].sort((a, b) => ESP_ORDER.indexOf(a[0]) - ESP_ORDER.indexOf(b[0])) as [string, number][],
+      tlds: [...tlds.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0])).map(([k, n]) => [k, n, k === "?" ? "No TLD" : `.${k}`]) as [string, number, string][],
+    };
+  }, [searched, only, esp, tld]); // eslint-disable-line react-hooks/exhaustive-deps
+  const listed = useMemo(() => searched.filter((d) => ofCall(d) && ofEsp(d) && ofTld(d)), [searched, only, esp, tld]); // eslint-disable-line react-hooks/exhaustive-deps
   const signalCounts = useMemo(() => {
     const m = new Map<Signal, number>();
     for (const d of listed) for (const c of d.chips) m.set(c.key, (m.get(c.key) ?? 0) + 1);
@@ -154,12 +195,24 @@ export function ReviewView({ initial, clients }: { initial: ReviewData; clients:
   const allSelected = rows.length > 0 && rows.every((r) => selected.has(r.id));
   const toggle = (id: string) => setSelected((s) => { const n = new Set(s); if (n.has(id)) n.delete(id); else n.add(id); return n; });
   const toggleSignal = (k: Signal) => setSignals((s) => { const n = new Set(s); if (n.has(k)) n.delete(k); else n.add(k); return n; });
-  const sortBy = (key: SortKey) => setSort((s) => (s.key === key ? { key, dir: s.dir === 1 ? -1 : 1 } : { key, dir: key === "name" || key === "client" ? 1 : -1 }));
-  const pickList = (v: Verdict) => {
-    setOnly(v);
-    setSignals(new Set());
-    setSelected(new Set(byVerdict.get(v)!.map((d) => d.id)));
-    setTag(LIST_TAG[v] ?? VERDICT_META[v].label.split(" ")[0]);
+  const sortBy = (key: SortKey) => setSort((s) => (s.key === key ? { key, dir: s.dir === 1 ? -1 : 1 } : { key, dir: key === "name" || key === "client" || key === "esp" ? 1 : -1 }));
+  // Every domain the tab shows, with the tag its call suggests ready in the bar.
+  const selectShown = () => {
+    setSelected(new Set(rows.map((d) => d.id)));
+    if (only) setTag(LIST_TAG[only] ?? VERDICT_META[only].label.split(" ")[0]);
+  };
+  const reload = async () => {
+    const again = await loadReview({ from: data.from, to: data.to });
+    if (again.ok) setData(again.data);
+  };
+  const groupRows: ClientSummary[] = groupBy === "client" ? clientRows : groupBy === "tag" ? tagRows : groupBy === "esp" ? byEsp(inScope) : byTld(inScope);
+  const groupOn = (c: ClientSummary) => (groupBy === "client" ? c.id === clientId : groupBy === "tag" ? c.id === slTag : groupBy === "esp" ? c.id === esp : c.id === tld);
+  const groupPick = (c: ClientSummary) => {
+    const on = groupOn(c);
+    if (groupBy === "client") pickClient(on ? null : c.id);
+    else if (groupBy === "tag") pickTag(on ? null : c.id);
+    else if (groupBy === "esp") setEsp(on ? null : c.id);
+    else setTld(on ? null : c.id);
   };
   // A mark goes to the inboxes in Smartlead as well; any other tag stays in the app.
   const mark = markOf(tag);
@@ -174,8 +227,7 @@ export function ReviewView({ initial, clients }: { initial: ReviewData; clients:
       if (!r.ok) return void toast.error(r.error);
       toast.success(on ? `Tagged ${plural(r.data.changed, "domain")} ${tag.trim()} (in this app only)` : `Took ${tag.trim()} off ${plural(r.data.changed, "domain")}`);
     }
-    const again = await loadReview({ from: data.from, to: data.to });
-    if (again.ok) setData(again.data);
+    await reload();
   });
 
   const headline = [
@@ -226,56 +278,138 @@ export function ReviewView({ initial, clients }: { initial: ReviewData; clients:
         </span>
       </div>
 
-      <section className="rv-lists" aria-label="What to do">
-        {LISTS.map((v) => {
-          const list = byVerdict.get(v)!;
-          const m = VERDICT_META[v];
-          return (
-            <div key={v} className={`card rv-list${list.length ? ` has-${m.tone}` : ""}`}>
-              <div className="rv-list-head" title={m.hint}>
-                <span className="card-title">{m.label}</span>
-                <span className={`rv-count tone-${list.length ? m.tone : "faint"}`}>{int(list.length)}</span>
-              </div>
-              <p className="rv-hint">{m.hint}</p>
-              <div className="rv-items">
-                {list.length ? list.slice(0, 5).map((d) => (
-                  <div key={d.id} className="rv-item" title={d.why}>
-                    <span className="rv-item-head">
-                      <DomainLink id={d.id} tab="stats" className="strong hover:underline">{d.name}</DomainLink>
-                      <span className="rv-why">{[clientId == null ? d.clientName : null, d.slTags.join(", ")].filter(Boolean).join(" · ")}</span>
-                    </span>
-                    {d.chips.length ? <Chips chips={d.chips} /> : <span className="rv-why">{d.why}</span>}
-                  </div>
-                )) : <p className="rv-none">None in this range</p>}
-                {list.length > 5 ? <button type="button" className="rv-more" onClick={() => { setOnly(v); setSignals(new Set()); }}>and {int(list.length - 5)} more</button> : null}
-              </div>
-              {list.length ? (
-                <div className="rv-actions">
-                  <button type="button" className="btn btn-sm" onClick={() => copy(list.map((d) => d.name).join("\n"), plural(list.length, "domain"))}><Copy size={13} /> Copy</button>
-                  <button type="button" className="btn btn-sm" title="Domain, call, reason, signals, Smartlead tags, client and numbers, one column each with a header row: paste into Google Sheets" onClick={() => copy(sheetRows(list), `${plural(list.length, "domain")} for Sheets`)}><Sheet size={13} /> Copy for Sheets</button>
-                  <button type="button" className="btn btn-sm" onClick={() => pickList(v)}><Tag size={13} /> Tag</button>
-                </div>
-              ) : null}
-            </div>
-          );
-        })}
-      </section>
+      <div className="rv-tabs card">
+        <div className="view-tabs rv-calls" role="tablist" aria-label="Call">
+          <button type="button" role="tab" aria-selected={!only} className={!only ? "is-on" : undefined} onClick={() => setOnly("")}>All <span>{int(facets.tabs.get("") ?? 0)}</span></button>
+          {VERDICT_ORDER.filter((v) => facets.tabs.get(v) || only === v).map((v) => (
+            <button key={v} type="button" role="tab" aria-selected={only === v} className={only === v ? "is-on" : undefined} onClick={() => setOnly(v)} title={VERDICT_META[v].hint}>
+              {VERDICT_META[v].label} <span className={`rv-count tone-${LISTS.includes(v) ? VERDICT_META[v].tone : "faint"}`}>{int(facets.tabs.get(v) ?? 0)}</span>
+            </button>
+          ))}
+        </div>
+        {only ? <p className="rv-hint rv-tab-hint">{VERDICT_META[only].hint}</p> : null}
+        <div className="rv-facets">
+          <Facets label="ESP" items={facets.esps} value={esp} onPick={setEsp} />
+          <Facets label="TLD" items={facets.tlds} value={tld} onPick={setTld} />
+          {esp != null || tld != null ? <button type="button" className="rv-more" onClick={() => { setEsp(null); setTld(null); }}>Clear</button> : null}
+        </div>
+        <div className="rv-tab-actions">
+          <button type="button" className="btn btn-sm" disabled={!rows.length} onClick={selectShown}><ListChecks size={13} /> Select all {int(rows.length)}</button>
+          <button type="button" className="btn btn-sm" disabled={!rows.length} onClick={() => copy(rows.map((d) => d.name).join("\n"), plural(rows.length, "domain"))}><Copy size={13} /> Copy</button>
+          <button type="button" className="btn btn-sm" disabled={!rows.length} title="Domain, call, reason, signals, ESP, TLD, Smartlead tags, client and numbers, one column each with a header row: paste into Google Sheets"
+            onClick={() => copy(sheetRows(rows), `${plural(rows.length, "domain")} for Sheets`)}><Sheet size={13} /> Copy for Sheets</button>
+          <span className="spacer-auto" />
+          <PasteSelect rows={inScope} selected={selected} where="in this review"
+            onSelect={(s) => { setSelected(s); setOnly(""); setEsp(null); setTld(null); setSignals(new Set()); setQ(""); }} />
+          <label className="search-input">
+            <Search size={14} strokeWidth={1.5} />
+            <input className="input" value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search domain, client, tag" aria-label="Search domains" />
+          </label>
+        </div>
+      </div>
+
+      <div className="rv-sig-filter" role="group" aria-label="Show only domains with these tags">
+        <span className="rv-sig-filter-k">Show only</span>
+        {SIGNAL_ORDER.filter((k) => signalCounts.get(k) || signals.has(k)).map((k) => (
+          <button key={k} type="button" className="rv-sig-btn" aria-pressed={signals.has(k)} title={SIGNAL_META[k].hint} onClick={() => toggleSignal(k)}>
+            {SIGNAL_META[k].label} <span>{int(signalCounts.get(k) ?? 0)}</span>
+          </button>
+        ))}
+        {signals.size ? <button type="button" className="rv-more" onClick={() => setSignals(new Set())}>Clear</button> : null}
+        {!signalCounts.size && !signals.size ? <span className="rv-none">No tags in this view</span> : null}
+      </div>
+
+      <div className="table-wrap">
+        <div className="table-scroll" style={{ maxHeight: "calc(100dvh - 220px)", minHeight: 240 }}>
+          <table className="data-table is-main">
+            <thead>
+              <tr>
+                <th style={{ width: 36 }}><input type="checkbox" className="checkbox" aria-label="Select all" checked={allSelected} onChange={() => setSelected(allSelected ? new Set() : new Set(rows.map((r) => r.id)))} /></th>
+                <SortTh k="name" sort={sort} onSort={sortBy}>Domain</SortTh>
+                <SortTh k="client" sort={sort} onSort={sortBy}>Client</SortTh>
+                <SortTh k="verdict" sort={sort} onSort={sortBy}>Call</SortTh>
+                <SortTh k="signals" sort={sort} onSort={sortBy} title="Strikes first: spam, blocklisted, low reputation, no reply, no response">Why</SortTh>
+                <SortTh k="esp" sort={sort} onSort={sortBy}>ESP</SortTh>
+                <SortTh k="sent" sort={sort} onSort={sortBy} num>Sent</SortTh>
+                <SortTh k="replies" sort={sort} onSort={sortBy} num title="Every reply, out of office included">Replies</SortTh>
+                <SortTh k="human" sort={sort} onSort={sortBy} num>Human</SortTh>
+                <SortTh k="quiet" sort={sort} onSort={sortBy} num title="Days since the last reply of any kind, out of office included">Last reply</SortTh>
+                <SortTh k="rep" sort={sort} onSort={sortBy} num title="Average warmup reputation of connected inboxes">Rep</SortTh>
+                <SortTh k="spam" sort={sort} onSort={sortBy} num title="Spam and blocklist rejections">Spam</SortTh>
+                <SortTh k="missing" sort={sort} onSort={sortBy} num title="Bounces to addresses that don't exist">No address</SortTh>
+                <SortTh k="bounceRate" sort={sort} onSort={sortBy} num>Bounce</SortTh>
+                <th title="Tags on the domain's inboxes in Smartlead">Smartlead tags</th>
+                <th>Your tags</th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((r) => {
+                const m = VERDICT_META[r.verdict];
+                const br = pct(r.bounces, r.sent);
+                return (
+                  <tr key={r.id} data-selected={selected.has(r.id)}>
+                    <td><input type="checkbox" className="checkbox" aria-label={`Select ${r.name}`} checked={selected.has(r.id)} onChange={() => toggle(r.id)} /></td>
+                    <td className="col-first">
+                      <span className="flex items-center gap-2">
+                        <DomainLink id={r.id} tab="stats" className="strong hover:underline">{r.name}</DomainLink>
+                        {r.status !== "active" ? <StatusDot status={r.status as Parameters<typeof StatusDot>[0]["status"]} /> : null}
+                      </span>
+                    </td>
+                    <td><ClientCell name={r.clientName} hue={r.clientHue} /></td>
+                    <td><span className={`badge tone-${m.tone}`} title={r.why}>{m.label}</span></td>
+                    <td className="rv-sig-cell rv-why-cell">
+                      {r.chips.length ? <Chips chips={r.chips} /> : null}
+                      <span className="rv-why">{r.why}</span>
+                    </td>
+                    <td><EspBadge esp={r.esp} /></td>
+                    <td className="is-num">{r.sent ? int(r.sent) : <span className="zero">0</span>}</td>
+                    <td className="is-num">{r.replies ? int(r.replies) : <span className={r.sent >= RULES.silentSent ? "metric is-bad" : "zero"}>0</span>}</td>
+                    <td className="is-num">{r.human ? int(r.human) : <span className="zero">0</span>}</td>
+                    <td className="is-num" title={r.quietDays == null ? "Nothing sent yet" : r.neverReplied ? `No reply on record (${int(r.sentSinceReply)} sent)` : `${int(r.sentSinceReply)} sent since`}>
+                      {r.quietDays == null ? <span className="zero">—</span>
+                        : <span className={`metric${r.quietDays >= RULES.longQuietDays && r.sentSinceReply >= RULES.quietSent ? " is-bad" : r.quietDays >= RULES.quietDays && r.sentSinceReply >= RULES.quietSent ? " is-warn" : ""}`}>
+                          {r.neverReplied ? `${r.quietDays}d+` : r.quietDays === 0 ? "Today" : `${r.quietDays}d`}
+                        </span>}
+                    </td>
+                    <td className="is-num"><Rep value={r.rep} /></td>
+                    <td className="is-num">{r.spam ? <span className={r.spam >= 10 ? "metric is-bad" : "metric is-warn"}>{int(r.spam)}</span> : <span className="zero">0</span>}</td>
+                    <td className="is-num">{r.causes.missing ? int(r.causes.missing) : <span className="zero">0</span>}</td>
+                    <td className="is-num"><span className={`metric${br != null && br > 3 ? " is-bad" : br != null && br > 2 ? " is-warn" : ""}${!br ? " zero" : ""}`}>{fx(br)}</span></td>
+                    <td><SlTags tags={r.slTags} /></td>
+                    <td><TagList tags={r.tags} max={3} /></td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+          {rows.length === 0 ? <Empty icon={ListChecks} title="No domains here">Pick another range, client, call or tag.</Empty> : null}
+        </div>
+        <div className="table-footer">
+          <span><b>{int(rows.length)}</b> domains</span>
+          <span><b>{int(rows.reduce((a, r) => a + r.sent, 0))}</b> sent</span>
+          <span><b>{int(rows.reduce((a, r) => a + r.human, 0))}</b> human replies</span>
+          <span><b>{int(rows.reduce((a, r) => a + r.spam, 0))}</b> spam rejections</span>
+        </div>
+      </div>
 
       <div className="card">
         <div className="card-head">
           <div className="seg" role="group" aria-label="Group by">
             <button type="button" aria-pressed={groupBy === "client"} onClick={() => setGroupBy("client")}>By client</button>
             <button type="button" aria-pressed={groupBy === "tag"} onClick={() => setGroupBy("tag")}>By Smartlead tag</button>
+            <button type="button" aria-pressed={groupBy === "esp"} onClick={() => setGroupBy("esp")}>By ESP</button>
+            <button type="button" aria-pressed={groupBy === "tld"} onClick={() => setGroupBy("tld")}>By TLD</button>
           </div>
           <span className="card-sub">{groupBy === "client"
             ? "Worst first. Click a client to see only its domains; the arrows up top step through them"
-            : "Worst first. A domain with two tags counts under both. Click a tag to see only its domains"}</span>
+            : groupBy === "tag" ? "Worst first. A domain with two tags counts under both. Click a tag to see only its domains"
+            : `Worst first. Click a${groupBy === "esp" ? "n ESP" : " TLD"} to see only its domains`}</span>
         </div>
         <div className="table-scroll" style={{ maxHeight: 320 }}>
           <table className="data-table rv-clients">
             <thead>
               <tr>
-                <th>{groupBy === "client" ? "Client" : "Smartlead tag"}</th>
+                <th>{groupBy === "client" ? "Client" : groupBy === "tag" ? "Smartlead tag" : groupBy === "esp" ? "ESP" : "TLD"}</th>
                 <th className="is-num">Domains</th>
                 {LISTS.map((v) => <th key={v} className="is-num" title={VERDICT_META[v].hint}>{VERDICT_META[v].label}</th>)}
                 <th className="is-num">Sent</th>
@@ -285,12 +419,12 @@ export function ReviewView({ initial, clients }: { initial: ReviewData; clients:
               </tr>
             </thead>
             <tbody>
-              {(groupBy === "client" ? clientRows : tagRows).map((c: ClientSummary) => {
-                const on = groupBy === "client" ? c.id === clientId : c.id === slTag;
-                const pick = () => (groupBy === "client" ? pickClient(on ? null : c.id) : pickTag(on ? null : c.id));
+              {groupRows.map((c: ClientSummary) => {
+                const on = groupOn(c);
                 return (
-                <tr key={c.id || "none"} data-active={on} className="is-clickable" onClick={pick}>
-                  <td>{groupBy === "client" ? <ClientCell name={c.name} hue={c.hue} /> : c.id ? <span className="badge">{c.name}</span> : <span className="zero">No tag</span>}</td>
+                <tr key={c.id || "none"} data-active={on} className="is-clickable" onClick={() => groupPick(c)}>
+                  <td>{groupBy === "client" ? <ClientCell name={c.name} hue={c.hue} /> : groupBy === "esp" ? <EspBadge esp={c.id === "Unknown" ? null : c.id.toUpperCase()} />
+                    : groupBy === "tld" ? <span className="strong">{c.name}</span> : c.id ? <span className="badge">{c.name}</span> : <span className="zero">No tag</span>}</td>
                   <td className="is-num">{int(c.domains)}</td>
                   {LISTS.map((v) => (
                     <td key={v} className="is-num">{c.counts[v] ? <span className={`rv-count tone-${VERDICT_META[v].tone}`}>{int(c.counts[v])}</span> : <span className="zero">0</span>}</td>
@@ -304,7 +438,7 @@ export function ReviewView({ initial, clients }: { initial: ReviewData; clients:
               })}
             </tbody>
           </table>
-          {(groupBy === "client" ? clientRows : tagRows).length === 0 ? <p className="rv-none" style={{ padding: "10px 14px" }}>No domains here.</p> : null}
+          {groupRows.length === 0 ? <p className="rv-none" style={{ padding: "10px 14px" }}>No domains here.</p> : null}
         </div>
       </div>
 
@@ -340,102 +474,11 @@ export function ReviewView({ initial, clients }: { initial: ReviewData; clients:
         </div>
       </div>
 
-      <div className="table-bar">
-        <div className="view-tabs" role="tablist" aria-label="Call">
-          <button type="button" role="tab" aria-selected={!only} className={!only ? "is-on" : undefined} onClick={() => setOnly("")}>All <span>{int(inScope.length)}</span></button>
-          {VERDICT_ORDER.filter((v) => count(v)).map((v) => (
-            <button key={v} type="button" role="tab" aria-selected={only === v} className={only === v ? "is-on" : undefined} onClick={() => setOnly(v)}>{VERDICT_META[v].label} <span>{int(count(v))}</span></button>
-          ))}
-        </div>
-        <span className="spacer-auto" />
-        <label className="search-input">
-          <Search size={14} strokeWidth={1.5} />
-          <input className="input" value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search domain, client, tag" aria-label="Search domains" />
-        </label>
-      </div>
-
-      <div className="rv-sig-filter" role="group" aria-label="Show only domains with these tags">
-        <span className="rv-sig-filter-k">Show only</span>
-        {SIGNAL_ORDER.filter((k) => signalCounts.get(k) || signals.has(k)).map((k) => (
-          <button key={k} type="button" className="rv-sig-btn" aria-pressed={signals.has(k)} title={SIGNAL_META[k].hint} onClick={() => toggleSignal(k)}>
-            {SIGNAL_META[k].label} <span>{int(signalCounts.get(k) ?? 0)}</span>
-          </button>
-        ))}
-        {signals.size ? <button type="button" className="rv-more" onClick={() => setSignals(new Set())}>Clear</button> : null}
-        {!signalCounts.size && !signals.size ? <span className="rv-none">No tags in this view</span> : null}
-      </div>
-
-      <div className="table-wrap">
-        <div className="table-scroll" style={{ maxHeight: "calc(100dvh - 220px)", minHeight: 240 }}>
-          <table className="data-table is-main">
-            <thead>
-              <tr>
-                <th style={{ width: 36 }}><input type="checkbox" className="checkbox" aria-label="Select all" checked={allSelected} onChange={() => setSelected(allSelected ? new Set() : new Set(rows.map((r) => r.id)))} /></th>
-                <SortTh k="name" sort={sort} onSort={sortBy}>Domain</SortTh>
-                <SortTh k="client" sort={sort} onSort={sortBy}>Client</SortTh>
-                <SortTh k="verdict" sort={sort} onSort={sortBy}>Call</SortTh>
-                <SortTh k="signals" sort={sort} onSort={sortBy} title="Strikes first: spam, blocklisted, low reputation, no reply, no response">Tags</SortTh>
-                <SortTh k="sent" sort={sort} onSort={sortBy} num>Sent</SortTh>
-                <SortTh k="replies" sort={sort} onSort={sortBy} num title="Every reply, out of office included">Replies</SortTh>
-                <SortTh k="human" sort={sort} onSort={sortBy} num>Human</SortTh>
-                <SortTh k="quiet" sort={sort} onSort={sortBy} num title="Days since the last reply of any kind, out of office included">Last reply</SortTh>
-                <SortTh k="rep" sort={sort} onSort={sortBy} num title="Average warmup reputation of connected inboxes">Rep</SortTh>
-                <SortTh k="spam" sort={sort} onSort={sortBy} num title="Spam and blocklist rejections">Spam</SortTh>
-                <SortTh k="missing" sort={sort} onSort={sortBy} num title="Bounces to addresses that don't exist">No address</SortTh>
-                <SortTh k="bounceRate" sort={sort} onSort={sortBy} num>Bounce</SortTh>
-                <th title="Tags on the domain's inboxes in Smartlead">Smartlead tags</th>
-                <th>Your tags</th>
-              </tr>
-            </thead>
-            <tbody>
-              {rows.map((r) => {
-                const m = VERDICT_META[r.verdict];
-                const br = pct(r.bounces, r.sent);
-                return (
-                  <tr key={r.id} data-selected={selected.has(r.id)}>
-                    <td><input type="checkbox" className="checkbox" aria-label={`Select ${r.name}`} checked={selected.has(r.id)} onChange={() => toggle(r.id)} /></td>
-                    <td className="col-first">
-                      <span className="flex items-center gap-2">
-                        <DomainLink id={r.id} tab="stats" className="strong hover:underline">{r.name}</DomainLink>
-                        {r.status !== "active" ? <StatusDot status={r.status as Parameters<typeof StatusDot>[0]["status"]} /> : null}
-                      </span>
-                    </td>
-                    <td><ClientCell name={r.clientName} hue={r.clientHue} /></td>
-                    <td><span className={`badge tone-${m.tone}`} title={r.why}>{m.label}</span></td>
-                    <td className="rv-sig-cell" title={r.why}>{r.chips.length ? <Chips chips={r.chips} /> : <span className="zero">—</span>}</td>
-                    <td className="is-num">{r.sent ? int(r.sent) : <span className="zero">0</span>}</td>
-                    <td className="is-num">{r.replies ? int(r.replies) : <span className={r.sent >= RULES.silentSent ? "metric is-bad" : "zero"}>0</span>}</td>
-                    <td className="is-num">{r.human ? int(r.human) : <span className="zero">0</span>}</td>
-                    <td className="is-num" title={r.quietDays == null ? "Nothing sent yet" : r.neverReplied ? `No reply on record (${int(r.sentSinceReply)} sent)` : `${int(r.sentSinceReply)} sent since`}>
-                      {r.quietDays == null ? <span className="zero">—</span>
-                        : <span className={`metric${r.quietDays >= RULES.longQuietDays && r.sentSinceReply >= RULES.quietSent ? " is-bad" : r.quietDays >= RULES.quietDays && r.sentSinceReply >= RULES.quietSent ? " is-warn" : ""}`}>
-                          {r.neverReplied ? `${r.quietDays}d+` : r.quietDays === 0 ? "Today" : `${r.quietDays}d`}
-                        </span>}
-                    </td>
-                    <td className="is-num"><Rep value={r.rep} /></td>
-                    <td className="is-num">{r.spam ? <span className={r.spam >= 10 ? "metric is-bad" : "metric is-warn"}>{int(r.spam)}</span> : <span className="zero">0</span>}</td>
-                    <td className="is-num">{r.causes.missing ? int(r.causes.missing) : <span className="zero">0</span>}</td>
-                    <td className="is-num"><span className={`metric${br != null && br > 3 ? " is-bad" : br != null && br > 2 ? " is-warn" : ""}${!br ? " zero" : ""}`}>{fx(br)}</span></td>
-                    <td><SlTags tags={r.slTags} /></td>
-                    <td><TagList tags={r.tags} max={3} /></td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-          {rows.length === 0 ? <Empty icon={ListChecks} title="No domains here">Pick another range, client, call or tag.</Empty> : null}
-        </div>
-        <div className="table-footer">
-          <span><b>{int(rows.length)}</b> domains</span>
-          <span><b>{int(rows.reduce((a, r) => a + r.sent, 0))}</b> sent</span>
-          <span><b>{int(rows.reduce((a, r) => a + r.human, 0))}</b> human replies</span>
-          <span><b>{int(rows.reduce((a, r) => a + r.spam, 0))}</b> spam rejections</span>
-        </div>
-      </div>
-
       {selectedRows.length > 0 ? (
         <div className="bulk-bar" role="toolbar" aria-label="Selected domains">
           <span className="bulk-count">{selectedRows.length} selected</span>
+          <ConfigureDomains domainIds={selectedRows.map((d) => d.id)} onDone={() => void reload()} />
+          <span className="sep" />
           <input className="rv-tag-input" list="rv-tags" value={tag} onChange={(e) => setTag(e.target.value)} placeholder="Tag name" aria-label="Tag name"
             onKeyDown={(e) => { if (e.key === "Enter" && tag.trim()) applyTag(true); }} />
           <datalist id="rv-tags">{knownTags.map((t) => <option key={t} value={t} label={markOf(t) ? "Also in Smartlead" : "This app only"} />)}</datalist>

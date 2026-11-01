@@ -1,18 +1,20 @@
 "use client";
 
 import { DomainLink } from "@/components/domains/DomainLink";
-import { BarChart3, CalendarDays, ChevronRight, Copy, Download, Loader, Search } from "lucide-react";
+import { ArrowDown, ArrowUp, BarChart3, CalendarDays, ChevronRight, Copy, Download, Loader, Search, X } from "lucide-react";
 import { useSearchParams } from "next/navigation";
 import { Fragment, useMemo, useState, useTransition } from "react";
 import { toast } from "sonner";
 import { loadReview, loadStats } from "@/app/actions";
 import { ColumnsMenu, useColumns, type ColumnDef } from "@/components/Columns";
 import { SortTh } from "@/components/SortTh";
+import { ConfigureDomains, PasteSelect } from "@/components/domains/DomainBulk";
+import { AdviceCell, DomainInsight } from "./DomainInsight";
 import { Badge, ClientCell, Empty, Metric, Rep, StatusDot, TagList } from "@/components/ui";
 import { clientDays, clientDaySheet, rr, type ClientDays, type DayFigures } from "@/lib/client-days";
 import { int } from "@/lib/format";
 import type { ClientRow, StatDomain, StatsData } from "@/lib/queries";
-import { VERDICT_META, VERDICT_ORDER, judge, type Judged, type ReviewData, type Verdict } from "@/lib/review";
+import { VERDICT_META, VERDICT_ORDER, advise, judge, type Judged, type ReviewData, type Verdict } from "@/lib/review";
 import { DOMAIN_STATUSES } from "@/lib/status";
 import { PRESETS, addDays, daysBetween, matchPreset, nice, presetRange, previousLabel, weekday, type PresetKey } from "@/lib/range";
 
@@ -38,7 +40,7 @@ const total = (rows: Row[]): Totals => {
   return t;
 };
 
-type SortKey = "name" | "status" | "call" | "client" | "sender" | "tags" | "esp" | "inboxes" | "usage" | "sent" | "replies" | "human" | "ooo" | "negative" | "bounces" | "replyRate" | "slRate" | "humanRate" | "bounceRate" | "reputation";
+type SortKey = "name" | "status" | "call" | "advice" | "client" | "sender" | "tags" | "esp" | "inboxes" | "usage" | "sent" | "replies" | "human" | "ooo" | "negative" | "bounces" | "replyRate" | "slRate" | "humanRate" | "bounceRate" | "reputation";
 const sortValue = (r: Row, k: SortKey, len: number): string | number | null => {
   switch (k) {
     case "status": return DOMAIN_STATUSES.indexOf(r.status);
@@ -46,6 +48,8 @@ const sortValue = (r: Row, k: SortKey, len: number): string | number | null => {
     case "sender": return r.senders[0]?.toLowerCase() ?? null;
     case "tags": return r.allTags[0]?.toLowerCase() ?? null;
     case "call": return r.call ? VERDICT_ORDER.indexOf(r.call.verdict) : null;
+    // Worst first when sorted high to low: danger, then warning, then the rest.
+    case "advice": { const a = r.call ? advise(r.call)[0] : null; return a ? ({ danger: 4, warning: 3, info: 2, faint: 1, success: 0 } as const)[a.tone] : null; }
     case "esp": return r.esp;
     case "replyRate": return rate(r.replies, r.sent);
     case "slRate": return rate(r.slReplies, r.sent);
@@ -65,6 +69,7 @@ const groupValue = (g: { name: string | null; rows: Row[] }, k: SortKey, len: nu
     case "sender":
     case "tags":
     case "call":
+    case "advice":
     case "esp": return null;
     case "replyRate": return rate(t.replies, t.sent);
     case "slRate": return rate(t.slReplies, t.sent);
@@ -114,6 +119,7 @@ const COLUMNS: ColumnDef[] = [
   { key: "slReplies", label: "Replies ex. OOO" }, { key: "replies", label: "Replies incl. OOO" },
   { key: "human", label: "Human" }, { key: "ooo", label: "Out of office", hidden: true }, { key: "negative", label: "Not interested", hidden: true },
   { key: "bounces", label: "Bounces" }, { key: "reputation", label: "Reputation" },
+  { key: "advice", label: "Suggestion" },
 ];
 
 const pct = (v: number | null, digits: number) => (v == null ? null : `${v.toFixed(digits)}%`);
@@ -247,6 +253,10 @@ export function StatsView({ initial, initialReview, clients }: { initial: StatsD
   // One line per client to start; open a client to see its domains.
   const [byClient, setByClient] = useState(true);
   const [openClients, setOpenClients] = useState<Set<string>>(new Set());
+  // Domains opened to show their bounces and what to do.
+  const [openRows, setOpenRows] = useState<Set<string>>(new Set());
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const flipIn = (set: (f: (s: Set<string>) => Set<string>) => void, id: string) => set((s) => { const n = new Set(s); if (n.has(id)) n.delete(id); else n.add(id); return n; });
   const toggleClient = (key: string) => setOpenClients((s0) => { const n = new Set(s0); if (n.has(key)) n.delete(key); else n.add(key); return n; });
   const [sort, setSort] = useState<{ key: SortKey; dir: 1 | -1 }>({ key: "sent", dir: -1 });
   const [daySort, setDaySort] = useState<{ key: DayKey; dir: 1 | -1 }>({ key: "day", dir: -1 });
@@ -373,6 +383,8 @@ export function StatsView({ initial, initialReview, clients }: { initial: StatsD
   const showClient = !byClient && on("client");
   const showCall = on("call") || !!call;
   const colCount = 1 + (showClient ? 1 : 0) + (showCall ? 1 : 0) + COLUMNS.filter((c) => c.key !== "client" && c.key !== "call" && on(c.key)).length;
+  const selectedRows = rows.filter((r) => selected.has(r.id));
+  const allSelected = rows.length > 0 && rows.every((r) => selected.has(r.id));
   const allOpen = byClient && groups.length > 0 && groups.every((g) => openClients.has(g.key));
   const toggleAll = () => setOpenClients(allOpen ? new Set() : new Set(groups.map((g) => g.key)));
   const maxDay = Math.max(1, ...days.map((d) => d.sent));
@@ -468,7 +480,13 @@ export function StatsView({ initial, initialReview, clients }: { initial: StatsD
         </label>
         {view === "clients" ? <button type="button" className="btn btn-sm" onClick={copyClients} disabled={!perClient.clients.length}><Copy size={14} /> Copy for Sheets</button> : null}
         <button type="button" className="btn btn-sm" onClick={exportCsv}><Download size={14} /> Export</button>
-        {view === "domain" ? <ColumnsMenu cols={cols} /> : null}
+        {view === "domain" ? (
+          <>
+            <PasteSelect rows={data.domains} selected={selected} where="in this range"
+              onSelect={(s) => { setSelected(s); clearFilters(); setQ(""); setOnlySending(false); setByClient(false); }} />
+            <ColumnsMenu cols={cols} />
+          </>
+        ) : null}
       </div>
 
       <div className="table-wrap" style={{ opacity: loading ? 0.6 : 1, transition: "opacity 120ms" }}>
@@ -477,7 +495,16 @@ export function StatsView({ initial, initialReview, clients }: { initial: StatsD
             <table className="data-table is-main">
               <thead>
                 <tr>
-                  <SortTh k="name" sort={sort} onSort={sortBy}>{byClient ? "Client / domain" : "Domain"}</SortTh>
+                  <th aria-sort={sort.key === "name" ? (sort.dir === 1 ? "ascending" : "descending") : undefined}>
+                    <span className="flex items-center gap-2">
+                      <input type="checkbox" className="checkbox" aria-label="Select all" checked={allSelected}
+                        onChange={() => setSelected(allSelected ? new Set() : new Set(rows.map((r) => r.id)))} />
+                      <button type="button" className="sort-head" onClick={() => sortBy("name")}>
+                        {byClient ? "Client / domain" : "Domain"}
+                        {sort.key === "name" ? (sort.dir === 1 ? <ArrowUp size={12} /> : <ArrowDown size={12} />) : null}
+                      </button>
+                    </span>
+                  </th>
                   {showClient ? <SortTh k="client" sort={sort} onSort={sortBy}>Client</SortTh> : null}
                   {showCall ? <SortTh k="call" sort={sort} onSort={sortBy} title="The weekly review's call for this range; hover a call for why">Call</SortTh> : null}
                   {on("sender") ? <SortTh k="sender" sort={sort} onSort={sortBy} title="Sender names on the domain's connected inboxes">Sender</SortTh> : null}
@@ -493,6 +520,7 @@ export function StatsView({ initial, initialReview, clients }: { initial: StatsD
                   {on("negative") ? <SortTh k="negative" sort={sort} onSort={sortBy} num className={gc("negative", on)}>Negative</SortTh> : null}
                   {on("bounces") ? <SortTh k="bounceRate" sort={sort} onSort={sortBy} num className={gc("bounces", on)} title="Bounces and bounce rate; sorts by rate">Bounces</SortTh> : null}
                   {on("reputation") ? <SortTh k="reputation" sort={sort} onSort={sortBy} num className={gc("reputation", on)}>Reputation</SortTh> : null}
+                  {on("advice") ? <SortTh k="advice" sort={sort} onSort={sortBy} className="st-start" title="What to do, from the weekly review's call and the bounces. Click a domain's arrow for its bounce reasons">Suggestion</SortTh> : null}
                 </tr>
               </thead>
               <tbody>
@@ -515,12 +543,19 @@ export function StatsView({ initial, initialReview, clients }: { initial: StatsD
                         {on("tags") ? <td /> : null}
                         {on("esp") ? <td /> : null}
                         <Cells r={{ ...total(g.rows), reputation: avgRep(g.rows) }} len={len} on={on} agg />
+                        {on("advice") ? <td className="st-start" /> : null}
                       </tr>
                     ) : null}
                     {(!byClient || openClients.has(g.key)) && g.rows.map((r, i) => (
-                      <tr key={r.id} className={r.sent ? undefined : "st-idle"}>
+                      <Fragment key={r.id}>
+                      <tr className={r.sent ? undefined : "st-idle"} data-selected={selected.has(r.id)}>
                         <td className="col-first" style={byClient ? { paddingLeft: 14 } : undefined}>
                           <span className="flex items-center gap-2">
+                            <input type="checkbox" className="checkbox" aria-label={`Select ${r.name}`} checked={selected.has(r.id)} onChange={() => flipIn(setSelected, r.id)} />
+                            <button type="button" className="st-expand" aria-expanded={openRows.has(r.id)} aria-label={`${openRows.has(r.id) ? "Hide" : "Show"} bounce reasons and suggestions for ${r.name}`}
+                              title="Bounce reasons and what to do" onClick={() => flipIn(setOpenRows, r.id)}>
+                              <ChevronRight size={13} style={{ transform: openRows.has(r.id) ? "rotate(90deg)" : undefined }} />
+                            </button>
                             <span className="st-n">{i + 1}</span>
                             <DomainLink id={r.id} tab="stats" className="strong hover:underline">{r.name}</DomainLink>
                             {/* Status only when it isn't the usual Active. */}
@@ -545,7 +580,12 @@ export function StatsView({ initial, initialReview, clients }: { initial: StatsD
                         ) : null}
                         {on("esp") ? <td className="text-muted text-[12px]">{r.esp ?? <span className="zero">—</span>}</td> : null}
                         <Cells r={r} len={len} on={on} />
+                        {on("advice") ? <td className="st-start st-advice-cell"><AdviceCell call={r.call} /></td> : null}
                       </tr>
+                      {openRows.has(r.id) ? (
+                        <tr className="st-insight-row"><td colSpan={colCount}><DomainInsight id={r.id} call={r.call} from={data.from} to={data.to} sent={r.sent} bounces={r.bounces} /></td></tr>
+                      ) : null}
+                      </Fragment>
                     ))}
                     {byClient && openClients.has(g.key) ? <tr className="st-gap" aria-hidden><td colSpan={colCount} /></tr> : null}
                   </Fragment>
@@ -602,6 +642,21 @@ export function StatsView({ initial, initialReview, clients }: { initial: StatsD
           <span><b>{rate(t.bounces, t.sent)?.toFixed(1) ?? "0.0"}%</b> bounce</span>
         </div>
       </div>
+
+      {view === "domain" && selected.size > 0 ? (
+        <div className="bulk-bar" role="toolbar" aria-label="Selected domains">
+          <span className="bulk-count">{selected.size} selected</span>
+          <ConfigureDomains domainIds={[...selected]} />
+          <span className="sep" />
+          <button type="button" className="btn btn-sm" onClick={() => setOpenRows(new Set(selectedRows.map((r) => r.id)))}><ChevronRight size={14} /> Show reasons</button>
+          <button type="button" className="btn btn-sm" onClick={() => {
+            const names = data.domains.filter((d) => selected.has(d.id)).map((d) => d.name).join("\n");
+            navigator.clipboard.writeText(names).then(() => toast.success(`Copied ${selected.size} domain${selected.size === 1 ? "" : "s"}`), () => toast.error("Couldn't copy"));
+          }}><Copy size={14} /> Copy</button>
+          <span className="sep" />
+          <button type="button" className="btn btn-sm" aria-label="Clear selection" onClick={() => setSelected(new Set())}><X size={14} /></button>
+        </div>
+      ) : null}
     </div>
   );
 }

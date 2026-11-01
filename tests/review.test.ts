@@ -7,7 +7,7 @@ const domain = (over: Partial<ReviewDomain> = {}): ReviewDomain => ({
   id: "d1", name: "welvion.com", status: "active", clientId: null, clientName: "Qualifi", clientHue: null, tags: [],
   inboxes: 10, disconnected: 0, blacklisted: 0, sent: 800, replies: 4, human: 1, bounces: 20, causes: {},
   prevSent: 800, prevHuman: 2, prevSpam: 2,
-  rep: 98, lowRepInboxes: 0, quietDays: 1, neverReplied: false, sentSinceReply: 100, slTags: [], ht: "live", replacedBy: null, ...over,
+  rep: 98, lowRepInboxes: 0, quietDays: 1, neverReplied: false, sentSinceReply: 100, slTags: [], esp: "OUTLOOK", tld: "com", ht: "live", replacedBy: null, ...over,
 });
 
 describe("week ranges", () => {
@@ -164,10 +164,11 @@ describe("weekly review calls", () => {
     const cols = row.split("\t");
     expect(cols.length).toBe(head.split("\t").length);
     expect(cols.slice(0, 3)).toEqual(["welvion.com", "Disconnected", "52 of 52 inboxes disconnected"]);
-    expect(cols[4]).toBe("Remove, -old");
-    expect(cols[5]).toBe("Live");
-    expect(sheetRows([judge(domain({ ht: "replaced", replacedBy: "newco.com" }))]).split("\n")[1].split("\t")[5]).toBe("Replaced by newco.com");
-    expect(sheetRows([judge(domain({ slTags: ["=cmd"] }))]).split("\n")[1].split("\t")[4]).toBe("'=cmd");
+    expect(cols.slice(4, 6)).toEqual(["Outlook", ".com"]);
+    expect(cols[6]).toBe("Remove, -old");
+    expect(cols[7]).toBe("Live");
+    expect(sheetRows([judge(domain({ ht: "replaced", replacedBy: "newco.com" }))]).split("\n")[1].split("\t")[7]).toBe("Replaced by newco.com");
+    expect(sheetRows([judge(domain({ slTags: ["=cmd"] }))]).split("\n")[1].split("\t")[6]).toBe("'=cmd");
   });
 
   it("counts a domain under each of its Smartlead tags", () => {

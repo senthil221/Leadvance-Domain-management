@@ -1160,3 +1160,50 @@ a.stat:hover { background: var(--surface-2); }
 .rv-clients tbody tr { cursor: pointer; }
 .rv-clients tbody tr:hover > td { background: var(--surface-2); }
 .rv-clients .rv-count { display: inline-block; }
+
+/* Paste to select */
+.paste-result { display: flex; flex-direction: column; gap: 6px; }
+.paste-counts { display: flex; flex-wrap: wrap; gap: 4px 16px; font-size: 13px; }
+.paste-counts b { font-variant-numeric: tabular-nums; font-weight: 600; }
+
+/* Weekly review: a tab per call, split by ESP and TLD */
+.rv-tabs { display: flex; flex-direction: column; gap: 10px; padding: 10px 12px; }
+.rv-calls { flex-wrap: wrap; }
+.rv-calls .rv-count { margin-left: 4px; height: 18px; line-height: 18px; min-width: 20px; padding: 0 6px; font-size: 11.5px; }
+.rv-tab-hint { margin: 0; }
+.rv-facets { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 18px; }
+.rv-facets:empty { display: none; }
+.rv-facet { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.rv-tab-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.rv-why-cell { min-width: 260px; max-width: 420px; }
+.rv-why-cell .rv-why { display: block; margin-top: 3px; white-space: normal; }
+
+/* Performance: suggestions and a domain's bounce reasons */
+.st-advice { display: inline-flex; align-items: baseline; gap: 6px; font-size: 12.5px; line-height: 1.4; color: var(--ink-soft); }
+.st-advice > i { flex: none; width: 7px; height: 7px; border-radius: 999px; background: var(--line-strong); transform: translateY(-1px); }
+.st-advice.tone-danger > i { background: var(--danger-solid); }
+.st-advice.tone-warning > i { background: var(--warning-solid); }
+.st-advice.tone-info > i { background: var(--info-solid); }
+.st-advice.tone-success > i { background: var(--success-solid); }
+.st-advice-cell { min-width: 280px; max-width: 420px; white-space: normal; }
+.st-advice-cell .st-advice > span:first-of-type { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.st-advice-list { display: flex; flex-direction: column; gap: 6px; margin: 0; padding: 0; list-style: none; }
+.st-expand { display: inline-flex; align-items: center; justify-content: center; width: 20px; height: 20px; border-radius: 5px; color: var(--faint); }
+.st-expand:hover { background: var(--surface-2); color: var(--ink); }
+.st-expand svg { transition: transform 120ms; }
+.st-insight-row > td { background: var(--surface-2); padding: 12px 16px !important; white-space: normal; }
+/* Stays in view while the wide table scrolls sideways. */
+.st-insight { position: sticky; left: 16px; display: grid; grid-template-columns: minmax(220px, 1fr) minmax(0, 2fr) minmax(200px, 1fr); gap: 18px; width: min(1180px, calc(100vw - 300px)); }
+@media (max-width: 1100px) { .st-insight { grid-template-columns: 1fr; width: calc(100vw - 80px); } }
+.st-insight section { min-width: 0; }
+.st-insight-h { margin: 0 0 8px; font-size: 12px; font-weight: 600; color: var(--ink-soft); text-transform: none; }
+.st-causes { display: flex; flex-wrap: wrap; gap: 6px; }
+.st-cause { display: inline-flex; align-items: center; gap: 5px; height: 24px; padding: 0 9px; border-radius: 999px; border: 1px solid var(--line); background: var(--surface); font-size: 12px; color: var(--ink-soft); }
+.st-cause b { font-weight: 600; font-variant-numeric: tabular-nums; }
+.st-cause.tone-danger { border-color: color-mix(in srgb, var(--danger-solid) 45%, var(--line)); }
+.st-cause.tone-warning { border-color: color-mix(in srgb, var(--warning-solid) 45%, var(--line)); }
+.st-cause.tone-info { border-color: color-mix(in srgb, var(--info-solid) 45%, var(--line)); }
+.st-lines { margin-top: 8px; background: var(--surface); border: 1px solid var(--line); border-radius: 8px; }
+.st-line { white-space: normal; font-size: 12px; color: var(--ink-soft); min-width: 260px; }
+.st-mini { display: flex; flex-direction: column; gap: 4px; margin: 0; padding: 0; list-style: none; font-size: 12.5px; }
+.st-mini li { display: flex; justify-content: space-between; gap: 10px; min-width: 0; }

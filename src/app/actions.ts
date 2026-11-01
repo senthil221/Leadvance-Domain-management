@@ -886,6 +886,19 @@ export async function loadReview(input: z.input<typeof statsRange>): Promise<Act
   }
 }
 
+/** One domain's bounces in the range, by cause, notice, campaign and recipient provider (Performance). */
+export async function loadBounceDetail(input: { domainId: string; from: string; to: string }): Promise<ActionResult<import("@/lib/bounce-detail").BounceDetail>> {
+  try {
+    await requireActor();
+    const { from, to } = statsRange.parse(input);
+    const domainId = z.uuid().parse(input.domainId);
+    const { getBounceDetail } = await import("@/lib/queries");
+    return { ok: true, data: await getBounceDetail(domainId, from, to) };
+  } catch (e) {
+    return fail(e);
+  }
+}
+
 /** Puts a tag on (or takes it off) domains in this app, to set them apart (Rest, Watch, …). Smartlead isn't touched. */
 export async function tagDomains(input: { domainIds: string[]; tag: string; on: boolean }): Promise<ActionResult<{ changed: number }>> {
   try {
@@ -1002,28 +1015,94 @@ export async function createSmartleadTag(name: string): Promise<ActionResult<{ m
   }
 }
 
-/** Replaces the Smartlead tags of the chosen inboxes. Unknown names are refused before anything is written. */
-export async function updateInboxTags(input: { inboxIds: string[]; tags: string[] }): Promise<ActionResult<{ message: string }>> {
+/**
+ * Sets the Smartlead tags of the chosen inboxes: replace them all, or add or
+ * remove some and keep the rest. Unknown names are refused before anything is
+ * written.
+ */
+export async function updateInboxTags(input: { inboxIds: string[]; tags: string[]; mode?: "replace" | "add" | "remove" }): Promise<ActionResult<{ message: string }>> {
   try {
     await requireActor();
     const v = z.object({
       inboxIds: z.array(z.uuid()).min(1, "Select at least one inbox").max(5000),
       tags: z.array(z.string().trim().min(1)).min(1, "Enter at least one tag").max(50),
+      mode: z.enum(["replace", "add", "remove"]).default("replace"),
     }).parse(input);
     const names = [...new Map(v.tags.map((t) => [t.toLowerCase(), t])).values()];
     const app = await smartleadAppOrError("Updating tags");
     const rows = await linkedAccounts(v.inboxIds);
-    const known = new Map((await app.tags()).map((t) => [t.name.toLowerCase(), t]));
-    const missing = names.filter((n) => !known.has(n.toLowerCase()));
+    const workspace = await app.tags();
+    const known = new Map(workspace.map((t) => [t.name.toLowerCase(), t]));
+    const missing = v.mode === "remove" ? [] : names.filter((n) => !known.has(n.toLowerCase()));
     if (missing.length) return { ok: false, error: `No Smartlead tag named ${missing.slice(0, 3).map((n) => `"${n}"`).join(", ")}. Create it first, then apply it.` };
+    const n = `${rows.length} inbox${rows.length === 1 ? "" : "es"}`;
+    if (v.mode !== "replace") {
+      // Each inbox keeps its other tags: inboxes are grouped by the tags they end up with.
+      const current = await sql`select id, smartlead_account_id as account, smartlead_tags as tags from inboxes where id in ${sql(rows.map((r) => r.id))}`;
+      const { retagRows } = await import("@/jobs/replacements");
+      const found = async (name: string) => known.get(name.toLowerCase()) ?? null;
+      if (app.dryRun) return { ok: true, data: { message: `Dry run: ${n} weren't retagged in Smartlead` } };
+      const changed = await retagRows(jobSql, app, current, v.mode === "add" ? names : [], v.mode === "remove" ? names : [], found, () => workspace);
+      refresh();
+      const list = names.join(", ");
+      return { ok: true, data: { message: v.mode === "add" ? `Added ${list} to ${changed} inbox${changed === 1 ? "" : "es"} (${rows.length - changed} already had it)`
+        : `Took ${list} off ${changed} inbox${changed === 1 ? "" : "es"}${rows.length - changed ? ` (${rows.length - changed} didn't have it)` : ""}` } };
+    }
     const tags = names.map((n) => known.get(n.toLowerCase())!);
     await app.bulkConfig(rows.map((r) => Number(r.account)), { tags: tags.map((t) => t.id) });
-    if (app.dryRun) return { ok: true, data: { message: `Dry run: ${rows.length} inbox${rows.length === 1 ? "" : "es"} weren't retagged in Smartlead` } };
+    if (app.dryRun) return { ok: true, data: { message: `Dry run: ${n} weren't retagged in Smartlead` } };
     await sql`update inboxes set smartlead_tags = ${tags.map((t) => t.name)}::text[] where id in ${sql(rows.map((r) => r.id))}`;
     refresh();
-    return { ok: true, data: { message: `Tagged ${rows.length} inbox${rows.length === 1 ? "" : "es"} ${tags.map((t) => t.name).join(", ")}` } };
+    return { ok: true, data: { message: `Tagged ${n} ${tags.map((t) => t.name).join(", ")}` } };
   } catch (e) {
     return appError(e);
+  }
+}
+
+export type DomainConfig = {
+  inboxIds: string[]; domains: number;
+  /** Inboxes of the domains that aren't in Smartlead (or are removed): left out. */
+  unlinked: number; disconnected: number;
+  current: {
+    dailyLimit: number | null; minWait: number | null; warmupMin: number | null; warmupPerDay: number | null;
+    warmupRampup: number | null; warmupRampupOn: boolean | null; warmupReplyRate: number | null; warmupTag: string | null; tagsMixed: boolean;
+  };
+  selectedTags: string[]; knownTags: string[]; dryRun: boolean; appProblem: string | null;
+};
+
+/** Configure settings on whole domains (review, performance, domains): their Smartlead inboxes and what they run on now. */
+export async function loadDomainConfig(domainIds: string[]): Promise<ActionResult<DomainConfig>> {
+  try {
+    await requireActor();
+    const list = ids.parse(domainIds);
+    const rows = await sql<{ id: string; linked: boolean; status: string; dailyLimit: number | null; minWaitMins: number | null; warmupMin: number | null;
+      warmupPerDay: number | null; warmupRampup: number | null; warmupRampupOn: boolean | null; warmupReplyRate: number | null; warmupTag: string | null; tags: string[] }[]>`
+      select id, smartlead_account_id is not null as linked, status, daily_limit, min_wait_mins, warmup_min, warmup_per_day, warmup_rampup,
+        warmup_rampup_on, warmup_reply_rate, warmup_tag, smartlead_tags as tags
+      from inboxes where domain_id in ${sql(list)} and status <> 'removed' order by email`;
+    const [{ known }] = await sql<{ known: string[] }[]>`
+      select coalesce(array_agg(distinct t order by t), '{}') as known from inboxes cross join unnest(smartlead_tags) t where status <> 'removed'`;
+    const use = rows.filter((r) => r.linked);
+    const avg = (f: (r: (typeof use)[number]) => number | null) => {
+      const v = use.map(f).filter((x): x is number => x != null);
+      return v.length ? v.reduce((a, b) => a + b, 0) / v.length : null;
+    };
+    const same = <T,>(f: (r: (typeof use)[number]) => T | null) => { const v = use.map(f); return v.length && v[0] != null && v.every((x) => x === v[0]) ? v[0] : null; };
+    const { jwtProblem } = await import("@/integrations/smartlead-app");
+    const jwt = process.env.SMARTLEAD_JWT?.trim().replace(/^bearer\s+/i, "");
+    return { ok: true, data: {
+      inboxIds: use.map((r) => r.id), domains: list.length, unlinked: rows.length - use.length, disconnected: use.filter((r) => r.status !== "connected").length,
+      current: {
+        dailyLimit: avg((r) => r.dailyLimit), minWait: avg((r) => r.minWaitMins), warmupMin: avg((r) => r.warmupMin), warmupPerDay: avg((r) => r.warmupPerDay),
+        warmupRampup: avg((r) => (r.warmupRampupOn == null ? null : r.warmupRampup)), warmupRampupOn: same((r) => r.warmupRampupOn),
+        warmupReplyRate: avg((r) => r.warmupReplyRate), warmupTag: same((r) => r.warmupTag), tagsMixed: new Set(use.map((r) => r.warmupTag)).size > 1,
+      },
+      selectedTags: use.length ? use[0].tags.filter((t) => use.every((r) => r.tags.includes(t))) : [],
+      knownTags: known, dryRun: process.env.INTEGRATIONS_DRY_RUN !== "false",
+      appProblem: jwt ? jwtProblem(jwt) : "Tags need a Smartlead token: save SMARTLEAD_JWT on the server.",
+    } };
+  } catch (e) {
+    return fail(e);
   }
 }
 
