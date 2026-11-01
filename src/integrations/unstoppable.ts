@@ -35,15 +35,21 @@ export function createUnstoppable({ apiKey, sql, dryRun = true, fetchImpl, minSp
     provider: "unstoppable",
     dryRun,
     async listAll() {
+      // The live API pages by offset/limit and rejects any other field. A
+      // large page can come back truncated, so the next offset follows what
+      // actually arrived.
       const out: RegistrarDomain[] = [];
-      for (let page = 1; page <= 1000; page++) {
-        const r = await action<{ domains?: unknown[]; pagination?: { hasMore?: boolean } }>("ud_portfolio_list", { page, pageSize: 100, registryType: "dns", orderBy: "name", orderDirection: "asc" });
+      for (let offset = 0, guard = 0; guard < 1000; guard++) {
+        const r = await action<{ domains?: unknown[]; pagination?: { hasMore?: boolean; nextOffset?: number | null } }>(
+          "ud_portfolio_list", { offset, limit: 200, registryType: "dns", orderBy: "name", orderDirection: "asc" });
         const list = Array.isArray(r?.domains) ? r.domains : [];
         for (const raw of list) {
           const d = parseUnstoppableDomain(raw);
           if (d) out.push(d);
         }
         if (!r?.pagination?.hasMore || !list.length) break;
+        const next = r.pagination.nextOffset;
+        offset = typeof next === "number" && next > offset ? Math.min(next, offset + list.length) : offset + list.length;
       }
       return out;
     },

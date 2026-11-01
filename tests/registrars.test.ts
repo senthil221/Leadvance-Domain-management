@@ -98,17 +98,30 @@ describe("Unstoppable Domains", () => {
       .toMatchObject({ name: "reachout.com", autoRenew: true, expiresAt: new Date("2027-02-01T00:00:00Z") });
   });
 
-  it("pages until hasMore is false and reports queued nameserver changes as pending", async () => {
+  it("pages by offset with only the fields the live API allows, follows truncated pages, and reports queued nameserver changes as pending", async () => {
+    // From https://api.unstoppabledomains.com/mcp/v1/openapi.json (additionalProperties: false).
+    const allowed = ["offset", "limit", "searchTerm", "status", "registryType", "expiringWithinDays", "expired", "minLength", "maxLength", "autoRenewal", "tagFilters", "orderBy", "orderDirection"];
     const bodies: Record<string, unknown>[] = [];
     const fetchImpl = vi.fn(async (url: string, init: RequestInit) => {
       const body = JSON.parse(String(init.body));
       bodies.push(body);
       expect((init.headers as Record<string, string>).Authorization).toBe("Bearer ud_mcp_k");
-      if (url.endsWith("/ud_portfolio_list")) return ok({ domains: [{ name: `p${body.page}.com` }], pagination: { hasMore: body.page < 3 } });
+      if (url.endsWith("/ud_portfolio_list")) {
+        expect(Object.keys(body).filter((k) => !allowed.includes(k))).toEqual([]);
+        expect(body.limit).toBeLessThanOrEqual(500);
+        // 450 domains; the first page comes back truncated to 150.
+        const total = 450, start = body.offset as number;
+        const count = start === 0 ? 150 : Math.min(body.limit as number, total - start);
+        const domains = Array.from({ length: count }, (_, i) => ({ name: `p${start + i}.com` }));
+        return ok({ domains, pagination: { total, count, offset: start, hasMore: start + count < total, nextOffset: start + (body.limit as number) < total ? start + (body.limit as number) : null }, truncated: start === 0 });
+      }
       return ok({ results: [{ domain: "p1.com", success: true, operationId: "op1" }], successCount: 1, failureCount: 0 });
     }) as unknown as typeof fetch;
     const ud = createUnstoppable({ apiKey: "ud_mcp_k", dryRun: false, fetchImpl, minSpacingMs: 0 });
-    expect((await ud.listAll()).map((d) => d.name)).toEqual(["p1.com", "p2.com", "p3.com"]);
+    const names = (await ud.listAll()).map((d) => d.name);
+    expect(names).toHaveLength(450);
+    expect(new Set(names).size).toBe(450);
+    expect(bodies.map((b) => b.offset)).toEqual([0, 150, 350]);
     expect(await ud.updateNs("p1.com", ["a.ns.com", "b.ns.com"])).toEqual({ pending: true });
     expect(bodies.at(-1)).toEqual({ domains: [{ name: "p1.com", nameservers: ["a.ns.com", "b.ns.com"] }] });
   });
