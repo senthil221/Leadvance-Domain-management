@@ -19,7 +19,7 @@ import { InboxSettingsDialog } from "./InboxSettingsDialog";
 import { MoveToTagDialog } from "./MoveToTagDialog";
 import { PlansCard } from "./PlansCard";
 import { ago, int } from "@/lib/format";
-import type { ClientRow, InboxListRow, PlanRow } from "@/lib/queries";
+import type { ClientRow, InboxListRow, OrderState, PlanRow } from "@/lib/queries";
 import { DOMAIN_STATUSES, type DomainStatus } from "@/lib/status";
 
 // Six views of the sending setup. Active and Disconnected list inboxes under
@@ -84,7 +84,40 @@ function reasonsOf(g: Group): Reason[] {
   else if (g.dns.state === "missing") r.push({ label: `DNS: ${g.dns.missing.join(", ")}`, tone: "warning" });
   if ((g.bl ?? 0) > 0) r.push({ label: `Blacklisted (${g.bl})`, tone: "danger" });
   if (g.alerts) r.push({ label: g.alerts === 1 ? "Health alert" : `${g.alerts} health alerts`, tone: "warning" });
+  if (g.order && g.order !== "active") r.push({ label: ORDER_META[g.order].label, tone: ORDER_META[g.order].tone });
   return r;
+}
+
+const ORDER_META: Record<Exclude<OrderState, "active">, { label: string; tone: "danger" | "warning"; hint: string }> = {
+  cancelled: { label: "Order cancelled", tone: "danger", hint: "The order is cancelled at the provider (NPC in Hypertide's API): the inboxes are going or gone" },
+  pending: { label: "Order not done", tone: "warning", hint: "The order isn't done at the provider yet" },
+  replaced: { label: "Replaced at Hypertide", tone: "danger", hint: "Hypertide moved this domain's order onto another domain" },
+  missing: { label: "No order", tone: "danger", hint: "No live order for this domain at the provider" },
+};
+
+/**
+ * Why an active domain doesn't count as Active: its order at Hypertide or
+ * Icemail isn't active, or some of its inboxes are disconnected in Smartlead.
+ * Null when it really is active, or isn't meant to be.
+ */
+function notLive(g: Group): { label: string; tone: "danger" | "warning"; hint: string } | null {
+  if (g.status !== "active") return null;
+  const where = g.provider ? ` (${g.provider}${g.orderStatus ? `: ${g.orderStatus}` : ""})` : "";
+  if (g.order && g.order !== "active") return { ...ORDER_META[g.order], hint: `${ORDER_META[g.order].hint}${where}` };
+  const { inboxes: n, disconnected: off } = g.all;
+  if (off) {
+    return off === n
+      ? { label: "Disconnected", tone: "danger", hint: "Every inbox is disconnected in Smartlead" }
+      : { label: `${off} of ${n} disconnected`, tone: "warning", hint: "Some inboxes are disconnected in Smartlead" };
+  }
+  return null;
+}
+
+/** The domain's status, Active only when the order is active and every inbox is connected. */
+function DomainState({ g }: { g: Group }) {
+  const p = notLive(g);
+  if (!p) return <StatusDot status={g.status} />;
+  return <span className={`status-dot tone-${p.tone}`} title={`Active in the app, but: ${p.hint}`}>{p.label}</span>;
 }
 
 type Group = {
@@ -97,6 +130,9 @@ type Group = {
   domainTags: string[]; graceDaysLeft: number | null; alerts: number;
   warm: { day: number; days: number; ready: boolean; left: number; pct: number } | null;
   ageDays: number | null; dns: Dns; bl: number | null; blListings: string[]; blocked: number; paused: number; disconnected: number;
+  order: OrderState | null; orderStatus: string | null; provider: string | null;
+  /** Every inbox on the domain, not just those the view shows. */
+  all: { inboxes: number; disconnected: number };
   /** Inboxes by sender name, most first; `added` is the earliest inbox's age in days. */
   senders: { name: string; ids: string[]; added: number | null }[];
 };
@@ -146,6 +182,8 @@ function group(rows: InboxListRow[]): Group[] {
       blocked: list.filter((i) => warmupOf(i) === "blocked").length,
       paused: list.filter((i) => warmupOf(i) === "paused").length,
       disconnected: list.filter((i) => i.status === "disconnected").length,
+      order: f.domainOrder, orderStatus: f.domainOrderStatus, provider: f.domainProvider,
+      all: { inboxes: f.domainInboxes, disconnected: f.domainDisconnected },
       senders: (() => {
         const by = new Map<string, { name: string; ids: string[]; born: number }>();
         for (const i of list) {
@@ -168,7 +206,11 @@ function group(rows: InboxListRow[]): Group[] {
  * averages over inboxes for rates, and how many domains have a problem. Used
  * for a client and for a tag inside a client.
  */
-type ClientGroup = Group & { key: string; domains: Group[]; dnsBad: number; listed: number; tagGroups: ClientGroup[] | null };
+type ClientGroup = Group & {
+  key: string; domains: Group[]; dnsBad: number; listed: number; tagGroups: ClientGroup[] | null;
+  /** Active domains, and those of them that really are: order active, every inbox connected. */
+  activeDomains: number; liveDomains: number;
+};
 function roll(key: string, label: string, clientName: string | null, domains: Group[]): ClientGroup {
   const list = domains.flatMap((d) => d.inboxes);
   const [s] = group(list.map((i) => ({ ...i, domainId: `roll:${key}` })));
@@ -192,6 +234,10 @@ function roll(key: string, label: string, clientName: string | null, domains: Gr
     bl: domains.some((d) => d.bl != null) ? domains.reduce((a, d) => a + (d.bl ?? 0), 0) : null,
     listed: domains.filter((d) => (d.bl ?? 0) > 0).length,
     blListings: [...new Set(domains.flatMap((d) => (d.bl ? [d.domain] : [])))],
+    order: null, orderStatus: null, provider: null,
+    all: { inboxes: domains.reduce((a, d) => a + d.all.inboxes, 0), disconnected: domains.reduce((a, d) => a + d.all.disconnected, 0) },
+    activeDomains: domains.filter((d) => d.status === "active").length,
+    liveDomains: domains.filter((d) => d.status === "active" && !notLive(d)).length,
     tagGroups: null,
   };
 }
@@ -231,7 +277,8 @@ function byClient(groups: Group[]): ClientGroup[] {
 type SortKey = "progress" | "reasons" | "senders" | "domain" | "status" | "client" | "esp" | "tags" | "age" | "dnsMissing" | "warmupState" | "blacklist" | "connection" | "count" | "avgWarmup" | "avgLimit" | "capacity" | "sentToday" | "avgWait" | "avgRep" | "campaigns" | "sent7" | "replyRate" | "bounceRate";
 const sortValue = (g: Group, k: SortKey): string | number | null => {
   switch (k) {
-    case "status": return DOMAIN_STATUSES.indexOf(g.status);
+    // Within a status, domains that aren't really live come after those that are.
+    case "status": return DOMAIN_STATUSES.indexOf(g.status) * 10 + (notLive(g) ? (notLive(g)!.tone === "danger" ? 2 : 1) : 0);
     case "progress": return g.warm ? 100 + g.warm.pct : stageOf(g) === "ready" ? 1 : 0;
     case "reasons": return reasonsOf(g).length;
     case "senders": return g.senders.length;
@@ -512,7 +559,17 @@ export function InboxesView({ inboxes, clients, plans, smartleadConnected, dryRu
   const someSel = allIds.some((id) => selected.has(id));
 
   const colCount = 2 + COLUMNS.filter((col) => on(col.key)).length;
-  const allOpen = clientGroups.length > 0 && clientGroups.every((c) => openClients.has(c.key));
+  // Every client, tag and domain row's key, the way the table builds them, for Expand all.
+  const tagKeys = useMemo(() => clientGroups.flatMap((c) => c.tagGroups?.map((t) => t.key) ?? []), [clientGroups]);
+  const domainKeys = useMemo(() => clientGroups.flatMap((c) => c.tagGroups
+    ? c.tagGroups.flatMap((t) => t.domains.map((d) => `${t.key}|${d.domainId}`))
+    : c.domains.map((d) => `${c.key}|${d.domainId}`)), [clientGroups]);
+  const anyOpen = openClients.size > 0;
+  const expandTo = (level: "tags" | "domains" | "inboxes" | null) => {
+    setOpenClients(level ? new Set(clientGroups.map((c) => c.key)) : new Set());
+    setOpenTags(level === "domains" || level === "inboxes" ? new Set(tagKeys) : new Set());
+    setOpen(level === "inboxes" ? new Set(domainKeys) : new Set());
+  };
   const flip = (id: string) => (s: Set<string>) => { const n = new Set(s); if (n.has(id)) n.delete(id); else n.add(id); return n; };
   const toggle = (id: string) => setOpen(flip(id));
   const toggleClient = (key: string) => setOpenClients(flip(key));
@@ -522,7 +579,13 @@ export function InboxesView({ inboxes, clients, plans, smartleadConnected, dryRu
   // The cells a client or tag row shares: totals for the group, each marked Sum or Avg.
   const summaryCells = (c: ClientGroup) => (
     <>
-      {on("status") ? <td /> : null}
+      {on("status") ? (
+        <td>
+          {!c.activeDomains ? null : c.liveDomains === c.activeDomains
+            ? <Ok title="Every active domain has an active order and all its inboxes connected">{c.liveDomains} active</Ok>
+            : <span className="ns-status tone-warning" title="Active domains whose order isn't active or with inboxes disconnected in Smartlead">{c.liveDomains} of {c.activeDomains} active</span>}
+        </td>
+      ) : null}
       {on("client") ? <td /> : null}
       {on("esp") ? <td>{c.esp ? <EspBadge type={c.esp} /> : <span className="zero">—</span>}</td> : null}
       {on("tags") ? <td /> : null}
@@ -562,7 +625,7 @@ export function InboxesView({ inboxes, clients, plans, smartleadConnected, dryRu
               <TagList tags={g.domainTags} graceDaysLeft={g.graceDaysLeft} />
             </span>
           </td>
-          {on("status") ? <td><StatusDot status={g.status} /></td> : null}
+          {on("status") ? <td><DomainState g={g} /></td> : null}
           {on("client") ? <td><ClientCell name={g.clientName} hue={g.clientHue} /></td> : null}
           {on("esp") ? <td>{g.esp ? <EspBadge type={g.esp} /> : <span className="zero">—</span>}</td> : null}
           {on("tags") ? <td><Tags tags={g.tags} graceDaysLeft={g.graceDaysLeft} /></td> : null}
@@ -664,9 +727,25 @@ export function InboxesView({ inboxes, clients, plans, smartleadConnected, dryRu
           <Search size={14} strokeWidth={1.5} />
           <input className="input" value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search" aria-label="Search inboxes" />
         </label>
-        {FLAT.includes(tab) ? null : <button type="button" className="btn btn-sm" aria-label={allOpen ? "Collapse all" : "Expand all"} title={allOpen ? "Collapse all" : "Expand all"} onClick={() => { setOpenClients(allOpen ? new Set() : new Set(clientGroups.map((c) => c.key))); setOpenTags(allOpen ? new Set() : new Set(clientGroups.flatMap((c) => c.tagGroups?.map((t) => t.key) ?? []))); }}>
-          {allOpen ? <ChevronsDownUp size={14} /> : <ChevronsUpDown size={14} />}
-        </button>}
+        {FLAT.includes(tab) ? null : (
+          <DropdownMenu.Root>
+            <DropdownMenu.Trigger asChild>
+              <button type="button" className="btn btn-sm menu-trigger" title="Open or close every client, tag and domain">
+                {anyOpen ? <ChevronsDownUp size={14} /> : <ChevronsUpDown size={14} />} {anyOpen ? "Expanded" : "Expand"} <ChevronDown size={13} />
+              </button>
+            </DropdownMenu.Trigger>
+            <DropdownMenu.Portal>
+              <DropdownMenu.Content className="menu" align="end" sideOffset={6} style={{ minWidth: 220 }}>
+                <DropdownMenu.Label className="menu-label">Expand all to</DropdownMenu.Label>
+                {tagKeys.length ? <DropdownMenu.Item className="menu-item" onSelect={() => expandTo("tags")}>Tags</DropdownMenu.Item> : null}
+                <DropdownMenu.Item className="menu-item" onSelect={() => expandTo("domains")}>Domains <span className="menu-hint">{int(groups.length)}</span></DropdownMenu.Item>
+                <DropdownMenu.Item className="menu-item" onSelect={() => expandTo("inboxes")}>Every inbox <span className="menu-hint">{int(totals.inboxes)}</span></DropdownMenu.Item>
+                <DropdownMenu.Separator className="menu-sep" />
+                <DropdownMenu.Item className="menu-item" disabled={!anyOpen} onSelect={() => expandTo(null)}>Collapse all</DropdownMenu.Item>
+              </DropdownMenu.Content>
+            </DropdownMenu.Portal>
+          </DropdownMenu.Root>
+        )}
         <button type="button" className="btn btn-sm" disabled={acting} title="Check SPF, DKIM, DMARC and MX now (selected domains, or all sending domains)" onClick={() => act(() => validateDns(selectedDomains))}>
           <ShieldCheck size={14} /> Validate DNS{selectedDomains.length ? ` (${selectedDomains.length})` : ""}
         </button>
@@ -826,7 +905,7 @@ export function InboxesView({ inboxes, clients, plans, smartleadConnected, dryRu
                       </td>
                       <td className="is-num" title={g.ageDays != null ? `${g.ageDays} days since the first inbox was added to Smartlead` : "Not known yet"}>{ageLabel(g.ageDays) ?? <span className="zero">—</span>}</td>
                       <td><Tags tags={g.tags.filter((t) => !isMark(t))} /></td>
-                      <td><StatusDot status={g.status} /></td>
+                      <td><DomainState g={g} /></td>
                     </tr>
                   );
                 })}
@@ -871,7 +950,7 @@ export function InboxesView({ inboxes, clients, plans, smartleadConnected, dryRu
                       </td>
                       <td><ClientCell name={g.clientName} hue={g.clientHue} /></td>
                       <td><Tags tags={g.tags.filter((t) => !isMark(t))} /></td>
-                      <td><StatusDot status={g.status} /></td>
+                      <td><DomainState g={g} /></td>
                       {tab === "attention" ? (
                         <td>
                           <span className="flex flex-wrap gap-1">

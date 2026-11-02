@@ -634,7 +634,18 @@ export type InboxListRow = InboxRow & {
   domainBornAt: Date | null; smartleadCreatedAt: Date | null; warmupBlockedReason: string | null; connectError: string | null;
   dnsSpf: boolean | null; dnsDkim: boolean | null; dnsDmarc: boolean | null; dnsMx: boolean | null; dnsCheckedAt: Date | null; nsAnswering: boolean | null;
   blDomain: number | null; blIp: number | null; blListings: { kind: string; list: string }[] | null; blCheckedAt: Date | null;
+  /** The domain's order at its inbox provider; null when the provider's orders aren't synced. */
+  domainOrder: OrderState | null; domainOrderStatus: string | null; domainProvider: string | null;
+  /** All the domain's inboxes in Smartlead (not deleted), and how many are disconnected, whatever a view shows. */
+  domainInboxes: number; domainDisconnected: number;
 };
+
+/**
+ * A domain's order at Hypertide or Icemail: active (Done at Hypertide, active
+ * at Icemail), not done yet, cancelled (NPC or Cancelled), moved onto another
+ * domain by a Hypertide replacement, or no live order at all.
+ */
+export type OrderState = "active" | "pending" | "cancelled" | "replaced" | "missing";
 
 export async function listInboxes() {
   return sql<InboxListRow[]>`
@@ -648,6 +659,40 @@ export async function listInboxes() {
       group by inbox_id
     ), camp as (
       select inbox_id, count(*)::int as n from campaign_inboxes group by inbox_id
+    ), dom as (
+      -- Every inbox on the domain, whatever the view shows.
+      select domain_id, count(*)::int as n, count(*) filter (where status = 'disconnected')::int as disconnected
+      from inboxes where status <> 'removed' group by domain_id
+    ), ord as (
+      -- A Done order wins over an older cancelled one for the same domain.
+      -- Tenant default domains (*.onmicrosoft.com) never have an order of their own.
+      select d.id as domain_id, v.name as provider, ho.status as order_status,
+        case
+          when d.name like '%.onmicrosoft.com' then null
+          when v.name = 'Hypertide' then case
+            when ho.status = 'Done' then 'active'
+            when ho.status in ('NPC', 'Cancelled') then 'cancelled'
+            when ho.status is not null then 'pending'
+            when exists (select 1 from hypertide_orders o where o.replaced_domains @> array[d.name]) then 'replaced'
+            when exists (select 1 from hypertide_orders) then 'missing'
+          end
+          when v.name = 'Icemail' then case
+            when ix.active then 'active'
+            when ix.found then 'pending'
+            when exists (select 1 from icemail_accounts) then 'missing'
+          end
+        end as state
+      from domains d
+      join vendors v on v.id = d.inbox_provider_id
+      left join lateral (
+        select o.status from hypertide_orders o
+        where v.name = 'Hypertide' and (o.domain_id = d.id or o.domain_name = d.name) and o.gone_at is null
+        order by case when o.status = 'Done' then 0 when o.status in ('NPC', 'Cancelled') then 2 else 1 end, o.last_seen_at desc limit 1) ho on true
+      left join lateral (
+        select true as found, x.active from icemail_domains x
+        where v.name = 'Icemail' and x.domain_id = d.id and x.gone_at is null
+        order by x.active desc nulls last, x.last_seen_at desc limit 1) ix on true
+      where exists (select 1 from inboxes i where i.domain_id = d.id and i.status <> 'removed')
     )
     select i.id, i.email, i.sender_name, i.status, i.warmup_enabled, i.warmup_per_day, i.warmup_rampup, i.daily_limit,
       i.warmup_reputation::float8 as warmup_reputation, i.smartlead_account_id, i.last_synced_at,
@@ -662,10 +707,14 @@ export async function listInboxes() {
       ch.change,
       coalesce(d.purchased_at, d.registered_at)::timestamptz as domain_born_at, i.smartlead_created_at, i.warmup_blocked_reason, i.connect_error,
       d.dns_spf, d.dns_dkim, d.dns_dmarc, d.dns_mx, d.dns_checked_at, d.nameservers_answering as ns_answering,
-      d.blacklist_domain_count as bl_domain, d.blacklist_ip_count as bl_ip, d.blacklist_listings as bl_listings, d.blacklist_checked_at as bl_checked_at
+      d.blacklist_domain_count as bl_domain, d.blacklist_ip_count as bl_ip, d.blacklist_listings as bl_listings, d.blacklist_checked_at as bl_checked_at,
+      ord.state as domain_order, ord.order_status as domain_order_status, ord.provider as domain_provider,
+      dom.n as domain_inboxes, dom.disconnected as domain_disconnected
     from inboxes i join domains d on d.id = i.domain_id left join clients c on c.id = d.client_id
     left join ev on ev.inbox_id = i.id
     left join camp on camp.inbox_id = i.id
+    left join ord on ord.domain_id = d.id
+    left join dom on dom.domain_id = d.id
     left join lateral (
       select jsonb_build_object('status', x.status, 'error', x.error, 'changes', x.changes) as change
       from inbox_setting_changes x where x.inbox_id = i.id and x.created_at > now() - interval '2 days'
