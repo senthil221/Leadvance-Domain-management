@@ -1065,6 +1065,8 @@ a.stat:hover { background: var(--surface-2); }
 .st-banner.tone-warning { background: var(--warning-soft); box-shadow: 0 0 0 1px var(--warning-line); }
 .st-banner.tone-warning .st-banner-dot { background: var(--warning-solid); box-shadow: 0 0 0 4px color-mix(in srgb, var(--warning-solid) 20%, transparent); }
 .st-banner.tone-success .st-banner-dot { background: var(--success-solid); box-shadow: 0 0 0 4px color-mix(in srgb, var(--success-solid) 20%, transparent); }
+.st-banner.tone-danger { background: var(--danger-soft); box-shadow: 0 0 0 1px var(--danger-line); }
+.st-banner.tone-danger .st-banner-dot { background: var(--danger-solid); box-shadow: 0 0 0 4px color-mix(in srgb, var(--danger-solid) 20%, transparent); }
 
 .st-choice { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
 .st-choice-item {

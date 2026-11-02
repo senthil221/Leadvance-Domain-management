@@ -7,6 +7,7 @@ import { toast } from "sonner";
 import { loadDomainDetail } from "@/app/actions";
 import { Badge, ClientCell, Dot, Metric, Rep, Skeleton, StatusDot } from "@/components/ui";
 import { ago, daysSince, int, shortDate } from "@/lib/format";
+import { DEAD_CAUSES } from "@/lib/dead";
 import type { DomainDetail } from "@/lib/queries";
 import { REPLACEMENT_REASONS, STATUS_META } from "@/lib/status";
 
@@ -101,6 +102,14 @@ export function DomainSheet({
                         <LineageRow label="Replaced by" link={d.lineage.replacedBy} self={d.domain.name} direction="out" onOpen={onOpenDomain} />
                       ) : null}
                     </div>
+                  </div>
+                ) : null}
+
+                {d.domain.deadCause ? (
+                  <div className="st-banner tone-danger">
+                    <span className="st-banner-dot" />
+                    <span className="flex flex-col"><span className="strong">Dead: {DEAD_CAUSES[d.domain.deadCause].label}</span>
+                      <span className="st-panel-sub">{DEAD_CAUSES[d.domain.deadCause].hint}.</span></span>
                   </div>
                 ) : null}
 

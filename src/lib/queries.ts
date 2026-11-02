@@ -308,6 +308,8 @@ export type DomainDetail = {
     burnedAt: Date | null;
     createdAt: Date;
     inboxProvider: string | null;
+    /** Why nothing on it can send, when it's an active domain that's dead. */
+    deadCause: import("./dead").DeadCause | null;
     autoRenew: boolean | null;
     registrarApiAccess: boolean | null;
     nameserversCheckedAt: Date | null;
@@ -326,6 +328,7 @@ export async function getDomainDetail(id: string): Promise<DomainDetail | null> 
   const [domain] = await sql<DomainDetail["domain"][]>`
     select d.id, d.name, d.tld, d.status, d.client_id, c.name as client_name, c.hue as client_hue,
       v.name as registrar, ip.name as inbox_provider,
+      (select dd.cause from dead_domains dd where dd.domain_id = d.id) as dead_cause,
       (select count(*)::int from inboxes i where i.domain_id = d.id and i.status <> 'removed') as inbox_count,
       h.sent, h.human_replies, h.replies, h.bounces,
       h.bounce_rate::float8 as bounce_rate, h.human_reply_rate::float8 as human_reply_rate,
@@ -1066,7 +1069,7 @@ export async function listIcemailAccounts() {
 // ---------------------------------------------------------------------------
 
 export type Issues = {
-  flagged: number; noZone: number; disconnected: number; lowRep: number; htUnpaid: number; htCancelledLive: number;
+  flagged: number; dead: number; noZone: number; disconnected: number; lowRep: number; htUnpaid: number; htCancelledLive: number;
   billedRetired: number; renew14: number; readyForCampaigns: number; nsFailed: number; settingsFailed: number; stuckSetup: number; freeLow: boolean; free: number;
 };
 export type ClientInsight = {
@@ -1075,12 +1078,31 @@ export type ClientInsight = {
 };
 export type TrendDay = { day: string; sent: number; replies: number; human: number; bounces: number };
 
+export type DeadDomainRow = {
+  domainId: string; name: string; status: DomainStatus; tld: string | null;
+  clientName: string | null; clientHue: number | null; inboxProvider: string | null;
+  cause: import("./dead").DeadCause; connected: number; disconnected: number; removed: number;
+  providerType: string | null; lastSendDay: Date | null;
+};
+
+/** Active domains nothing can send from, worst first: those still in campaigns (connected, DNS gone) lead. */
+export async function listDeadDomains() {
+  return sql<DeadDomainRow[]>`
+    select x.domain_id, d.name, d.status, d.tld, c.name as client_name, c.hue as client_hue, ip.name as inbox_provider,
+      x.cause, x.connected, x.disconnected, x.removed, x.provider_type, x.last_send_day
+    from dead_domains x join domains d on d.id = x.domain_id
+    left join clients c on c.id = d.client_id
+    left join vendors ip on ip.id = d.inbox_provider_id
+    order by (x.cause = 'dns_gone') desc, x.cause, x.last_send_day desc nulls last, d.name`;
+}
+
 export async function getInsights() {
   const [[issues], [cap], clients, trend] = await Promise.all([
     sql<Issues[]>`
       select
         (select count(distinct a.domain_id)::int from alerts a join domains d on d.id = a.domain_id
           where a.status = 'open' and d.status in ('active', 'warming')) as flagged,
+        (select count(*)::int from dead_domains) as dead,
         (select count(*)::int from domains where nameservers_answering = false and status not in ('burned', 'resting')) as no_zone,
         (select count(*)::int from inboxes i join domains d on d.id = i.domain_id where i.status = 'disconnected' and d.status in ('active', 'warming')) as disconnected,
         (select count(*)::int from inboxes i join domains d on d.id = i.domain_id where i.status = 'connected' and i.warmup_reputation < 90 and d.status in ('active', 'warming')) as low_rep,

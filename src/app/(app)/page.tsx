@@ -4,11 +4,12 @@ import Link from "next/link";
 import { Suspense } from "react";
 import { ArrowRight, ArrowUpRight, CircleCheck, History } from "lucide-react";
 import { AttentionList } from "@/components/overview/AttentionList";
+import { DeadDomains } from "@/components/overview/DeadDomains";
 import { ClientsTable } from "@/components/overview/ClientsTable";
 import { Dot, Empty, PageHead, Skeleton } from "@/components/ui";
 import { getCurrentUser } from "@/lib/auth";
 import { ago, int } from "@/lib/format";
-import { getInsights, getOverview, type Issues, type TrendDay } from "@/lib/queries";
+import { getInsights, getOverview, listDeadDomains, type Issues, type TrendDay } from "@/lib/queries";
 import { STATUS_META, type DomainStatus, type Tone } from "@/lib/status";
 
 export const metadata: Metadata = { title: "Overview" };
@@ -42,6 +43,7 @@ function Delta({ now, before, points = false, invert = false }: { now: number | 
 // shown when it applies.
 function actions(i: Issues, weeksLeft: number | null): { tone: Tone; n: number; text: string; href: string }[] {
   const out: { tone: Tone; n: number; text: string; href: string }[] = [
+    { tone: "danger", n: i.dead, text: "active domains are dead: nothing on them can send", href: "#dead" },
     { tone: "danger", n: i.noZone, text: "domains with no DNS zone: nothing on them resolves", href: "/inventory" },
     { tone: "danger", n: i.flagged, text: "sending domains breaking a health rule", href: "/inboxes?view=attention" },
     { tone: "danger", n: i.disconnected, text: "inboxes disconnected in Smartlead", href: "/inboxes?view=disconnected" },
@@ -61,7 +63,7 @@ function actions(i: Issues, weeksLeft: number | null): { tone: Tone; n: number; 
 
 async function OverviewContent() {
   await getCurrentUser();
-  const [o, ins] = await Promise.all([getOverview(), getInsights()]);
+  const [o, ins, dead] = await Promise.all([getOverview(), getInsights(), listDeadDomains()]);
   const todo = actions(ins.issues, o.weeksLeft);
   const t7 = ins.trend.slice(7), p7 = ins.trend.slice(0, 7);
   const sum = (d: TrendDay[], k: "sent" | "replies" | "human" | "bounces") => d.reduce((a, x) => a + x[k], 0);
@@ -133,6 +135,16 @@ async function OverviewContent() {
               </div>
             )}
           </section>
+
+          {dead.length ? (
+            <section className="card" id="dead" aria-labelledby="dead-title" style={{ scrollMarginTop: 72 }}>
+              <div className="card-head">
+                <h2 id="dead-title" className="card-title">Dead domains</h2>
+                <span className="card-sub" title="Active domains with no inbox connected in Smartlead, or connected inboxes on a domain whose DNS no longer answers. From the last Smartlead sync and DNS check.">nothing on them can send</span>
+              </div>
+              <DeadDomains rows={dead} />
+            </section>
+          ) : null}
 
           <section className="card" aria-labelledby="attention-title">
             <div className="card-head">
