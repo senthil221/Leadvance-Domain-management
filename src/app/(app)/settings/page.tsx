@@ -99,7 +99,7 @@ async function SettingsContent() {
         ),
       },
       {
-        key: "sync", label: "Background sync", title: "Background sync", sub: "Jobs that run on the server every few minutes. Run one now to pick up a change straight away.",
+        key: "sync", label: "Background sync", title: "Background sync", sub: "Jobs that run on the server every few minutes, by section. Run one, a section, or everything at once to pick up changes straight away.",
         badge: jobs.some((j) => j.lastOk === false) ? <span className="st-dot tone-danger" title="A job failed" /> : null,
         content: <Panel title="Jobs" flush><SyncPanel jobs={jobs} /></Panel>,
       },
