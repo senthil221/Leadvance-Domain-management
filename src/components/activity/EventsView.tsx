@@ -188,7 +188,8 @@ export function EventsView({ kind, initial }: { kind: Kind; initial: EventsData 
             <span className="truncate">All clients</span><span className="ev-rail-n">{int(matching.length)}</span>
           </button>
           {clients.map((c) => {
-            const open = openClients.has(c.key) || scope.client === c.key;
+            // The chevron alone opens and closes a client, even while it or one of its domains is picked.
+            const open = openClients.has(c.key);
             return (
               <div key={c.key}>
                 <div className="ev-rail-client">
