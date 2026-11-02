@@ -12,7 +12,9 @@ import { ConfigureDomains, PasteSelect } from "@/components/domains/DomainBulk";
 import { AdviceCell, DomainInsight } from "./DomainInsight";
 import { Badge, ClientCell, Empty, Metric, Rep, StatusDot, TagList } from "@/components/ui";
 import { clientDays, clientDaySheet, rr, type ClientDays, type DayFigures } from "@/lib/client-days";
-import { int } from "@/lib/format";
+import { ago, int } from "@/lib/format";
+import { SlBadge } from "@/components/domains/SlStatus";
+import { slState } from "@/lib/smartlead-state";
 import type { ClientRow, StatDomain, StatsData } from "@/lib/queries";
 import { VERDICT_META, VERDICT_ORDER, advise, judge, type Judged, type ReviewData, type Verdict } from "@/lib/review";
 import { DOMAIN_STATUSES } from "@/lib/status";
@@ -227,7 +229,14 @@ function download(name: string, head: string[], lines: unknown[][]) {
 // The weekly review's calls that ask for action; Idle, too little sent and OK don't.
 const ATTENTION: Verdict[] = ["fix", "rest", "drop", "dead", "watch"];
 type CallFilter = "" | "attention" | Verdict;
-type Facet = "call" | "tag" | "esp" | "sender";
+type Facet = "call" | "tag" | "esp" | "sender" | "sl";
+/** Smartlead now: "in" leaves out domains deleted there, the default. */
+type SlFilter = "in" | "live" | "disconnected" | "deleted" | "all";
+const SL_FILTERS: [SlFilter, string][] = [["in", "In Smartlead now"], ["live", "All inboxes live"], ["disconnected", "Some disconnected"], ["deleted", "Deleted in Smartlead"], ["all", "All, deleted included"]];
+const slMatches = (d: StatDomain, f: SlFilter) => {
+  const st = slState(d);
+  return f === "all" || (f === "in" ? st !== "deleted" : f === "live" ? st === "live" : f === "disconnected" ? st === "partial" || st === "disconnected" : st === "deleted");
+};
 
 export function StatsView({ initial, initialReview, clients }: { initial: StatsData; initialReview: ReviewData; clients: ClientRow[] }) {
   const [data, setData] = useState(initial);
@@ -252,6 +261,7 @@ export function StatsView({ initial, initialReview, clients }: { initial: StatsD
   const [statusSet, setStatusSet] = useState<"" | "active" | "other">(() => (params.get("status") === "active" || params.get("status") === "other" ? params.get("status") as "active" | "other" : ""));
   // One line per client to start; open a client to see its domains.
   const [byClient, setByClient] = useState(true);
+  const [sl, setSl] = useState<SlFilter>(() => (SL_FILTERS.some(([k]) => k === params.get("sl")) ? params.get("sl") as SlFilter : "in"));
   const [openClients, setOpenClients] = useState<Set<string>>(new Set());
   // Domains opened to show their bounces and what to do.
   const [openRows, setOpenRows] = useState<Set<string>>(new Set());
@@ -296,6 +306,7 @@ export function StatsView({ initial, initialReview, clients }: { initial: StatsD
       (skip === "tag" || !tag || d.allTags.some((t) => t.toLowerCase() === tag)) &&
       (skip === "esp" || !esp || (d.esp ?? "") === esp) &&
       (skip === "sender" || !sender || d.senders.includes(sender)) &&
+      (skip === "sl" || slMatches(d, sl)) &&
       (!needle || d.name.includes(needle) || !!d.clientName?.toLowerCase().includes(needle) || d.allTags.some((t) => t.toLowerCase().includes(needle)) ||
         d.senders.some((s) => s.toLowerCase().includes(needle)));
     const sendingOk = (d: StatDomain, skip?: Facet) => !onlySending || skip === "call" || !!call || (sentIn.get(d.id) ?? 0) > 0;
@@ -322,11 +333,12 @@ export function StatsView({ initial, initialReview, clients }: { initial: StatsD
         tags: [...tags].sort((a, b) => a[1].label.localeCompare(b[1].label)),
         esps: [...count("esp", (d) => [d.esp ?? ""])].sort((a, b) => a[0].localeCompare(b[0])),
         senders: [...count("sender", (d) => d.senders)].sort((a, b) => a[0].localeCompare(b[0])),
+        sl: new Map(SL_FILTERS.map(([k]) => [k, data.domains.filter((d) => passes(d, "sl") && sendingOk(d, "sl") && slMatches(d, k)).length])),
       },
     };
-  }, [data.domains, clientId, statusSet, needle, call, calls, tag, esp, sender, sentIn, onlySending]);
-  const filtering = !!(call || tag || esp || sender);
-  const clearFilters = () => { setCall(""); setTag(""); setEsp(""); setSender(""); };
+  }, [data.domains, clientId, statusSet, needle, call, calls, tag, esp, sender, sl, sentIn, onlySending]);
+  const filtering = !!(call || tag || esp || sender || sl !== "in");
+  const clearFilters = () => { setCall(""); setTag(""); setEsp(""); setSender(""); setSl("in"); };
 
   const rows = useMemo(() => {
     const byId = new Map<string, Row>(visible.map((d) => [d.id, { ...d, ...zero(), reputation: null, call: calls.get(d.id) ?? null }]));
@@ -465,6 +477,10 @@ export function StatsView({ initial, initialReview, clients }: { initial: StatsD
           <option value="">All senders</option>
           {options.senders.map(([k, n]) => <option key={k} value={k}>{k} ({n})</option>)}
         </select>
+        <select className="select rv-filter" data-on={sl !== "in" ? true : undefined} value={sl} onChange={(e) => setSl(e.target.value as SlFilter)} aria-label="Filter by Smartlead status"
+          title={`Connected, disconnected or deleted in Smartlead now${data.slSyncedAt ? `, as of the sync ${ago(data.slSyncedAt)}` : ""}. Deleted domains are left out unless you pick them`}>
+          {SL_FILTERS.map(([k, label]) => <option key={k} value={k}>{label} ({options.sl.get(k) ?? 0})</option>)}
+        </select>
         {filtering ? <button type="button" className="btn btn-sm" onClick={clearFilters}>Clear filters</button> : null}
         {view === "domain" ? (
           <>
@@ -560,6 +576,7 @@ export function StatsView({ initial, initialReview, clients }: { initial: StatsD
                             <DomainLink id={r.id} tab="stats" className="strong hover:underline">{r.name}</DomainLink>
                             {/* Status only when it isn't the usual Active. */}
                             {r.status !== "active" ? <StatusDot status={r.status} /> : null}
+                            <SlBadge c={r} quiet />
                           </span>
                         </td>
                         {showClient ? <td><ClientCell name={r.clientName} hue={r.clientHue} /></td> : null}

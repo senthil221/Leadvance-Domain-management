@@ -1,11 +1,12 @@
 import type { BounceReason } from "./bounces";
+import { slText } from "./smartlead-state";
 
 // The weekly review's call on each sending domain, with the numbers behind
 // it. Shared by server and client. Spam and blocklist rejections, a low
 // warmup reputation and days without any reply count against the domain;
 // addresses that don't exist count against the list.
 
-export type Verdict = "fix" | "rest" | "drop" | "dead" | "watch" | "idle" | "low" | "ok";
+export type Verdict = "fix" | "rest" | "drop" | "dead" | "watch" | "idle" | "low" | "ok" | "gone";
 
 export const VERDICT_META: Record<Verdict, { label: string; tone: "danger" | "warning" | "info" | "faint" | "success"; hint: string }> = {
   fix: { label: "Fix sender", tone: "danger", hint: "Our own setup is failing: tenant or mailbox blocked, DNS missing, or inboxes disconnected" },
@@ -16,8 +17,9 @@ export const VERDICT_META: Record<Verdict, { label: string; tone: "danger" | "wa
   idle: { label: "Idle", tone: "info", hint: "Active with inboxes connected, but nothing was sent in this range" },
   low: { label: "Too little sent", tone: "faint", hint: "Not enough sent in this range to judge" },
   ok: { label: "OK", tone: "success", hint: "Nothing to act on" },
+  gone: { label: "Deleted in Smartlead", tone: "faint", hint: "Every inbox was deleted in Smartlead: its numbers are history, nothing to fix or reconnect" },
 };
-export const VERDICT_ORDER: Verdict[] = ["fix", "rest", "drop", "dead", "watch", "idle", "low", "ok"];
+export const VERDICT_ORDER: Verdict[] = ["fix", "rest", "drop", "dead", "watch", "idle", "low", "ok", "gone"];
 
 /** The thresholds. A domain needs MIN_SENT in the range before it is judged on rates. */
 export const RULES = {
@@ -61,7 +63,8 @@ export type Chip = { key: Signal; text: string; tone: Tone; why: string };
 
 export type ReviewDomain = {
   id: string; name: string; status: string; clientId: string | null; clientName: string | null; clientHue: number | null; tags: string[];
-  inboxes: number; disconnected: number; blacklisted: number;
+  /** Inboxes connected and disconnected in Smartlead now, and deleted there (as of the last sync). */
+  inboxes: number; disconnected: number; removed: number; blacklisted: number;
   sent: number; replies: number; human: number; bounces: number;
   causes: Partial<Record<BounceReason, number>>;
   prevSent: number; prevHuman: number; prevSpam: number;
@@ -96,7 +99,7 @@ export const ESP_ORDER = ["Outlook", "Google", "SMTP", "Mixed", "Unknown"];
 
 const htText = (d: ReviewDomain) => (d.ht === "replaced" && d.replacedBy ? `Replaced by ${d.replacedBy}` : d.ht ? HT_META[d.ht].label : "");
 export type ReviewCampaign = { id: number; name: string; clientName: string | null; bounces: number; missing: number };
-export type ReviewData = { from: string; to: string; today: string; domains: ReviewDomain[]; campaigns: ReviewCampaign[] };
+export type ReviewData = { from: string; to: string; today: string; slSyncedAt: Date | null; domains: ReviewDomain[]; campaigns: ReviewCampaign[] };
 export type Judged = ReviewDomain & { verdict: Verdict; why: string; worse: boolean; spam: number; chips: Chip[]; strikes: number };
 
 const pct = (n: number, d: number) => (d > 0 ? (100 * n) / d : 0);
@@ -164,6 +167,8 @@ export function judge(d: ReviewDomain): Judged {
   // A reply in the last few days, of any kind, says the domain still lands.
   const replying = d.quietDays != null && d.quietDays < RULES.quietDays && !d.neverReplied;
 
+  // Deleted in Smartlead: last week's numbers are history, nothing to act on.
+  if (!d.inboxes && !d.disconnected && d.removed) return out("gone", `Every inbox (${s(d.removed, "inbox", "inboxes")}) was deleted in Smartlead`);
   // No inbox left to log into: nothing else about the domain matters. Gone
   // from Hypertide, it can go; otherwise it may only need reconnecting.
   if (allGone) return ended ? out("drop", said(["ended", "disconnected"])) : out("dead", said(["unlisted", "disconnected"]));
@@ -199,11 +204,12 @@ const cell = (v: string | number | null) => {
 /** Tab-separated rows with a header, ready to paste into Google Sheets: one column per fact. */
 export function sheetRows(list: Judged[]): string {
   const head = ["Domain", "Call", "Reason", "Signals", "ESP", "TLD", "Smartlead tags", "Hypertide", "Client", "Status", "Sent", "Human replies", "Spam rejections",
-    "Bounce rate", "Warmup reputation", "Days since any reply", "Inboxes connected", "Inboxes disconnected", "Replies incl. OOO"];
+    "Bounce rate", "Warmup reputation", "Days since any reply", "Inboxes connected", "Inboxes disconnected", "Replies incl. OOO", "Smartlead now"];
   const rows = list.map((d) => [
     d.name, VERDICT_META[d.verdict].label, d.why, d.chips.map((c) => c.text).join(", "), espName(d.esp), d.tld ? `.${d.tld}` : "", d.slTags.join(", "), htText(d), d.clientName, d.status,
     d.sent, d.human, d.spam, d.sent ? `${((100 * d.bounces) / d.sent).toFixed(2)}%` : "", d.rep,
     d.quietDays == null ? "" : `${d.quietDays}${d.neverReplied ? "+" : ""}`, d.inboxes, d.disconnected, d.replies,
+    slText({ slConnected: d.inboxes, slDisconnected: d.disconnected, slRemoved: d.removed }),
   ].map(cell).join("\t"));
   return [head.join("\t"), ...rows].join("\n");
 }
@@ -215,7 +221,7 @@ function summarize(domains: Judged[], keys: (d: Judged) => { id: string; name: s
     for (const k of keys(d)) {
       let r = m.get(k.id);
       if (!r) {
-        r = { ...k, domains: 0, counts: { fix: 0, rest: 0, drop: 0, dead: 0, watch: 0, idle: 0, low: 0, ok: 0 }, sent: 0, human: 0, bounces: 0, spam: 0 };
+        r = { ...k, domains: 0, counts: { fix: 0, rest: 0, drop: 0, dead: 0, watch: 0, idle: 0, low: 0, ok: 0, gone: 0 }, sent: 0, human: 0, bounces: 0, spam: 0 };
         m.set(k.id, r);
       }
       r.domains++; r.counts[d.verdict]++;
@@ -257,6 +263,7 @@ export function advise(d: Judged): Advice[] {
   const share = (k: BounceReason) => (total ? (c[k] ?? 0) / total : 0);
   const tenant = c.sender ?? 0, dns = c.dns ?? 0, recipient = (c.restricted ?? 0) + (c.policy ?? 0) + (c.full ?? 0);
 
+  if (d.verdict === "gone") return [{ tone: "faint", text: "Deleted in Smartlead: nothing to analyse. Mark it replaced, or send it back to storage to reuse later" }];
   if (d.verdict === "drop") add("danger", `Delete its inboxes in Smartlead: ${d.ht === "replaced" && d.replacedBy ? `replaced by ${d.replacedBy}` : "Hypertide has cancelled it"}, nothing to reconnect`);
   if (d.verdict === "dead") add("warning", "Reconnect the inboxes in Smartlead; if they don't come back, cancel it on Hypertide and replace it");
   if (tenant >= RULES.senderBounces) add("danger", `${s(tenant, "bounce")} say the tenant or mailbox is blocked or over its limit: pause it in campaigns, check the Microsoft tenant, then lower the daily limit`);

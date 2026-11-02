@@ -2,10 +2,11 @@ import { describe, expect, it } from "vitest";
 import { bounceCauseOf, bounceReason } from "../src/lib/bounces";
 import { matchPreset, monday, presetRange, previousLabel, previousRange } from "../src/lib/range";
 import { badLists, byClient, bySmartleadTag, judge, sheetRows, type ReviewDomain } from "../src/lib/review";
+import { slState, slText } from "../src/lib/smartlead-state";
 
 const domain = (over: Partial<ReviewDomain> = {}): ReviewDomain => ({
   id: "d1", name: "welvion.com", status: "active", clientId: null, clientName: "Qualifi", clientHue: null, tags: [],
-  inboxes: 10, disconnected: 0, blacklisted: 0, sent: 800, replies: 4, human: 1, bounces: 20, causes: {},
+  inboxes: 10, disconnected: 0, removed: 0, blacklisted: 0, sent: 800, replies: 4, human: 1, bounces: 20, causes: {},
   prevSent: 800, prevHuman: 2, prevSpam: 2,
   rep: 98, lowRepInboxes: 0, quietDays: 1, neverReplied: false, sentSinceReply: 100, slTags: [], esp: "OUTLOOK", tld: "com", ht: "live", replacedBy: null, ...over,
 });
@@ -58,6 +59,15 @@ describe("bounce causes", () => {
 });
 
 describe("weekly review calls", () => {
+  it("sets aside a domain whose inboxes were all deleted in Smartlead, whatever last week looked like", () => {
+    const j = judge(domain({ inboxes: 0, disconnected: 0, removed: 14, human: 0, causes: { spam: 40 } }));
+    expect(j.verdict).toBe("gone");
+    expect(j.why).toBe("Every inbox (14 inboxes) was deleted in Smartlead");
+    // Some inboxes still there: judged as usual.
+    expect(judge(domain({ inboxes: 0, disconnected: 3, removed: 11 })).verdict).not.toBe("gone");
+    expect(sheetRows([judge(domain({ inboxes: 0, disconnected: 0, removed: 14 }))]).split("\n")[1].split("\t").at(-1)).toBe("Deleted in Smartlead");
+  });
+
   it("rests a domain with spam rejections and no human replies", () => {
     const j = judge(domain({ human: 0, causes: { spam: 30, blocklist: 4 } }));
     expect(j.verdict).toBe("rest");
@@ -186,5 +196,16 @@ describe("weekly review calls", () => {
       { id: 2, name: "B", clientName: null, bounces: 40, missing: 10 },
       { id: 3, name: "C", clientName: null, bounces: 8, missing: 8 },
     ]).map((c) => c.name)).toEqual(["A"]);
+  });
+});
+
+describe("Smartlead status now", () => {
+  const c = (slConnected: number, slDisconnected: number, slRemoved: number) => ({ slConnected, slDisconnected, slRemoved });
+  it("reads live, partly disconnected, disconnected, deleted and never there", () => {
+    expect([c(5, 0, 2), c(3, 2, 0), c(0, 4, 1), c(0, 0, 6), c(0, 0, 0)].map(slState)).toEqual(["live", "partial", "disconnected", "deleted", "none"]);
+    expect(slText(c(5, 0, 2))).toBe("Live · 5");
+    expect(slText(c(3, 2, 0))).toBe("2 of 5 disconnected");
+    expect(slText(c(0, 4, 1))).toBe("Disconnected · 4");
+    expect(slText(c(0, 0, 6))).toBe("Deleted in Smartlead");
   });
 });

@@ -220,7 +220,7 @@ export type DomainRow = {
   icemailNextBill: Date | null;
   /** What Icemail reports wrong with the domain: blacklisted, DNS records missing, not active. */
   icemailIssue: string | null;
-};
+} & import("./smartlead-state").SlCounts;
 
 export async function listDomains() {
   return sql<DomainRow[]>`
@@ -252,11 +252,17 @@ export async function listDomains() {
           case when ix.dmarc is false then 'DMARC' end, case when ix.mx is false then 'MX' end)
         when ix.status is distinct from 'ACTIVE' then initcap(coalesce(ix.status, 'unknown'))
       end as icemail_issue,
-      (select coalesce(sum(i.daily_limit), 0)::int from inboxes i where i.domain_id = d.id and i.status = 'connected') as capacity
+      (select coalesce(sum(i.daily_limit), 0)::int from inboxes i where i.domain_id = d.id and i.status = 'connected') as capacity,
+      sl.sl_connected, sl.sl_disconnected, sl.sl_removed
     from domains d
     left join clients c on c.id = d.client_id
     left join vendors v on v.id = d.registrar_id
     left join registrar_accounts ra on ra.id = d.registrar_account_id
+    left join lateral (
+      select count(*) filter (where i.status = 'connected')::int as sl_connected,
+        count(*) filter (where i.status = 'disconnected')::int as sl_disconnected,
+        count(*) filter (where i.status = 'removed')::int as sl_removed
+      from inboxes i where i.domain_id = d.id) sl on true
     left join lateral (
       select count(*)::int as mailboxes,
         sum(case when m.billing_cycle = 'YEARLY' then m.cost / 12 else m.cost end)::float8 as monthly,
@@ -697,14 +703,14 @@ export type StatDomain = {
   /** The domain's own tags, then the Smartlead tags on its inboxes that aren't already among them. */
   allTags: string[];
   prevSent: number; prevReplies: number; prevHuman: number; prevBounces: number;
-};
+} & import("./smartlead-state").SlCounts;
 /**
  * One domain on one day; only days with any activity. `replies` counts every
  * reply, out of office included; `slReplies` is Smartlead's own count, which
  * leaves out out-of-office replies.
  */
 export type StatDay = { d: string; day: string; sent: number; replies: number; slReplies: number; human: number; ooo: number; negative: number; bounces: number; rep: number | null };
-export type StatsData = { from: string; to: string; today: string; domains: StatDomain[]; days: StatDay[] };
+export type StatsData = { from: string; to: string; today: string; domains: StatDomain[]; days: StatDay[]; slSyncedAt: Date | null };
 
 /**
  * Per-domain, per-day numbers for any range (up to 92 days), plus each
@@ -712,9 +718,10 @@ export type StatsData = { from: string; to: string; today: string; domains: Stat
  */
 export async function getStats(from: string, to: string): Promise<StatsData> {
   const [pf, pt] = previousRange(from, to);
-  const [[{ today }], domains, days] = await Promise.all([
-    sql<{ today: string }[]>`
-      select to_char((now() at time zone coalesce((select value #>> '{}' from settings where key = 'stats_timezone'), 'UTC'))::date, 'YYYY-MM-DD') as today`,
+  const [[{ today, slSyncedAt }], domains, days] = await Promise.all([
+    sql<{ today: string; slSyncedAt: Date | null }[]>`
+      select to_char((now() at time zone coalesce((select value #>> '{}' from settings where key = 'stats_timezone'), 'UTC'))::date, 'YYYY-MM-DD') as today,
+        (select last_finished_at from job_state where job = 'smartlead-accounts') as sl_synced_at`,
     sql<StatDomain[]>`
       with r as (select ${from}::date as f, ${to}::date as t, ${pf}::date as pf, ${pt}::date as pt)
       select d.id, d.name, d.status, d.client_id, c.name as client_name, c.hue as client_hue, d.tags,
@@ -728,9 +735,15 @@ export async function getStats(from: string, to: string): Promise<StatsData> {
           select trim(t) as t, count(*) as n from inboxes i cross join unnest(i.smartlead_tags) t
           where i.domain_id = d.id and i.status <> 'removed' and trim(t) <> ''
             and lower(trim(t)) <> all (select lower(dt) from unnest(coalesce(d.tags, '{}')) dt) group by 1) x) as all_tags,
-        coalesce(p.sent, 0) as prev_sent, coalesce(p.replies, 0) as prev_replies, coalesce(p.human, 0) as prev_human, coalesce(p.bounces, 0) as prev_bounces
+        coalesce(p.sent, 0) as prev_sent, coalesce(p.replies, 0) as prev_replies, coalesce(p.human, 0) as prev_human, coalesce(p.bounces, 0) as prev_bounces,
+        sl.sl_connected, sl.sl_disconnected, sl.sl_removed
       from domains d cross join r
       left join clients c on c.id = d.client_id
+      left join lateral (
+      select count(*) filter (where i.status = 'connected')::int as sl_connected,
+        count(*) filter (where i.status = 'disconnected')::int as sl_disconnected,
+        count(*) filter (where i.status = 'removed')::int as sl_removed
+      from inboxes i where i.domain_id = d.id) sl on true
       left join lateral (
         select sum(s.sent)::int as sent, sum(s.replies)::int as replies, sum(s.human_replies)::int as human, sum(s.bounces)::int as bounces
         from domain_daily_stats s where s.domain_id = d.id and s.day between r.pf and r.pt) p on true
@@ -746,7 +759,7 @@ export async function getStats(from: string, to: string): Promise<StatsData> {
       where s.day between ${from}::date and ${to}::date and (s.sent > 0 or s.replies > 0 or s.bounces > 0)
       order by s.day`,
   ]);
-  return { from, to, today, domains, days };
+  return { from, to, today, domains, days, slSyncedAt };
 }
 
 export type ReplyRow = {
@@ -856,8 +869,9 @@ export async function getEvents(kind: "reply" | "bounce", from: string, to: stri
 export async function getReview(from: string, to: string): Promise<import("./review").ReviewData> {
   const [pf, pt] = previousRange(from, to);
   const [[t], domains, campaigns] = await Promise.all([
-    sql<{ today: string }[]>`
-      select to_char((now() at time zone coalesce((select value #>> '{}' from settings where key = 'stats_timezone'), 'UTC'))::date, 'YYYY-MM-DD') as today`,
+    sql<{ today: string; slSyncedAt: Date | null }[]>`
+      select to_char((now() at time zone coalesce((select value #>> '{}' from settings where key = 'stats_timezone'), 'UTC'))::date, 'YYYY-MM-DD') as today,
+        (select last_finished_at from job_state where job = 'smartlead-accounts') as sl_synced_at`,
     sql<import("./review").ReviewDomain[]>`
       with tz as (select coalesce((select value #>> '{}' from settings where key = 'stats_timezone'), 'UTC') as z),
       cur as (
@@ -915,10 +929,16 @@ export async function getReview(from: string, to: string): Promise<import("./rev
           when ho.gone then 'gone'
           when ho.found then 'live'
           when ip.name = 'Hypertide' and exists (select 1 from hypertide_orders) then 'none'
-        end as ht
+        end as ht,
+        sl.sl_removed as removed
       from domains d
       left join clients c on c.id = d.client_id
       left join vendors ip on ip.id = d.inbox_provider_id
+      left join lateral (
+      select count(*) filter (where i.status = 'connected')::int as sl_connected,
+        count(*) filter (where i.status = 'disconnected')::int as sl_disconnected,
+        count(*) filter (where i.status = 'removed')::int as sl_removed
+      from inboxes i where i.domain_id = d.id) sl on true
       left join lateral (
         select true as found, o.status, o.gone_at is not null as gone from hypertide_orders o
         where o.domain_id = d.id or o.domain_name = d.name
@@ -946,7 +966,7 @@ export async function getReview(from: string, to: string): Promise<import("./rev
         and (e.occurred_at at time zone tz.z)::date between ${from}::date and ${to}::date
       group by e.campaign_id`,
   ]);
-  return { from, to, today: t.today, domains, campaigns };
+  return { from, to, today: t.today, slSyncedAt: t.slSyncedAt, domains, campaigns };
 }
 
 /** One domain's bounces in a range, for Performance. */

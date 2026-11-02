@@ -11,7 +11,8 @@ import { RangePicker } from "@/components/RangePicker";
 import { SortTh } from "@/components/SortTh";
 import { ClientCell, Empty, Rep, StatusDot, TagList } from "@/components/ui";
 import { BOUNCE_META, BOUNCE_ORDER, type BounceReason } from "@/lib/bounces";
-import { int } from "@/lib/format";
+import { ago, int } from "@/lib/format";
+import { SlBadge } from "@/components/domains/SlStatus";
 import type { ClientRow } from "@/lib/queries";
 import { nice, previousLabel } from "@/lib/range";
 import { MARK_CHOICES, markOf, type Mark } from "@/lib/tag-map";
@@ -146,7 +147,8 @@ export function ReviewView({ initial, clients }: { initial: ReviewData; clients:
   const [data, setData] = useState(initial);
   const [loading, start] = useTransition();
   const [tagging, startTag] = useTransition();
-  const [scope, setScope] = useState<"active" | "other">("active");
+  // Active and not active leave out domains deleted in Smartlead: they have their own tab.
+  const [scope, setScope] = useState<"active" | "other" | "gone">("active");
   const [clientId, setClientId] = useState<string | null>(null);
   const [slTag, setSlTag] = useState<string | null>(null);
   const [groupBy, setGroupBy] = useState<"client" | "tag" | "esp" | "tld">("client");
@@ -165,7 +167,13 @@ export function ReviewView({ initial, clients }: { initial: ReviewData; clients:
   });
 
   const judged = useMemo(() => data.domains.map(judge), [data.domains]);
-  const scoped = useMemo(() => judged.filter((d) => (scope === "active") === (d.status === "active")), [judged, scope]);
+  const scopeOf = (d: Judged) => (d.verdict === "gone" ? "gone" : d.status === "active" ? "active" : "other");
+  const scopeCount = useMemo(() => {
+    const m = { active: 0, other: 0, gone: 0 };
+    for (const d of judged) m[scopeOf(d)]++;
+    return m;
+  }, [judged]);
+  const scoped = useMemo(() => judged.filter((d) => scopeOf(d) === scope), [judged, scope]);
   // "" is the domains without a client (or Smartlead tag); null is all of them.
   const ofClient = (d: Judged) => clientId == null || (d.clientId ?? "") === clientId;
   const ofTag = (d: Judged) => slTag == null || (slTag ? d.slTags.includes(slTag) : !d.slTags.length);
@@ -287,13 +295,20 @@ export function ReviewView({ initial, clients }: { initial: ReviewData; clients:
     <div className="flex flex-col gap-3" style={{ opacity: loading ? 0.6 : 1, transition: "opacity 120ms" }}>
       <div className="table-bar">
         <div className="view-tabs" role="tablist" aria-label="Domains">
-          <button type="button" role="tab" aria-selected={scope === "active"} className={scope === "active" ? "is-on" : undefined} onClick={() => { setScope("active"); setSelected(new Set()); }}>
-            Active <span>{int(judged.filter((d) => d.status === "active").length)}</span>
+          <button type="button" role="tab" aria-selected={scope === "active"} className={scope === "active" ? "is-on" : undefined} onClick={() => { setScope("active"); setSelected(new Set()); setOnly(""); }}
+            title="Active domains still in Smartlead">
+            Active <span>{int(scopeCount.active)}</span>
           </button>
-          <button type="button" role="tab" aria-selected={scope === "other"} className={scope === "other" ? "is-on" : undefined} onClick={() => { setScope("other"); setSelected(new Set()); }}
-            title="Warming, draining, and any other domain that sent in this range">
-            Not active <span>{int(judged.filter((d) => d.status !== "active").length)}</span>
+          <button type="button" role="tab" aria-selected={scope === "other"} className={scope === "other" ? "is-on" : undefined} onClick={() => { setScope("other"); setSelected(new Set()); setOnly(""); }}
+            title="Warming, draining, and any other domain that sent in this range, still in Smartlead">
+            Not active <span>{int(scopeCount.other)}</span>
           </button>
+          {scopeCount.gone || scope === "gone" ? (
+            <button type="button" role="tab" aria-selected={scope === "gone"} className={scope === "gone" ? "is-on" : undefined} onClick={() => { setScope("gone"); setSelected(new Set()); setOnly(""); }}
+              title="Every inbox was deleted in Smartlead. Kept out of the other tabs: their numbers are history">
+              Deleted in Smartlead <span>{int(scopeCount.gone)}</span>
+            </button>
+          ) : null}
         </div>
         <RangePicker from={data.from} to={data.to} today={data.today} loading={loading} onChange={load} />
         <span className="rv-client-pick">
@@ -306,6 +321,7 @@ export function ReviewView({ initial, clients }: { initial: ReviewData; clients:
           <button type="button" className="btn btn-sm btn-icon" aria-label="Next client" title="Next client, worst first" onClick={() => step(1)}><ChevronRight size={14} /></button>
           {current ? <span className="rv-client-at">{at + 1} of {clientRows.length}</span> : null}
         </span>
+        {data.slSyncedAt ? <span className="sl-synced" suppressHydrationWarning title="Connected, disconnected and deleted come from the last Smartlead sync (Settings → Background sync)">Smartlead status {ago(data.slSyncedAt)}</span> : null}
         <select className="select" style={{ width: 190 }} value={slTag ?? "*"} onChange={(e) => pickTag(e.target.value === "*" ? null : e.target.value)} aria-label="Filter by Smartlead tag">
           <option value="*">All Smartlead tags</option>
           {[...tagRows].sort((a, b) => (a.id ? 0 : 1) - (b.id ? 0 : 1) || a.name.localeCompare(b.name)).map((t) => <option key={t.id || "none"} value={t.id}>{t.name} ({t.domains})</option>)}
@@ -397,6 +413,7 @@ export function ReviewView({ initial, clients }: { initial: ReviewData; clients:
                 <SortTh k="verdict" sort={sort} onSort={sortBy}>Call</SortTh>
                 <SortTh k="signals" sort={sort} onSort={sortBy} title="Strikes first: spam, blocklisted, low reputation, no reply, no response">Why</SortTh>
                 <SortTh k="esp" sort={sort} onSort={sortBy}>ESP</SortTh>
+                <th title="Connected, disconnected or deleted in Smartlead now, as of the last sync">Smartlead now</th>
                 <SortTh k="sent" sort={sort} onSort={sortBy} num>Sent</SortTh>
                 <SortTh k="replies" sort={sort} onSort={sortBy} num title="Every reply, out of office included">Replies</SortTh>
                 <SortTh k="human" sort={sort} onSort={sortBy} num>Human</SortTh>
@@ -431,6 +448,7 @@ export function ReviewView({ initial, clients }: { initial: ReviewData; clients:
                       </span>
                     </td>
                     <td><EspBadge esp={r.esp} /></td>
+                    <td><SlBadge c={{ slConnected: r.inboxes, slDisconnected: r.disconnected, slRemoved: r.removed }} /></td>
                     <td className="is-num">{r.sent ? int(r.sent) : <span className="zero">0</span>}</td>
                     <td className="is-num">{r.replies ? int(r.replies) : <span className={r.sent >= RULES.silentSent ? "metric is-bad" : "zero"}>0</span>}</td>
                     <td className="is-num">{r.human ? int(r.human) : <span className="zero">0</span>}</td>
