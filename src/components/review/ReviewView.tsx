@@ -1,7 +1,8 @@
 "use client";
 
 import { DomainLink } from "@/components/domains/DomainLink";
-import { ChevronLeft, ChevronRight, Copy, ListChecks, Search, Sheet, TagsIcon, X } from "lucide-react";
+import { Check, ChevronDown, ChevronLeft, ChevronRight, Copy, ListChecks, Search, Sheet, SlidersHorizontal, TagsIcon, X } from "lucide-react";
+import { DropdownMenu } from "radix-ui";
 import { useMemo, useState, useTransition } from "react";
 import { toast } from "sonner";
 import { loadReview, markDomains, tagDomains } from "@/app/actions";
@@ -78,19 +79,58 @@ function EspBadge({ esp }: { esp: string | null }) {
   return <span className={`badge${name === "Outlook" ? " tone-info" : name === "Google" ? " tone-success" : ""}`}>{name}</span>;
 }
 
-/** Facet buttons with counts: click one to show only those, again to show all. */
-function Facets({ label, items, value, onPick }: { label: string; items: [string, number, string?][]; value: string | null; onPick: (v: string | null) => void }) {
-  if (!items.length && value == null) return null;
+/** A filter as a compact select with counts. The chosen value stays listed even when nothing has it. */
+function FacetSelect({ label, all, items, value, onPick }: { label: string; all: string; items: [string, number, string?][]; value: string | null; onPick: (v: string | null) => void }) {
+  const list = value != null && !items.some(([k]) => k === value) ? [...items, [value, 0] as [string, number]] : items;
   return (
-    <span className="rv-facet" role="group" aria-label={label}>
-      <span className="rv-sig-filter-k">{label}</span>
-      {items.map(([k, n, shown]) => (
-        <button key={k} type="button" className="rv-sig-btn" aria-pressed={value === k} onClick={() => onPick(value === k ? null : k)}>
-          {shown ?? k} <span>{int(n)}</span>
-        </button>
-      ))}
-    </span>
+    <select className="select rv-filter" data-on={value != null || undefined} value={value ?? ""} onChange={(e) => onPick(e.target.value || null)} aria-label={label}>
+      <option value="">{all}</option>
+      {list.map(([k, n, shown]) => <option key={k} value={k}>{shown ?? k} ({int(n)})</option>)}
+    </select>
   );
+}
+
+/** The signals (Spam, Blocklisted, Low rep…) as a menu of checkboxes: a domain must have every one ticked. */
+function SignalMenu({ counts, value, onToggle, onClear }: { counts: Map<Signal, number>; value: Set<Signal>; onToggle: (k: Signal) => void; onClear: () => void }) {
+  const keys = SIGNAL_ORDER.filter((k) => counts.get(k) || value.has(k));
+  const picked = SIGNAL_ORDER.filter((k) => value.has(k));
+  return (
+    <DropdownMenu.Root>
+      <DropdownMenu.Trigger asChild>
+        <button type="button" className="select rv-filter rv-menu-btn" data-on={picked.length > 0 || undefined} aria-label="Filter by signal">
+          <span className="truncate">{picked.length ? picked.map((k) => SIGNAL_META[k].label).join(", ") : "All signals"}</span>
+          <ChevronDown size={13} className="flex-none text-faint" />
+        </button>
+      </DropdownMenu.Trigger>
+      <DropdownMenu.Portal>
+        <DropdownMenu.Content className="menu" align="start" sideOffset={6} style={{ minWidth: 230, maxHeight: 420, overflowY: "auto" }}>
+          <DropdownMenu.Label className="menu-label">Show domains with</DropdownMenu.Label>
+          {keys.length ? keys.map((k) => (
+            <DropdownMenu.CheckboxItem key={k} className="menu-item" checked={value.has(k)} onSelect={(e) => { e.preventDefault(); onToggle(k); }} title={SIGNAL_META[k].hint}>
+              <span className="grid w-4 place-items-center">{value.has(k) ? <Check size={13} /> : null}</span>
+              <span className="flex-1">{SIGNAL_META[k].label}</span>
+              <span className="text-faint tabular-nums">{int(counts.get(k) ?? 0)}</span>
+            </DropdownMenu.CheckboxItem>
+          )) : <div className="menu-item text-faint">No signals in this view</div>}
+          {picked.length ? (
+            <>
+              <DropdownMenu.Separator className="menu-sep" />
+              <DropdownMenu.Item className="menu-item" onSelect={onClear}>Clear signals</DropdownMenu.Item>
+            </>
+          ) : null}
+        </DropdownMenu.Content>
+      </DropdownMenu.Portal>
+    </DropdownMenu.Root>
+  );
+}
+
+/** Change against the period before, in percentage points for rates. Good is green whichever way it points. */
+function Shift({ now, before, invert = false }: { now: number | null; before: number | null; invert?: boolean }) {
+  if (now == null || before == null) return null;
+  const d = now - before;
+  if (Math.abs(d) < 0.005) return <span className="rv-shift">no change</span>;
+  const good = invert ? d < 0 : d > 0;
+  return <span className={`rv-shift ${good ? "is-good" : "is-bad"}`}>{d > 0 ? "▲" : "▼"} {Math.abs(d).toFixed(2)} pts</span>;
 }
 
 function Chips({ chips }: { chips: Chip[] }) {
@@ -141,12 +181,6 @@ export function ReviewView({ initial, clients }: { initial: ReviewData; clients:
   };
 
   const inScope = useMemo(() => scoped.filter((d) => ofClient(d) && ofTag(d)), [scoped, clientId, slTag]); // eslint-disable-line react-hooks/exhaustive-deps
-  const byVerdict = useMemo(() => {
-    const m = new Map<Verdict, Judged[]>(VERDICT_ORDER.map((v) => [v, []]));
-    for (const d of inScope) m.get(d.verdict)!.push(d);
-    for (const list of m.values()) list.sort((a, b) => b.strikes - a.strikes || b.spam - a.spam || (b.causes.sender ?? 0) + (b.causes.dns ?? 0) - (a.causes.sender ?? 0) - (a.causes.dns ?? 0) || b.sent - a.sent);
-    return m;
-  }, [inScope]);
   const needle = q.trim().toLowerCase();
   const searched = useMemo(() => inScope.filter((d) =>
     !needle || d.name.includes(needle) || d.clientName?.toLowerCase().includes(needle) || [...d.tags, ...d.slTags].some((t) => t.toLowerCase().includes(needle))),
@@ -154,35 +188,47 @@ export function ReviewView({ initial, clients }: { initial: ReviewData; clients:
   const ofEsp = (d: Judged) => esp == null || espName(d.esp) === esp;
   const ofTld = (d: Judged) => tld == null || (d.tld ?? "?") === tld;
   const ofCall = (d: Judged) => !only || d.verdict === only;
+  const ofSig = (d: Judged) => [...signals].every((k) => d.chips.some((c) => c.key === k));
+  /** Every filter but the one skipped, so each menu counts what picking an option would leave. */
+  const pass = (d: Judged, skip?: "call" | "esp" | "tld" | "sig") =>
+    (skip === "call" || ofCall(d)) && (skip === "esp" || ofEsp(d)) && (skip === "tld" || ofTld(d)) && (skip === "sig" || ofSig(d));
   const facets = useMemo(() => {
-    const tabs = new Map<Verdict | "", number>([["", 0]]), esps = new Map<string, number>(), tlds = new Map<string, number>();
+    const tabs = new Map<Verdict | "", number>([["", 0]]), esps = new Map<string, number>(), tlds = new Map<string, number>(), sigs = new Map<Signal, number>();
     for (const d of searched) {
-      if (ofEsp(d) && ofTld(d)) { tabs.set(d.verdict, (tabs.get(d.verdict) ?? 0) + 1); tabs.set("", tabs.get("")! + 1); }
-      if (ofCall(d) && ofTld(d)) esps.set(espName(d.esp), (esps.get(espName(d.esp)) ?? 0) + 1);
-      if (ofCall(d) && ofEsp(d)) tlds.set(d.tld ?? "?", (tlds.get(d.tld ?? "?") ?? 0) + 1);
+      if (pass(d, "call")) { tabs.set(d.verdict, (tabs.get(d.verdict) ?? 0) + 1); tabs.set("", tabs.get("")! + 1); }
+      if (pass(d, "esp")) esps.set(espName(d.esp), (esps.get(espName(d.esp)) ?? 0) + 1);
+      if (pass(d, "tld")) tlds.set(d.tld ?? "?", (tlds.get(d.tld ?? "?") ?? 0) + 1);
+      if (pass(d, "sig")) for (const c of d.chips) sigs.set(c.key, (sigs.get(c.key) ?? 0) + 1);
     }
     return {
-      tabs,
+      tabs, sigs,
       esps: [...esps.entries()].sort((a, b) => ESP_ORDER.indexOf(a[0]) - ESP_ORDER.indexOf(b[0])) as [string, number][],
       tlds: [...tlds.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0])).map(([k, n]) => [k, n, k === "?" ? "No TLD" : `.${k}`]) as [string, number, string][],
     };
-  }, [searched, only, esp, tld]); // eslint-disable-line react-hooks/exhaustive-deps
-  const listed = useMemo(() => searched.filter((d) => ofCall(d) && ofEsp(d) && ofTld(d)), [searched, only, esp, tld]); // eslint-disable-line react-hooks/exhaustive-deps
-  const signalCounts = useMemo(() => {
-    const m = new Map<Signal, number>();
-    for (const d of listed) for (const c of d.chips) m.set(c.key, (m.get(c.key) ?? 0) + 1);
-    return m;
-  }, [listed]);
-  const rows = useMemo(() => listed
-    .filter((d) => [...signals].every((k) => d.chips.some((c) => c.key === k)))
+  }, [searched, only, esp, tld, signals]); // eslint-disable-line react-hooks/exhaustive-deps
+  // The domains behind the totals: every filter but the call tab.
+  const viewed = useMemo(() => searched.filter((d) => pass(d, "call")), [searched, esp, tld, signals]); // eslint-disable-line react-hooks/exhaustive-deps
+  const rows = useMemo(() => viewed.filter(ofCall)
     .sort((a, b) => cmp(sortValue(a, sort.key), sortValue(b, sort.key), sort.dir) || a.name.localeCompare(b.name)),
-  [listed, signals, sort]);
+  [viewed, only, sort]); // eslint-disable-line react-hooks/exhaustive-deps
+  const kpi = useMemo(() => {
+    const k = { sent: 0, human: 0, bounces: 0, spam: 0, prevSent: 0, prevHuman: 0, prevSpam: 0, inboxes: 0, disconnected: 0, calls: {} as Partial<Record<Verdict, number>> };
+    for (const d of viewed) {
+      k.sent += d.sent; k.human += d.human; k.bounces += d.bounces; k.spam += d.spam;
+      k.prevSent += d.prevSent; k.prevHuman += d.prevHuman; k.prevSpam += d.prevSpam;
+      k.inboxes += d.inboxes; k.disconnected += d.disconnected;
+      k.calls[d.verdict] = (k.calls[d.verdict] ?? 0) + 1;
+    }
+    return k;
+  }, [viewed]);
+  const filtering = esp != null || tld != null || signals.size > 0 || !!needle;
+  const clearFilters = () => { setEsp(null); setTld(null); setSignals(new Set()); setQ(""); };
 
   const causes = useMemo(() => {
     const t: Partial<Record<BounceReason, number>> = {};
-    for (const d of inScope) for (const [k, v] of Object.entries(d.causes) as [BounceReason, number][]) t[k] = (t[k] ?? 0) + v;
+    for (const d of viewed) for (const [k, v] of Object.entries(d.causes) as [BounceReason, number][]) t[k] = (t[k] ?? 0) + v;
     return t;
-  }, [inScope]);
+  }, [viewed]);
   const causeTotal = Object.values(causes).reduce((a, b) => a + (b ?? 0), 0);
   const lists = useMemo(() => {
     const names = new Set(inScope.map((d) => d.clientName));
@@ -190,7 +236,6 @@ export function ReviewView({ initial, clients }: { initial: ReviewData; clients:
   }, [data.campaigns, inScope, clientId]);
   const knownTags = useMemo(() => [...new Set([...MARK_CHOICES, ...[...new Set(["Fix", "Idle", ...data.domains.flatMap((d) => d.tags)])].filter((t) => !markOf(t)).sort()])], [data.domains]);
 
-  const count = (v: Verdict) => byVerdict.get(v)!.length;
   const selectedRows = rows.filter((r) => selected.has(r.id));
   const allSelected = rows.length > 0 && rows.every((r) => selected.has(r.id));
   const toggle = (id: string) => setSelected((s) => { const n = new Set(s); if (n.has(id)) n.delete(id); else n.add(id); return n; });
@@ -230,14 +275,12 @@ export function ReviewView({ initial, clients }: { initial: ReviewData; clients:
     await reload();
   });
 
-  const headline = [
-    count("fix") ? `fix ${plural(count("fix"), "domain")}` : "",
-    count("rest") ? `replace ${int(count("rest"))}` : "",
-    count("drop") ? `delete ${int(count("drop"))} cancelled or replaced` : "",
-    count("dead") ? `try reconnecting ${int(count("dead"))} fully disconnected` : "",
-    count("watch") ? `watch ${int(count("watch"))}` : "",
-  ].filter(Boolean).join(", ");
-  const tone = count("fix") || count("rest") || count("drop") ? "danger" : count("watch") ? "warning" : "success";
+  const kc = (v: Verdict) => kpi.calls[v] ?? 0;
+  const action = kc("fix") + kc("rest") + kc("drop") + kc("dead");
+  const actionFoot = [
+    kc("fix") ? `${int(kc("fix"))} fix` : "", kc("rest") ? `${int(kc("rest"))} replace` : "",
+    kc("drop") ? `${int(kc("drop"))} delete` : "", kc("dead") ? `${int(kc("dead"))} reconnect` : "",
+  ].filter(Boolean).join(" · ");
   const current = at >= 0 ? clientRows[at] : null;
 
   return (
@@ -270,61 +313,85 @@ export function ReviewView({ initial, clients }: { initial: ReviewData; clients:
         </select>
       </div>
 
-      <div className={`rv-headline tone-${tone}`}>
-        <span className="rv-headline-k">{current ? `${current.name} · ` : ""}{slTag != null ? `${slTag || "No Smartlead tag"} · ` : ""}{nice(data.from)}{data.from === data.to ? "" : ` – ${nice(data.to)}`}, compared with {previousLabel(data.from, data.to)}</span>
-        <span className="rv-headline-h">
-          {headline ? `${headline[0].toUpperCase()}${headline.slice(1)}.` : "Nothing to fix, replace or watch."}
-          {scope === "active" && count("idle") ? ` ${plural(count("idle"), "active domain")} sent nothing.` : ""}
-        </span>
-      </div>
-
-      <div className="rv-tabs card">
-        <div className="view-tabs rv-calls" role="tablist" aria-label="Call">
-          <button type="button" role="tab" aria-selected={!only} className={!only ? "is-on" : undefined} onClick={() => setOnly("")}>All <span>{int(facets.tabs.get("") ?? 0)}</span></button>
-          {VERDICT_ORDER.filter((v) => facets.tabs.get(v) || only === v).map((v) => (
-            <button key={v} type="button" role="tab" aria-selected={only === v} className={only === v ? "is-on" : undefined} onClick={() => setOnly(v)} title={VERDICT_META[v].hint}>
-              {VERDICT_META[v].label} <span className={`rv-count tone-${LISTS.includes(v) ? VERDICT_META[v].tone : "faint"}`}>{int(facets.tabs.get(v) ?? 0)}</span>
-            </button>
-          ))}
+      <section className="stats is-6 rv-kpis" aria-label="This view">
+        <button type="button" className={`stat rv-kpi${action ? " is-danger" : ""}`} onClick={() => setOnly(kc("rest") ? "rest" : kc("fix") ? "fix" : kc("drop") ? "drop" : kc("dead") ? "dead" : "")}
+          title="Fix sender, Replace, Cancelled / replaced and Disconnected. Click to open the biggest list">
+          <span className="stat-label">Needs action</span>
+          <span className="stat-value">{int(action)}</span>
+          <span className="stat-foot">{actionFoot || "nothing to fix or replace"}</span>
+        </button>
+        <button type="button" className={`stat rv-kpi${kc("watch") ? " is-warning" : ""}`} onClick={() => setOnly(kc("watch") ? "watch" : "")} title={VERDICT_META.watch.hint}>
+          <span className="stat-label">Watch</span>
+          <span className="stat-value">{int(kc("watch"))}</span>
+          <span className="stat-foot">{kc("idle") ? `${int(kc("idle"))} idle · ` : ""}{int(kc("ok"))} OK</span>
+        </button>
+        <div className="stat">
+          <span className="stat-label">Domains</span>
+          <span className="stat-value">{int(viewed.length)}</span>
+          <span className="stat-foot">{int(kpi.inboxes)} inboxes{kpi.disconnected ? <> · <span className="text-danger-ink">{int(kpi.disconnected)} disconnected</span></> : null}</span>
         </div>
-        {only ? <p className="rv-hint rv-tab-hint">{VERDICT_META[only].hint}</p> : null}
-        <div className="rv-facets">
-          <Facets label="ESP" items={facets.esps} value={esp} onPick={setEsp} />
-          <Facets label="TLD" items={facets.tlds} value={tld} onPick={setTld} />
-          {esp != null || tld != null ? <button type="button" className="rv-more" onClick={() => { setEsp(null); setTld(null); }}>Clear</button> : null}
+        <div className="stat" title={`Compared with ${previousLabel(data.from, data.to)}`}>
+          <span className="stat-label">Sent · {nice(data.from)}{data.from === data.to ? "" : ` – ${nice(data.to)}`}</span>
+          <span className="stat-value">{int(kpi.sent)}</span>
+          <span className="stat-foot">vs {int(kpi.prevSent)} before</span>
         </div>
-        <div className="rv-tab-actions">
-          <button type="button" className="btn btn-sm" disabled={!rows.length} onClick={selectShown}><ListChecks size={13} /> Select all {int(rows.length)}</button>
-          <button type="button" className="btn btn-sm" disabled={!rows.length} onClick={() => copy(rows.map((d) => d.name).join("\n"), plural(rows.length, "domain"))}><Copy size={13} /> Copy</button>
-          <button type="button" className="btn btn-sm" disabled={!rows.length} title="Domain, call, reason, signals, ESP, TLD, Smartlead tags, client and numbers, one column each with a header row: paste into Google Sheets"
-            onClick={() => copy(sheetRows(rows), `${plural(rows.length, "domain")} for Sheets`)}><Sheet size={13} /> Copy for Sheets</button>
-          <span className="spacer-auto" />
-          <PasteSelect rows={inScope} selected={selected} where="in this review"
-            onSelect={(s) => { setSelected(s); setOnly(""); setEsp(null); setTld(null); setSignals(new Set()); setQ(""); }} />
-          <label className="search-input">
-            <Search size={14} strokeWidth={1.5} />
-            <input className="input" value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search domain, client, tag" aria-label="Search domains" />
-          </label>
+        <div className="stat">
+          <span className="stat-label">Human reply rate</span>
+          <span className="stat-value">{fx(pct(kpi.human, kpi.sent), 2)}</span>
+          <span className="stat-foot">{int(kpi.human)} human <Shift now={pct(kpi.human, kpi.sent)} before={pct(kpi.prevHuman, kpi.prevSent)} /></span>
         </div>
-      </div>
+        <div className="stat">
+          <span className="stat-label">Bounce · spam</span>
+          <span className="stat-value">{fx(pct(kpi.bounces, kpi.sent))}<span className="rv-kpi-sub"> · {fx(pct(kpi.spam, kpi.sent), 2)}</span></span>
+          <span className="stat-foot">{int(kpi.bounces)} bounces · {int(kpi.spam)} spam <Shift now={pct(kpi.spam, kpi.sent)} before={pct(kpi.prevSpam, kpi.prevSent)} invert /></span>
+        </div>
+      </section>
 
-      <div className="rv-sig-filter" role="group" aria-label="Show only domains with these tags">
-        <span className="rv-sig-filter-k">Show only</span>
-        {SIGNAL_ORDER.filter((k) => signalCounts.get(k) || signals.has(k)).map((k) => (
-          <button key={k} type="button" className="rv-sig-btn" aria-pressed={signals.has(k)} title={SIGNAL_META[k].hint} onClick={() => toggleSignal(k)}>
-            {SIGNAL_META[k].label} <span>{int(signalCounts.get(k) ?? 0)}</span>
-          </button>
-        ))}
-        {signals.size ? <button type="button" className="rv-more" onClick={() => setSignals(new Set())}>Clear</button> : null}
-        {!signalCounts.size && !signals.size ? <span className="rv-none">No tags in this view</span> : null}
-      </div>
-
-      <div className="table-wrap">
-        <div className="table-scroll" style={{ maxHeight: "calc(100dvh - 220px)", minHeight: 240 }}>
+      <div className="table-wrap rv-board">
+        <div className="rv-board-head">
+          <div className="view-tabs rv-calls" role="tablist" aria-label="Call">
+            <button type="button" role="tab" aria-selected={!only} className={!only ? "is-on" : undefined} onClick={() => setOnly("")}>All <span>{int(facets.tabs.get("") ?? 0)}</span></button>
+            {VERDICT_ORDER.filter((v) => facets.tabs.get(v) || only === v).map((v) => (
+              <button key={v} type="button" role="tab" aria-selected={only === v} className={only === v ? "is-on" : undefined} onClick={() => setOnly(v)} title={VERDICT_META[v].hint}>
+                {VERDICT_META[v].label} <span className={`rv-count tone-${LISTS.includes(v) ? VERDICT_META[v].tone : "faint"}`}>{int(facets.tabs.get(v) ?? 0)}</span>
+              </button>
+            ))}
+          </div>
+          <div className="rv-board-tools">
+            <SlidersHorizontal size={14} className="text-faint flex-none" aria-hidden />
+            <FacetSelect label="Filter by ESP" all="All ESPs" items={facets.esps} value={esp} onPick={setEsp} />
+            <FacetSelect label="Filter by TLD" all="All TLDs" items={facets.tlds} value={tld} onPick={setTld} />
+            <SignalMenu counts={facets.sigs} value={signals} onToggle={toggleSignal} onClear={() => setSignals(new Set())} />
+            {filtering ? <button type="button" className="btn btn-ghost btn-sm" onClick={clearFilters}><X size={13} /> Clear</button> : null}
+            <span className="spacer-auto" />
+            <label className="search-input rv-search">
+              <Search size={14} strokeWidth={1.5} />
+              <input className="input" value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search domain, client, tag" aria-label="Search domains" />
+            </label>
+            <PasteSelect rows={inScope} selected={selected} where="in this review"
+              onSelect={(s) => { setSelected(s); setOnly(""); clearFilters(); }} />
+            <DropdownMenu.Root>
+              <DropdownMenu.Trigger asChild>
+                <button type="button" className="btn btn-sm" disabled={!rows.length}><Copy size={13} /> Copy <ChevronDown size={12} className="text-faint" /></button>
+              </DropdownMenu.Trigger>
+              <DropdownMenu.Portal>
+                <DropdownMenu.Content className="menu" align="end" sideOffset={6} style={{ minWidth: 220 }}>
+                  <DropdownMenu.Label className="menu-label">{plural(rows.length, "domain")} in this view</DropdownMenu.Label>
+                  <DropdownMenu.Item className="menu-item" onSelect={() => copy(rows.map((d) => d.name).join("\n"), plural(rows.length, "domain"))}><Copy size={13} /> Domain names</DropdownMenu.Item>
+                  <DropdownMenu.Item className="menu-item" onSelect={() => copy(sheetRows(rows), `${plural(rows.length, "domain")} for Sheets`)}><Sheet size={13} /> For Google Sheets, with reasons</DropdownMenu.Item>
+                  <DropdownMenu.Separator className="menu-sep" />
+                  <DropdownMenu.Item className="menu-item" onSelect={selectShown}><ListChecks size={13} /> Select all {int(rows.length)}</DropdownMenu.Item>
+                </DropdownMenu.Content>
+              </DropdownMenu.Portal>
+            </DropdownMenu.Root>
+          </div>
+          {only ? <p className="rv-board-hint" title={VERDICT_META[only].hint}><b>{VERDICT_META[only].label}:</b> {VERDICT_META[only].hint}</p> : null}
+        </div>
+        <div className="table-scroll" style={{ maxHeight: "calc(100dvh - 300px)", minHeight: 320 }}>
           <table className="data-table is-main">
             <thead>
               <tr>
-                <th style={{ width: 36 }}><input type="checkbox" className="checkbox" aria-label="Select all" checked={allSelected} onChange={() => setSelected(allSelected ? new Set() : new Set(rows.map((r) => r.id)))} /></th>
+                <th style={{ width: 36 }}><input type="checkbox" className="checkbox" aria-label="Select all" checked={allSelected} onChange={() => (allSelected ? setSelected(new Set()) : selectShown())} /></th>
                 <SortTh k="name" sort={sort} onSort={sortBy}>Domain</SortTh>
                 <SortTh k="client" sort={sort} onSort={sortBy}>Client</SortTh>
                 <SortTh k="verdict" sort={sort} onSort={sortBy}>Call</SortTh>
@@ -357,9 +424,11 @@ export function ReviewView({ initial, clients }: { initial: ReviewData; clients:
                     </td>
                     <td><ClientCell name={r.clientName} hue={r.clientHue} /></td>
                     <td><span className={`badge tone-${m.tone}`} title={r.why}>{m.label}</span></td>
-                    <td className="rv-sig-cell rv-why-cell">
-                      {r.chips.length ? <Chips chips={r.chips} /> : null}
-                      <span className="rv-why">{r.why}</span>
+                    <td className="rv-why-cell" title={r.why}>
+                      <span className="rv-why-line">
+                        {r.chips.length ? <Chips chips={r.chips} /> : null}
+                        <span className="rv-why">{r.why}</span>
+                      </span>
                     </td>
                     <td><EspBadge esp={r.esp} /></td>
                     <td className="is-num">{r.sent ? int(r.sent) : <span className="zero">0</span>}</td>

@@ -438,30 +438,30 @@ export function StatsView({ initial, initialReview, clients }: { initial: StatsD
           </span>
         ) : <span className="text-[12.5px] text-muted">{rangeLabel}</span>}
         {loading ? <Loader size={14} className="animate-spin text-faint" aria-label="Loading" /> : null}
-        <select className="select" style={{ width: 150 }} value={clientId} onChange={(e) => setClientId(e.target.value)} aria-label="Filter by client">
+        <select className="select rv-filter" data-on={clientId ? true : undefined} value={clientId} onChange={(e) => setClientId(e.target.value)} aria-label="Filter by client">
           <option value="">All clients</option>
           {clients.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
         </select>
-        <select className="select" style={{ width: 130 }} value={statusSet} onChange={(e) => setStatusSet(e.target.value as "" | "active" | "other")} aria-label="Filter by status">
+        <select className="select rv-filter" data-on={statusSet ? true : undefined} value={statusSet} onChange={(e) => setStatusSet(e.target.value as "" | "active" | "other")} aria-label="Filter by status">
           <option value="">All domains</option>
           <option value="active">Active</option>
           <option value="other">Not active</option>
         </select>
-        <select className="select" style={{ width: 170 }} value={call} onChange={(e) => setCall(e.target.value as CallFilter)} aria-label="Filter by weekly review call"
+        <select className="select rv-filter" data-on={call ? true : undefined} value={call} onChange={(e) => setCall(e.target.value as CallFilter)} aria-label="Filter by weekly review call"
           title="The weekly review's call for this range. Picking one also shows domains that sent nothing">
           <option value="">All review calls</option>
           <option value="attention">Needs attention ({options.attention})</option>
           {VERDICT_ORDER.map((x) => <option key={x} value={x}>{VERDICT_META[x].label} ({options.verdicts.get(x) ?? 0})</option>)}
         </select>
-        <select className="select" style={{ width: 140 }} value={tag} onChange={(e) => setTag(e.target.value)} aria-label="Filter by tag">
+        <select className="select rv-filter" data-on={tag ? true : undefined} value={tag} onChange={(e) => setTag(e.target.value)} aria-label="Filter by tag">
           <option value="">All tags</option>
           {options.tags.map(([k, x]) => <option key={k} value={k}>{x.label} ({x.n})</option>)}
         </select>
-        <select className="select" style={{ width: 120 }} value={esp} onChange={(e) => setEsp(e.target.value)} aria-label="Filter by ESP">
+        <select className="select rv-filter" data-on={esp ? true : undefined} value={esp} onChange={(e) => setEsp(e.target.value)} aria-label="Filter by ESP">
           <option value="">All ESPs</option>
           {options.esps.map(([k, n]) => <option key={k} value={k}>{k || "No ESP"} ({n})</option>)}
         </select>
-        <select className="select" style={{ width: 150 }} value={sender} onChange={(e) => setSender(e.target.value)} aria-label="Filter by sender name">
+        <select className="select rv-filter" data-on={sender ? true : undefined} value={sender} onChange={(e) => setSender(e.target.value)} aria-label="Filter by sender name">
           <option value="">All senders</option>
           {options.senders.map(([k, n]) => <option key={k} value={k}>{k} ({n})</option>)}
         </select>
