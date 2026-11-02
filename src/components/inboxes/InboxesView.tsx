@@ -68,6 +68,8 @@ function freshDomains(inboxes: InboxListRow[], maxAgeDays: number) {
   return ids;
 }
 type TabKey = (typeof TABS)[number]["key"];
+type Grouping = "none" | "client" | "tags";
+const GROUPING_KEY = "inboxes:grouping";
 const tabOf = (v: string | null): TabKey => (TABS.find((t) => t.key === v)?.key ?? "active");
 const FLAT: TabKey[] = ["warming", "attention", "cleanup", "all"];
 const tabMatch = (k: TabKey, sets: Sets) => (i: InboxListRow) => TABS.find((t) => t.key === k)!.match(i, sets);
@@ -457,6 +459,23 @@ export function InboxesView({ inboxes, clients, plans, smartleadConnected, dryRu
   const [open, setOpen] = useState<Set<string>>(new Set());
   const [openClients, setOpenClients] = useState<Set<string>>(new Set());
   const [openTags, setOpenTags] = useState<Set<string>>(new Set());
+  // One list of every domain, or grouped by client (and its tags). Remembered in this browser.
+  const [grouping, setGrouping] = useState<Grouping>("none");
+  useEffect(() => {
+    try {
+      const v = window.localStorage.getItem(GROUPING_KEY);
+      // Restoring a saved preference after hydration is the point of this effect.
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      if (v === "client" || v === "tags") setGrouping(v);
+    } catch { /* storage unavailable: one list */ }
+  }, []);
+  const chooseGrouping = (g: Grouping) => {
+    setGrouping(g);
+    setOpen(new Set());
+    setOpenClients(new Set());
+    setOpenTags(new Set());
+    try { window.localStorage.setItem(GROUPING_KEY, g); } catch { /* ignore */ }
+  };
   const [esp, setEsp] = useState("");
   const [acting, startAct] = useTransition();
   const act = (fn: () => Promise<{ ok: true; data: { message: string } } | { ok: false; error: string }>) =>
@@ -464,11 +483,19 @@ export function InboxesView({ inboxes, clients, plans, smartleadConnected, dryRu
   const cols = useColumns("inboxes", COLUMNS);
   const on = cols.on;
   const esps = useMemo(() => [...new Set(inboxes.map((i) => i.providerType).filter((x): x is string => Boolean(x)))].sort(), [inboxes]);
+  // Where the inboxes come from (Hypertide, Icemail…), with how many domains each.
+  const [provider, setProvider] = useState("");
+  const providers = useMemo(() => {
+    const m = new Map<string, Set<string>>();
+    for (const i of inboxes) { const k = i.domainProvider ?? ""; m.set(k, (m.get(k) ?? new Set()).add(i.domainId)); }
+    return [...m.entries()].map(([name, ids]) => ({ name, domains: ids.size })).sort((a, b) => (a.name ? 0 : 1) - (b.name ? 0 : 1) || a.name.localeCompare(b.name));
+  }, [inboxes]);
 
   const base = useMemo(() => {
     const client = clients.find((c) => c.id === clientId)?.name;
-    return inboxes.filter((i) => (!client || i.clientName === client) && (!esp || i.providerType === esp));
-  }, [inboxes, clients, clientId, esp]);
+    return inboxes.filter((i) => (!client || i.clientName === client) && (!esp || i.providerType === esp)
+      && (!provider || (provider === "-" ? !i.domainProvider : i.domainProvider === provider)));
+  }, [inboxes, clients, clientId, esp, provider]);
   const [limitText, setLimitText] = useState(String(inboxLimit));
   const fresh = useMemo<Sets>(() => ({ fresh: freshDomains(inboxes, newMaxAgeDays), crowded: crowdedDomains(inboxes, inboxLimit) }), [inboxes, newMaxAgeDays, inboxLimit]);
   const attentionCount = useMemo(() => group(base.filter(tabMatch("attention", fresh))).filter((g) => reasonsOf(g).length > 0).length, [base, fresh]);
@@ -507,7 +534,7 @@ export function InboxesView({ inboxes, clients, plans, smartleadConnected, dryRu
     window.history.replaceState(null, "", next ? `?${next}` : window.location.pathname);
   }, [tab]);
 
-  const clientGroups = useMemo(() => byClient(groups).sort((a, b) => {
+  const clientGroups = useMemo(() => byClient(groups).map((c) => (grouping === "tags" ? c : { ...c, tagGroups: null })).sort((a, b) => {
     // Clients follow the same sort as their domains; by name otherwise, "No client" last.
     const byName = (a.key ? 0 : 1) - (b.key ? 0 : 1) || a.domain.localeCompare(b.domain);
     if (sort.key === "domain" || sort.key === "client") return byName * (sort.key === "client" ? sort.dir : 1);
@@ -516,7 +543,7 @@ export function InboxesView({ inboxes, clients, plans, smartleadConnected, dryRu
     if (x === null) return 1;
     if (y === null) return -1;
     return (x < y ? -1 : 1) * sort.dir;
-  }), [groups, sort]);
+  }), [groups, sort, grouping]);
   const all = useMemo(() => groups.flatMap((g) => g.inboxes), [groups]);
   const totals = useMemo(() => {
     const reps = all.map((i) => i.warmupReputation).filter((x): x is number => x != null);
@@ -561,10 +588,10 @@ export function InboxesView({ inboxes, clients, plans, smartleadConnected, dryRu
   const colCount = 2 + COLUMNS.filter((col) => on(col.key)).length;
   // Every client, tag and domain row's key, the way the table builds them, for Expand all.
   const tagKeys = useMemo(() => clientGroups.flatMap((c) => c.tagGroups?.map((t) => t.key) ?? []), [clientGroups]);
-  const domainKeys = useMemo(() => clientGroups.flatMap((c) => c.tagGroups
+  const domainKeys = useMemo(() => (grouping === "none" ? groups.map((d) => `all|${d.domainId}`) : clientGroups.flatMap((c) => c.tagGroups
     ? c.tagGroups.flatMap((t) => t.domains.map((d) => `${t.key}|${d.domainId}`))
-    : c.domains.map((d) => `${c.key}|${d.domainId}`)), [clientGroups]);
-  const anyOpen = openClients.size > 0;
+    : c.domains.map((d) => `${c.key}|${d.domainId}`))), [clientGroups, groups, grouping]);
+  const anyOpen = openClients.size > 0 || open.size > 0;
   const expandTo = (level: "tags" | "domains" | "inboxes" | null) => {
     setOpenClients(level ? new Set(clientGroups.map((c) => c.key)) : new Set());
     setOpenTags(level === "domains" || level === "inboxes" ? new Set(tagKeys) : new Set());
@@ -722,12 +749,29 @@ export function InboxesView({ inboxes, clients, plans, smartleadConnected, dryRu
           <option value="">All ESPs</option>
           {esps.map((x) => <option key={x} value={x}>{espLabel(x)}</option>)}
         </select>
+        {providers.length > 1 ? (
+          <select className="select" style={{ width: 150 }} value={provider} onChange={(e) => setProvider(e.target.value)} aria-label="Filter by inbox provider">
+            <option value="">All providers</option>
+            {providers.map((p) => <option key={p.name || "-"} value={p.name || "-"}>{p.name || "No provider"} · {int(p.domains)}</option>)}
+          </select>
+        ) : null}
         <span className="spacer-auto" />
         <label className="search-input">
           <Search size={14} strokeWidth={1.5} />
           <input className="input" value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search" aria-label="Search inboxes" />
         </label>
         {FLAT.includes(tab) ? null : (
+          <select className="select" style={{ width: 170 }} value={grouping} onChange={(e) => chooseGrouping(e.target.value as Grouping)} aria-label="Group domains">
+            <option value="none">No grouping</option>
+            <option value="client">Group by client</option>
+            <option value="tags">Group by client and tag</option>
+          </select>
+        )}
+        {FLAT.includes(tab) ? null : grouping === "none" ? (
+          <button type="button" className="btn btn-sm" title={anyOpen ? "Close every domain" : "Show every domain's inboxes"} onClick={() => expandTo(anyOpen ? null : "inboxes")}>
+            {anyOpen ? <ChevronsDownUp size={14} /> : <ChevronsUpDown size={14} />} {anyOpen ? "Collapse all" : "Expand all"}
+          </button>
+        ) : (
           <DropdownMenu.Root>
             <DropdownMenu.Trigger asChild>
               <button type="button" className="btn btn-sm menu-trigger" title="Open or close every client, tag and domain">
@@ -996,7 +1040,7 @@ export function InboxesView({ inboxes, clients, plans, smartleadConnected, dryRu
               </tr>
             </thead>
             <tbody>
-              {clientGroups.map((c) => {
+              {grouping === "none" ? domainRows(groups, "all|", 12) : clientGroups.map((c) => {
                 const cOpen = openClients.has(c.key);
                 const cIds = c.inboxes.map((i) => i.id);
                 const cSel = cIds.every((id) => selected.has(id));
