@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { bounceCode, bounceReason } from "../src/lib/bounces";
+import { bounceCauseOf, bounceCode, bounceLine, bounceReason } from "../src/lib/bounces";
 import { classifyReply, withoutFooter } from "../src/lib/classify";
 
 // The notices below are written from each provider's published formats; addresses and hosts are made up.
@@ -69,6 +69,46 @@ describe("bounces: the code decides, then the words", () => {
     expect(bounceReason("421 4.7.0 Messages from this sender deferred due to user complaints")).toBe("spam");
   });
 
+  it("detected as spam only says the other server called it spam: its own words decide", () => {
+    expect(bounceReason("550 5.7.350 Remote server returned message detected as spam -> 550 5.7.1 Message rejected: sender domain is blocklisted")).toBe("blocklist");
+    expect(bounceReason("550 5.7.350 Remote server returned message detected as spam -> 550 An URL in this email is listed by Spamhaus DBL")).toBe("blocklist");
+    expect(bounceReason("550 5.7.350 Remote server returned message detected as spam -> 550 High probability of spam")).toBe("spam");
+  });
+
+  it("a sender domain nobody can find is our DNS, whatever the code", () => {
+    expect(bounceReason("550 5.4.300 Message expired - 450 4.1.8 <a@b.com>: Sender address rejected: Domain not found")).toBe("dns");
+    expect(bounceReason("550 5.4.300 Message expired - 451 4.1.8 Domain of sender address a@b.com does not resolve")).toBe("dns");
+    expect(bounceReason("550 5.1.8 <a@b.com>... Domain of sender address a@b.com does not exist")).toBe("dns");
+    expect(bounceReason("Sender (example.com) has no A, AAAA, or MX DNS records.")).toBe("dns");
+  });
+
+  it("sender rejected isn't a bad address, whatever the code", () => {
+    expect(bounceReason("550 5.1.0 <a@b.com> sender rejected. Please see the help page")).toBe("policy");
+    expect(bounceReason("550 Requested action not taken: mailbox unavailable Reject due to policy restrictions")).toBe("policy");
+  });
+
+  it("a mailbox that's gone is a bad address, even behind 5.7.1", () => {
+    expect(bounceReason("554 5.7.1 Sorry, your message cannot be delivered. This mailbox is disabled (554.30)")).toBe("missing");
+    expect(bounceReason("550 5.7.1 This person is no longer at Acme. Please reach out to us instead")).toBe("missing");
+    expect(bounceReason("451 4.4.4 Mail received as unauthenticated, incoming to a recipient domain configured in a hosted tenant which has no mail-enabled subscriptions")).toBe("missing");
+  });
+
+  it("a mail loop is neither a bad address nor a delay", () => {
+    expect(bounceReason("554 5.4.14 Hop count exceeded - possible mail loop")).toBe("other");
+  });
+
+  it("finds the server's own error further down a Microsoft notice, past its help text", () => {
+    const html = (error: string) => ({ bounce_message: {
+      text: "Your message to a@b.com couldn't be delivered. Security or policy settings at b.com have rejected your message.",
+      html: `<p>Security or policy settings at b.com have rejected your message.</p><p>How to Fix It</p><p>Check the Error Details below to see why it was blocked.</p><p>Error Details</p><p>Error: ${error}</p><p>Message rejected by: mx.b.com</p><p>Notification Details</p>`,
+    } });
+    expect(bounceCauseOf(html("554 5.7.1 Service unavailable; Sender address [a@c.com] blocked using dbl.spamhaus.org"))).toBe("blocklist");
+    expect(bounceCauseOf(html("554 5.7.1 Service unavailable; Sender address [a@c.com] blocked"))).toBe("blocklist");
+    expect(bounceCauseOf(html("554 5.7.1 Mail was classified as unsolicited"))).toBe("spam");
+    expect(bounceCauseOf(html("550 5.7.1 Message rejected by policy"))).toBe("policy");
+    expect(bounceLine("clipped text", "Error: 554 5.7.1 Sender address blocked Message rejected by: mx.b.com")).toBe("554 5.7.1 Sender address blocked");
+  });
+
   it("reads Gmail's wording with no code", () => {
     expect(bounceReason("Address not found: Your message wasn't delivered because the address couldn't be found")).toBe("missing");
   });
@@ -87,6 +127,50 @@ describe("replies: what they wrote, not their signature", () => {
     ["I'll pass this on to our CFO, he will reply.", "human"],
   ])("%s → %s", (text, cls) => {
     expect(classifyReply(text)).toBe(cls);
+  });
+
+  it.each([
+    // Mailboxes that are gone, and acknowledgements.
+    ["This email is no longer being managed. Please call our office.", "auto"],
+    ["This account is no longer managed or reviewed by Pat.", "auto"],
+    ["Hello, this email is not longer a valid email. Please contact our CEO.", "auto"],
+    ["Thank you for emailing me. I will respond to your email as soon as I can.", "auto"],
+    ["This is to confirm receipt of your message.", "auto"],
+    ["If you are attempting to contact the office manager, please email Sam at sam@example.com", "auto"],
+    ["With deep sadness we share that our colleague has passed away. For funding matters, contact info@example.com", "auto"],
+    ["Thank you. For general assistance please reach out to help@example.com", "auto"],
+    // Away, said differently.
+    ["I will be teaching this week and will return to my inbox on October 19.", "ooo"],
+    ["My computer needs a cool-down and is taking a vacation until October 19.", "ooo"],
+    ["Thank you for emailing me. I am ill today but plan to be back this afternoon.", "ooo"],
+    ["I am out the month of November. For emergencies, please contact a@example.com", "ooo"],
+    ["We are moving office, so response times may be slower.", "ooo"],
+    ["Bonjour, je suis en arrêt actuellement pour raison médicale.", "ooo"],
+    ["Current status: away from keyboard. Return date: October 26th.", "ooo"],
+    // People saying no.
+    ["Good morning, not @ this time. Dan", "negative"],
+    ["This is not a problem for us. Best, Pat", "negative"],
+    ['I have "0" problems with funding. Thanks', "negative"],
+    ["We are cash positive and do not have and need for outside investment.", "negative"],
+    ["We are a factory abroad, so we don't plan to purchase from the US.", "negative"],
+    ["We aren't currently looking for external programs.", "negative"],
+    ["Sold company and retired. Pat Lee", "negative"],
+    // Taken off the list, and passed along.
+    ["unsub", "unsubscribe"],
+    ["Remove please\nSincerely, Pat", "unsubscribe"],
+    ["Please email Sam at sam@example.com, he would be the contact for this.", "referral"],
+    ["Sorry, no Alex here.", "wrong_person"],
+    // Real interest stays human.
+    ["Hi, I'm interested in learning more about inventory funding. Can you advise?", "human"],
+    ["Is this credit based or income based", "human"],
+    ["Send more info please\nPat Lee, CEO", "human"],
+    ["Pat, https://example.com/circuits Best, Lee", "human"],
+  ] as [string, ReturnType<typeof classifyReply>][])("%s → %s", (text, cls) => {
+    expect(classifyReply(text)).toBe(cls);
+  });
+
+  it("a footer doesn't bury a real question", () => {
+    expect(classifyReply("What are your rates? We're looking for a line of credit. ******We have moved. Please update your records. Regards, Pat")).toBe("human");
   });
 
   it("still catches an out of office in a real out of office", () => {

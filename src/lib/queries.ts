@@ -920,7 +920,7 @@ export async function getEvents(kind: "reply" | "bounce", from: string, to: stri
         case when e.kind = 'bounce' then left(coalesce(e.payload->'bounce_message'->>'text', e.payload->>'description'), 600) end as bounce_text,
         -- Office 365 quotes the receiving server's own error only in the HTML version.
         case when e.kind = 'bounce' then left(replace(substring(regexp_replace(coalesce(e.payload->'bounce_message'->>'html', ''), '<[^>]+>', ' ', 'g')
-          from 'Remote server returned an error.{0,250}'), '&gt;', '>'), 300) end as bounce_remote
+          from '(?:Remote server returned an error|[[:<:]]Error:[[:space:]]+[45][0-9]{2}[ -]).{0,250}'), '&gt;', '>'), 300) end as bounce_remote
       from email_events e cross join tz
       -- The sending domain's client, as on every other page; the event's own only when the domain has none.
       left join domains d on d.id = e.domain_id left join clients c on c.id = coalesce(d.client_id, e.client_id)

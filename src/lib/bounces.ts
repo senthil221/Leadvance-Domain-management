@@ -34,11 +34,21 @@ export const CAUSE_COLOR: Record<BounceReason, string> = {
 const CODES: [RegExp, BounceReason][] = [
   [/^[45]\.2\.2$/, "full"],
   [/^5\.7\.(705|700|750|708|233)$|^5\.1\.8$|^5\.4\.5$/, "sender"],
-  [/^5\.7\.(2[3-7]|30|509|515)$|^5\.1\.7$/, "dns"],
+  [/^[45]\.7\.(2[3-7]|30|509|515)$|^5\.1\.7$/, "dns"],
   [/^5\.7\.(511|6[0-4]\d)$/, "blocklist"],
-  [/^[45]\.7\.(350|28|367)$/, "spam"],
+  [/^[45]\.7\.(28|367)$/, "spam"],
   [/^5\.7\.(129|13[1-4]|52[01])$/, "restricted"],
   [/^5\.1\.(0|1|2|3|6|10)$|^5\.2\.1$|^5\.4\.(1|4|310|312|316)$/, "missing"],
+];
+
+// Wording that settles it even when a code says otherwise: "550 5.1.0 sender rejected"
+// isn't a bad address, and a sender domain nobody can find is our DNS whatever the code.
+const PHRASES: [RegExp, BounceReason][] = [
+  [/sender address rejected:? domain not found|domain of sender address\s+(does not exist|does not resolve)|sender domain not found|has no a, aaaa,? or mx/i, "dns"],
+  [/sender address\s*(\[[^\]]*\]\s*)?blocked|blocked using/i, "blocklist"],
+  [/\bsender rejected\b|reject due to policy restrictions/i, "policy"],
+  [/no mail-enabled subscriptions|mailbox is disabled|no mailbox by that name|has been suspended|no longer at\b|unable to receive email|account closed|domain\s+no longer available/i, "missing"],
+  [/hop count exceeded|mail loop/i, "other"],
 ];
 
 /**
@@ -69,7 +79,7 @@ function withoutHosts(t: string) {
 
 // First match wins, so the specific causes come before the catch-alls (5.7.x).
 const RULES: [BounceReason, RegExp][] = [
-  ["full", /mailbox (is )?full|over ?quota|quota exceeded|insufficient (system )?storage|exceeded (their|the) storage|\b[45]\.2\.2\b/i],
+  ["full", /mailbox (is )?full|out of storage|over ?quota|quota exceeded|insufficient (system )?storage|exceeded (their|the) storage|\b[45]\.2\.2\b/i],
   ["sender", new RegExp([
     /tenant has exceeded|unregistered domain|traffic not accepted from this ip|\b5\.7\.(705|700|750|708|233)\b/,
     /outboundspam|bad outbound sender|restricted from sending|blocked from sending|sending (has been |is )?(disabled|suspended|blocked)|\b5\.1\.8\b/,
@@ -100,8 +110,9 @@ export function bounceReason(text: string | null | undefined, senderOriginated =
   const t = text ? trimNotice(text).trim() : "";
   if (!t) return senderOriginated ? "sender" : "other";
   const code = bounceCode(t);
-  if (code) for (const [re, reason] of CODES) if (re.test(code)) return reason;
   const words = withoutHosts(t);
+  for (const [re, reason] of PHRASES) if (re.test(words)) return reason;
+  if (code) for (const [re, reason] of CODES) if (re.test(code)) return reason;
   // A try-again code is temporary unless its words blame our reputation, as Gmail's 4.7.28 and Yahoo's TSS04 do.
   if (code && /^4/.test(code) && !/spam|unsolicited|reputation|complaints|block ?list|black ?list|dnsbl/i.test(words)) return "temporary";
   for (const [reason, re] of RULES) if (re.test(words)) return reason;
@@ -118,7 +129,9 @@ export function bounceCauseOf(payload: unknown): BounceReason {
   const m = (msg && typeof msg === "object" ? msg : {}) as Record<string, unknown>;
   const s = (v: unknown) => (typeof v === "string" ? v : "");
   const html = s(m.html).replace(/<[^>]+>/g, " ").replace(/&gt;/g, ">").replace(/&lt;/g, "<").replace(/&nbsp;/g, " ");
-  const remote = html.match(/Remote server returned an error.{0,300}/i)?.[0] ?? "";
+  // The server's own words: "Remote server returned…", or "Error: 554 5.7.1…" further down newer notices.
+  const flat = html.replace(/\s+/g, " ");
+  const remote = (flat.match(/Remote server returned an error.{0,300}/i)?.[0] ?? flat.match(/\bError:\s+[45]\d\d[\s-].{0,300}/)?.[0] ?? "").split(/ Message rejected by| Notification Details/)[0];
   // Office 365 cuts the plain text short; the HTML has the whole notice.
   // Its help sections ("if the issue is related to an SPF failure…") are cut off.
   const htmlNotice = trimNotice(html).split(/how to fix it|more info for email admins/i)[0];
@@ -132,7 +145,7 @@ export function bounceCauseOf(payload: unknown): BounceReason {
  * preamble. The remote server's own error, when the notice quotes one, wins.
  */
 export function bounceLine(text: string | null | undefined, remote?: string | null): string | null {
-  const r = remote?.split(/ Message rejected by| Notification Details/)[0].replace(/^remote server returned an error\s*(->|-&gt;)?\s*/i, "").replace(/\s+/g, " ").trim();
+  const r = remote?.split(/ Message rejected by| Notification Details/)[0].replace(/^(?:remote server returned an error\s*(->|-&gt;)?|error:)\s*/i, "").replace(/\s+/g, " ").trim();
   if (r) return r.length > 160 ? `${r.slice(0, 157)}…` : r;
   if (!text) return null;
   const lines = text.split(/\r?\n/).map((l) => l.replace(/\s+/g, " ").trim()).filter(Boolean);

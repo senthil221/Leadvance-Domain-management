@@ -8,6 +8,9 @@ export const REPLY_CLASSES = ["human", "referral", "negative", "wrong_person", "
 export type ReplyClass = (typeof REPLY_CLASSES)[number];
 
 const OOO = [
+  /\b(?:will|i'll) return to (?:my |the )?(?:inbox|office|desk|e-?mail)\b|\b(?:i will|i'll) return on\b|\breturn date\b|\baway from keyboard\b/,
+  /\bvacation until\b|\btaking a vacation\b|\b(?:i am|i'm) (?:ill|sick|unwell)\b|\b(?:i am|i'm) out (?:the|this|all)\b|\btemporary assignment\b/,
+  /\bresponse times? (?:may|will|might) be\b|\bje suis (?:en arr[eê]t|absente?|en cong[eé]s?)\b/,
   /\bout of (?:the )?office\b/,
   /\bo\.?o\.?o\.?\b/,
   /\b(?:on|currently on) (?:vacation|holiday|annual leave|leave|pto|parental leave|maternity leave|paternity leave|sabbatical)\b/,
@@ -29,6 +32,9 @@ const OOO = [
 ];
 
 const AUTO = [
+  /\b(?:no|not) longer (?:being )?(?:managed|maintained|monitored|reviewed|valid|active|in use|a valid)\b|\bpassed away\b/,
+  /\bthank you for (?:your e-?mail|e-?mailing|your message|reaching out)\b.{0,160}\b(?:i will|i'll|we will|we'll)\b.{0,50}\b(?:respond|reply|get back)\b/,
+  /\bconfirm(?:s|ing)? receipt\b|\bif you are (?:attempting|trying) to (?:contact|reach)\b/,
   /\b(?:this is an? )?automat(?:ed|ic) (?:reply|response|message|notification)\b/,
   /\bverify that you are a (?:real )?(?:live )?human\b/,
   /\bchallenge[- ]response\b/,
@@ -54,7 +60,7 @@ const AUTO = [
   /\b(?:shifted|moved) to a new (?:domain|e-?mail|mail)\b/,
   /\bmail delivery (?:software|subsystem|system)\b|\bcould not be delivered to one or more\b|\bdelivery has failed\b|\bremote server returned\b/,
   /\bfor any (?:query|queries|questions?|support)\b.*\b(?:reach out|write|contact|e-?mail)\b/,
-  /\bfor (?:all|new|existing|further|any) (?:\w+ ){0,3}(?:requests?|inquiries|enquiries|matters|assistance)\b.{0,60}\b(?:contact|reach out|e-?mail|write|redirect)\b/,
+  /\bfor (?:all|new|existing|further|any|general|other) (?:\w+ ){0,3}(?:requests?|inquiries|enquiries|matters|assistance)\b.{0,60}\b(?:contact|reach out|e-?mail|write|redirect)\b/,
   // Acknowledgements and gatekeepers.
   /\bthank you for (?:contacting|choosing) (?!us\b|me\b)\w|\bthank you for reaching out to (?!me\b|us\b)\w/,
   /\byour (?:message|e-?mail|inquiry) (?:is important|has been received|was received)\b/,
@@ -65,6 +71,7 @@ const AUTO = [
 ];
 
 const UNSUBSCRIBE = [
+  /\bunsub\b|^\s*remove(?: me)?(?: please)?\b/,
   /\bunsubscribe\b/,
   /\bopt(?:ed)?[- ]?out\b/,
   /\b(?:please )?remove (?:me|us|my (?:e-?mail|address)|this (?:e-?mail|address))\b/,
@@ -76,6 +83,7 @@ const UNSUBSCRIBE = [
 ];
 
 const REFERRAL = [
+  /\b(?:please |kindly )?e-?mail \w+ at\b|\bwould be the (?:right |best |correct )?(?:contact|person)\b/,
   /\bloop(?:ing|ed)? (?:in|you in|our|my)\b/,
   /\b(?:have |i've |i have )?added (?:my|our) (?:colleague|team|hr|manager|head)\b/,
   /\b(?:i am|i'm|i have|i've) (?:cc'?d|copied|copying|adding|forwarded|forwarding)\b/,
@@ -88,6 +96,7 @@ const REFERRAL = [
 ];
 
 const WRONG_PERSON = [
+  /\bno \w+ here\b/,
   /\b(?:i|we) (?:do not|don't|dont|no longer) (?:handle|deal with|manage|look after|take care of|work (?:in|on))\b/,
   /\b(?:i am|i'm|im) not (?:an? |the |in )?(?:hr|right person|correct person|person|decision ?maker|responsible|involved|handling)\b/,
   /\bnot (?:the )?(?:right|correct|relevant) (?:person|contact)\b/,
@@ -139,7 +148,7 @@ export function newText(raw: string) {
 
 // Where someone's own words end and their signature or legal footer begins. A
 // footer's "office hours are", "unsubscribe" or "do not reply" isn't what they said.
-const FOOTER = /\b(?:kind |best |warm |warmest |with )?regards\b|\bsincerely\b|\bcheers,|\bsent from my\b|\bget outlook for\b|\bconfidential(?:ity)? (?:notice|statement|disclaimer)\b|\bdisclaimer\b|\bthis (?:e-?mail|message|communication)(?: and any (?:files|attachments))?(?: \w+){0,4} (?:confidential|privileged|intended)\b|\bthe information (?:contained|in this)\b|\bif you (?:are not the intended|received this)\b/i;
+const FOOTER = /\b(?:kind |best |warm |warmest |with )?regards\b|\bsincerely\b|\bcheers,|\bsent from my\b|\bget outlook for\b|\bconfidential(?:ity)? (?:notice|statement|disclaimer)\b|\bdisclaimer\b|\bthis (?:e-?mail|message|communication)(?: and any (?:files|attachments))?(?: \w+){0,4} (?:confidential|privileged|intended)\b|\bthe information (?:contained|in this)\b|\bif you (?:are not the intended|received this)\b|\*{4,}/i;
 export function withoutFooter(text: string) {
   const at = text.search(FOOTER);
   return at >= 8 ? text.slice(0, at).trim() : text;
@@ -147,6 +156,9 @@ export function withoutFooter(text: string) {
 
 /** Negative ones the list below misses: said politely, or put off for later. */
 const SOFT_NO = [
+  /\bnot @ this time\b|\bnot a problem (?:for|we)\b|\b(?:no|"?0"?) problems? with\b/,
+  /\b(?:do not|don't) (?:have )?(?:any |a |and )?need\b|\b(?:do not|don't) plan (?:to|on)\b|\b(?:aren't|are not|am not) (?:currently )?looking\b/,
+  /\bsold (?:the |my |our )?(?:company|business)\b|\bwhy lie\b|\beat my shorts\b/,
   /\b(?:we are|we're|i am|i'm) not (?:hiring|recruiting|buying|in the market|currently (?:looking|hiring|interested))\b/,
   /\bnot (?:right now|for us|for me|something (?:we|i)(?:'re| are| am)?)\b/,
   /\bno (?:thanks|thank you)\b|\b(?:we|i)(?:'ll| will) pass\b(?! (?:this|it|that|them|you|your|on|along))/,
