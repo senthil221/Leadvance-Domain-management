@@ -2,7 +2,7 @@ import { DomainLink } from "@/components/domains/DomainLink";
 import type { Metadata } from "next";
 import Link from "next/link";
 import { Suspense } from "react";
-import { ArrowRight, ArrowUpRight, BarChart3, CircleCheck, Globe, History, MailX, MessageSquareText, Send, Sparkles, UserRoundCheck } from "lucide-react";
+import { ArrowRight, ArrowUpRight, BarChart3, CircleCheck, Globe, History, MailX, MessageSquareText, Send, Sparkles, TrendingUp, TriangleAlert, UserRoundCheck } from "lucide-react";
 import { AttentionList } from "@/components/overview/AttentionList";
 import { ClientsTable } from "@/components/overview/ClientsTable";
 import { ConnectionCheck } from "@/components/overview/ConnectionCheck";
@@ -14,7 +14,9 @@ import { SendTrend } from "@/components/overview/SendTrend";
 import { Dot, Empty, PageHead, Skeleton } from "@/components/ui";
 import { getCurrentUser } from "@/lib/auth";
 import { ago, int } from "@/lib/format";
-import { getConnectionCheck, getInsights, getOverview, listDeadDomains, type Issues, type TrendDay } from "@/lib/queries";
+import { findings } from "@/lib/compare";
+import { getConnectionCheck, getInsights, getOverview, getReview, listDeadDomains, thisWeek, type Issues, type TrendDay } from "@/lib/queries";
+import { isCurrent } from "@/lib/review";
 import { STATUS_META, type DomainStatus, type Tone } from "@/lib/status";
 
 export const metadata: Metadata = { title: "Overview" };
@@ -24,7 +26,7 @@ const FLEET_STATES: DomainStatus[] = ["active", "warming", "provisioning", "drai
 export default function OverviewPage() {
   return (
     <>
-      <PageHead title="Overview" sub="What needs you today, and how the sending fleet is doing" />
+      <PageHead title="Overview" sub="What needs you today. Numbers count active domains, plus any in their grace period" />
       <div className="page-body">
         <Suspense fallback={<OverviewSkeleton />}>
           <OverviewContent />
@@ -40,7 +42,7 @@ const rate = (n: number, d: number) => (d > 0 ? (100 * n) / d : null);
 // shown when it applies.
 function actions(i: Issues, weeksLeft: number | null): { tone: Tone; n: number; text: string; href: string }[] {
   const out: { tone: Tone; n: number; text: string; href: string }[] = [
-    { tone: "danger", n: i.dead, text: "active domains are dead: nothing on them can send", href: "#dead" },
+    { tone: "danger", n: i.dead, text: "paid-for domains are dead: nothing on them can send", href: "#dead" },
     { tone: "danger", n: i.noZone, text: "domains with no DNS zone: nothing on them resolves", href: "/inventory" },
     { tone: "danger", n: i.flagged, text: "sending domains breaking a health rule", href: "/inboxes?view=attention" },
     { tone: "danger", n: i.disconnected, text: "inboxes disconnected in Smartlead", href: "/inboxes?view=disconnected" },
@@ -60,7 +62,10 @@ function actions(i: Issues, weeksLeft: number | null): { tone: Tone; n: number; 
 
 async function OverviewContent() {
   await getCurrentUser();
-  const [o, ins, dead, connections] = await Promise.all([getOverview(), getInsights(), listDeadDomains(), getConnectionCheck()]);
+  const week = await thisWeek();
+  const [o, ins, dead, connections, review] = await Promise.all([getOverview(), getInsights(), listDeadDomains(), getConnectionCheck(), getReview(week.from, week.to)]);
+  // The strongest differences across TLDs, providers, tags and ages this week, with what's behind them.
+  const standouts = findings(review.domains.filter((d) => isCurrent(d.standing)), undefined, 3);
   const todo = actions(ins.issues, o.weeksLeft);
   const t7 = ins.trend.slice(-7), p7 = ins.trend.slice(0, -7);
   const sum = (d: TrendDay[], k: "sent" | "replies" | "human" | "bounces") => d.reduce((a, x) => a + x[k], 0);
@@ -170,7 +175,10 @@ async function OverviewContent() {
           <div className="card-head">
             <h2 id="insights-title" className="card-title inline-flex items-center gap-2"><Sparkles size={13} strokeWidth={1.75} className="text-faint" aria-hidden="true" />This week</h2>
           </div>
-          <Insights lines={lines} />
+          <Insights lines={[
+            ...standouts.map((f) => ({ key: f.id, tone: f.tone, icon: f.tone === "success" ? TrendingUp : TriangleAlert, text: `${f.title}. ${f.verdict}`, href: "/compare" })),
+            ...lines,
+          ]} />
         </section>
 
         <OverviewTabs id="dead" label="Domains to deal with" tabs={issues} />

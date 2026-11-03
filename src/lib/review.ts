@@ -6,20 +6,41 @@ import { slText } from "./smartlead-state";
 // warmup reputation and days without any reply count against the domain;
 // addresses that don't exist count against the list.
 
-export type Verdict = "fix" | "rest" | "drop" | "dead" | "watch" | "idle" | "low" | "ok" | "gone";
+export type Verdict = "fix" | "rest" | "grace" | "drop" | "dead" | "ended" | "watch" | "idle" | "low" | "ok" | "gone";
+
+/**
+ * Where a domain really stands today (the domain_standing view). Active and
+ * grace are current: they're what every page shows by default. The rest is history.
+ */
+export type Standing = "active" | "grace" | "expired" | "replaced" | "cancelled" | "retired" | "disconnected" | "deleted" | "not_connected" | "no_order";
+export const STANDING_META: Record<Standing, { label: string; hint: string }> = {
+  active: { label: "Active", hint: "Connected in Smartlead with a live order" },
+  grace: { label: "In grace period", hint: "Replaced or cancelled, but the provider is keeping its inboxes up for now" },
+  expired: { label: "Expired", hint: "The domain's registration has run out" },
+  replaced: { label: "Replaced", hint: "The provider moved this domain's order to another domain, and the grace period is over" },
+  cancelled: { label: "Cancelled", hint: "The order is cancelled and the grace period is over" },
+  retired: { label: "Retired", hint: "Taken out of use here: draining, burned or resting" },
+  disconnected: { label: "Disconnected", hint: "Every inbox is disconnected in Smartlead" },
+  deleted: { label: "Deleted in Smartlead", hint: "Every inbox was deleted in Smartlead" },
+  not_connected: { label: "Not connected", hint: "No inboxes in Smartlead" },
+  no_order: { label: "No order", hint: "Connected in Smartlead, but the provider has no live order for it" },
+};
+export const isCurrent = (s: Standing | null | undefined) => s === "active" || s === "grace";
 
 export const VERDICT_META: Record<Verdict, { label: string; tone: "danger" | "warning" | "info" | "faint" | "success"; hint: string }> = {
   fix: { label: "Fix sender", tone: "danger", hint: "Our own setup is failing: tenant or mailbox blocked, DNS missing, or inboxes disconnected" },
   rest: { label: "Replace", tone: "danger", hint: "Two strikes (spam, blocklisted, low rep, no reply for days), heavy spam with no replies, or no response at all on real volume: pull it and line up a replacement" },
-  drop: { label: "Cancelled / replaced", tone: "danger", hint: "Every inbox is disconnected and Hypertide has cancelled the order or the domain was replaced: nothing to reconnect. Delete in one go" },
-  dead: { label: "Disconnected", tone: "warning", hint: "Every inbox is disconnected, but Hypertide hasn't cancelled or replaced the domain: try reconnecting before replacing" },
+  grace: { label: "In grace period", tone: "info", hint: "Replaced or cancelled, but its inboxes stay up for a while: it still counts until the grace period ends" },
+  drop: { label: "Cancelled / replaced", tone: "danger", hint: "Every inbox is disconnected and the provider has cancelled the order or the domain was replaced: nothing to reconnect. Delete in one go" },
+  dead: { label: "Disconnected", tone: "warning", hint: "Every inbox is disconnected, but the provider hasn't cancelled or replaced the domain: try reconnecting before replacing" },
+  ended: { label: "Ended", tone: "faint", hint: "Not active any more: expired, retired, or its order has ended, though some inboxes still show connected" },
   watch: { label: "Watch", tone: "warning", hint: "One strike so far: still worth sending, at lower volume" },
   idle: { label: "Idle", tone: "info", hint: "Active with inboxes connected, but nothing was sent in this range" },
   low: { label: "Too little sent", tone: "faint", hint: "Not enough sent in this range to judge" },
   ok: { label: "OK", tone: "success", hint: "Nothing to act on" },
   gone: { label: "Deleted in Smartlead", tone: "faint", hint: "Every inbox was deleted in Smartlead: its numbers are history, nothing to fix or reconnect" },
 };
-export const VERDICT_ORDER: Verdict[] = ["fix", "rest", "drop", "dead", "watch", "idle", "low", "ok", "gone"];
+export const VERDICT_ORDER: Verdict[] = ["fix", "rest", "grace", "drop", "dead", "ended", "watch", "idle", "low", "ok", "gone"];
 
 /** The thresholds. A domain needs MIN_SENT in the range before it is judged on rates. */
 export const RULES = {
@@ -44,8 +65,8 @@ export const RULES = {
  */
 export type Signal = "ended" | "unlisted" | "tenant" | "dns" | "disconnected" | "spam" | "rising" | "blocklist" | "lowrep" | "quiet" | "silent" | "badlist";
 export const SIGNAL_META: Record<Signal, { label: string; hint: string; strike?: true }> = {
-  ended: { label: "Cancelled / replaced", hint: "Hypertide shows the order cancelled, or the domain was replaced" },
-  unlisted: { label: "No Hypertide order", hint: "Fully disconnected, and Hypertide's order list doesn't have the domain (or no longer does). The list misses some live domains too, so this alone doesn't prove it's cancelled" },
+  ended: { label: "Cancelled / replaced", hint: "The provider shows the order cancelled, or the domain was replaced" },
+  unlisted: { label: "No order", hint: "Fully disconnected, and the provider's order list doesn't have the domain (or no longer does). The list can miss a live domain, so this alone doesn't prove it's cancelled" },
   tenant: { label: "Tenant", hint: "Bounces saying our Microsoft tenant or mailbox is blocked, over its limit, or can't sign in" },
   dns: { label: "DNS", hint: "Bounces saying the sending domain has no MX/A records, or SPF, DKIM or DMARC failed" },
   disconnected: { label: "Disconnected", hint: "Inboxes disconnected in Smartlead" },
@@ -66,8 +87,14 @@ export type ReviewDomain = {
   /** Inboxes connected and disconnected in Smartlead now, and deleted there (as of the last sync). */
   inboxes: number; disconnected: number; removed: number; blacklisted: number;
   sent: number; replies: number; human: number; bounces: number;
+  /** Replies that are out of office, automatic, or not interested (with wrong person and unsubscribe). */
+  ooo: number; auto: number; negative: number;
   causes: Partial<Record<BounceReason, number>>;
-  prevSent: number; prevHuman: number; prevSpam: number;
+  prevSent: number; prevHuman: number; prevReplies: number; prevBounces: number; prevSpam: number;
+  /** Days since the domain was bought, and since its first inbox joined Smartlead. */
+  ageDays: number | null; connectedDays: number | null;
+  /** Where its inboxes come from (Hypertide for Outlook, Icemail for Google), where it stands today, and the grace days left. */
+  provider: string | null; standing: Standing | null; graceLeft: number | null;
   /** Average warmup reputation of the connected inboxes, and how many are under RULES.lowRep. */
   rep: number | null; lowRepInboxes: number;
   /** Days from the last reply of any kind (or, with none on record, the first send) to the end of the range. */
@@ -77,27 +104,30 @@ export type ReviewDomain = {
   /** Smartlead's provider type of the domain's inboxes (OUTLOOK, GMAIL, SMTP), MIXED when they differ. */
   esp: string | null; tld: string | null;
   /**
-   * Where the domain stands on Hypertide: the order is live, cancelled, gone from
+   * Where the domain's order stands at its provider: live, cancelled, gone from
    * the order list, the domain was replaced (by replacedBy), or there's no order
-   * for it on this account. null when it isn't a Hypertide domain.
+   * for it on this account. null when no provider is on file.
    */
   ht: Ht | null; replacedBy: string | null;
 };
 export type Ht = "live" | "cancelled" | "gone" | "replaced" | "none";
-/** The Hypertide column of the sheet, and the chip on a domain Hypertide is done with. */
-export const HT_META: Record<Ht, { label: string; chip: string; why: string }> = {
-  live: { label: "Live", chip: "", why: "" },
-  cancelled: { label: "Cancelled", chip: "HT cancelled", why: "cancelled on Hypertide" },
-  gone: { label: "Off the order list", chip: "Off HT list", why: "no longer on Hypertide's order list" },
-  replaced: { label: "Replaced", chip: "Replaced", why: "replaced" },
-  none: { label: "No order", chip: "No HT order", why: "no Hypertide order on this account" },
-};
+/** The order column of the sheet, and the chip on a domain its provider is done with. */
+export function orderMeta(ht: Ht, provider: string | null | undefined): { label: string; chip: string; why: string } {
+  const p = provider ?? "the provider";
+  switch (ht) {
+    case "live": return { label: "Live", chip: "", why: "" };
+    case "cancelled": return { label: "Cancelled", chip: `${provider ?? "Order"} cancelled`, why: `cancelled on ${p}` };
+    case "gone": return { label: "Off the order list", chip: `Off ${provider ?? "order"} list`, why: `no longer on ${p}'s order list` };
+    case "replaced": return { label: "Replaced", chip: "Replaced", why: "replaced" };
+    case "none": return { label: "No order", chip: `No ${provider ?? ""} order`.replace("  ", " "), why: `no ${p} order on this account` };
+  }
+}
 /** The mail provider as people say it. */
 export const espName = (esp: string | null | undefined) =>
   !esp ? "Unknown" : esp === "OUTLOOK" ? "Outlook" : esp === "GMAIL" || esp === "GOOGLE" ? "Google" : esp === "MIXED" ? "Mixed" : esp === "SMTP" ? "SMTP" : esp.charAt(0) + esp.slice(1).toLowerCase();
 export const ESP_ORDER = ["Outlook", "Google", "SMTP", "Mixed", "Unknown"];
 
-const htText = (d: ReviewDomain) => (d.ht === "replaced" && d.replacedBy ? `Replaced by ${d.replacedBy}` : d.ht ? HT_META[d.ht].label : "");
+const htText = (d: ReviewDomain) => (d.ht === "replaced" && d.replacedBy ? `Replaced by ${d.replacedBy}` : d.ht ? orderMeta(d.ht, d.provider).label : "");
 export type ReviewCampaign = { id: number; name: string; clientName: string | null; bounces: number; missing: number };
 export type ReviewData = { from: string; to: string; today: string; slSyncedAt: Date | null; domains: ReviewDomain[]; campaigns: ReviewCampaign[] };
 export type Judged = ReviewDomain & { verdict: Verdict; why: string; worse: boolean; spam: number; chips: Chip[]; strikes: number };
@@ -125,9 +155,9 @@ export function judge(d: ReviewDomain): Judged {
   // from the order list isn't: Hypertide's list leaves out some live domains.
   const ended = d.ht === "cancelled" || d.ht === "replaced";
   const allGone = d.disconnected > 0 && !d.inboxes;
-  if ((d.ht === "gone" || d.ht === "none") && allGone) add("unlisted", HT_META[d.ht].chip, "info", HT_META[d.ht].why);
+  if ((d.ht === "gone" || d.ht === "none") && allGone) { const m = orderMeta(d.ht, d.provider); add("unlisted", m.chip, "info", m.why); }
   if (ended && d.ht) {
-    const m = HT_META[d.ht];
+    const m = orderMeta(d.ht, d.provider);
     add("ended", d.ht === "replaced" && d.replacedBy ? `Replaced → ${d.replacedBy}` : m.chip, allGone ? "danger" : "warning",
       d.ht === "replaced" && d.replacedBy ? `replaced by ${d.replacedBy}` : m.why);
   }
@@ -167,6 +197,12 @@ export function judge(d: ReviewDomain): Judged {
   // A reply in the last few days, of any kind, says the domain still lands.
   const replying = d.quietDays != null && d.quietDays < RULES.quietDays && !d.neverReplied;
 
+  // Expired, or still connected after its order ended: history, whatever its numbers say.
+  if (d.standing === "expired") return out("ended", "The domain has expired");
+  if (d.standing && !isCurrent(d.standing) && d.inboxes > 0) return out("ended", STANDING_META[d.standing].hint);
+  if (d.standing === "grace") {
+    return out("grace", d.graceLeft != null ? `Inboxes stay up for ${s(d.graceLeft, "more day")}: it still counts until then` : "Marked replaced, with its inboxes still connected");
+  }
   // Deleted in Smartlead: last week's numbers are history, nothing to act on.
   if (!d.inboxes && !d.disconnected && d.removed) return out("gone", `Every inbox (${s(d.removed, "inbox", "inboxes")}) was deleted in Smartlead`);
   // No inbox left to log into: nothing else about the domain matters. Gone
@@ -203,13 +239,13 @@ const cell = (v: string | number | null) => {
 
 /** Tab-separated rows with a header, ready to paste into Google Sheets: one column per fact. */
 export function sheetRows(list: Judged[]): string {
-  const head = ["Domain", "Call", "Reason", "Signals", "ESP", "TLD", "Smartlead tags", "Hypertide", "Client", "Status", "Sent", "Human replies", "Spam rejections",
-    "Bounce rate", "Warmup reputation", "Days since any reply", "Inboxes connected", "Inboxes disconnected", "Replies incl. OOO", "Smartlead now"];
+  const head = ["Domain", "Call", "Reason", "Signals", "ESP", "TLD", "Smartlead tags", "Order", "Client", "Status", "Sent", "Human replies", "Spam rejections",
+    "Bounce rate", "Warmup reputation", "Days since any reply", "Inboxes connected", "Inboxes disconnected", "Replies incl. OOO", "Smartlead now", "Provider", "Domain age (days)"];
   const rows = list.map((d) => [
     d.name, VERDICT_META[d.verdict].label, d.why, d.chips.map((c) => c.text).join(", "), espName(d.esp), d.tld ? `.${d.tld}` : "", d.slTags.join(", "), htText(d), d.clientName, d.status,
     d.sent, d.human, d.spam, d.sent ? `${((100 * d.bounces) / d.sent).toFixed(2)}%` : "", d.rep,
     d.quietDays == null ? "" : `${d.quietDays}${d.neverReplied ? "+" : ""}`, d.inboxes, d.disconnected, d.replies,
-    slText({ slConnected: d.inboxes, slDisconnected: d.disconnected, slRemoved: d.removed }),
+    slText({ slConnected: d.inboxes, slDisconnected: d.disconnected, slRemoved: d.removed }), d.provider, d.ageDays,
   ].map(cell).join("\t"));
   return [head.join("\t"), ...rows].join("\n");
 }
@@ -221,7 +257,7 @@ function summarize(domains: Judged[], keys: (d: Judged) => { id: string; name: s
     for (const k of keys(d)) {
       let r = m.get(k.id);
       if (!r) {
-        r = { ...k, domains: 0, counts: { fix: 0, rest: 0, drop: 0, dead: 0, watch: 0, idle: 0, low: 0, ok: 0, gone: 0 }, sent: 0, human: 0, bounces: 0, spam: 0 };
+        r = { ...k, domains: 0, counts: { fix: 0, rest: 0, grace: 0, drop: 0, dead: 0, ended: 0, watch: 0, idle: 0, low: 0, ok: 0, gone: 0 }, sent: 0, human: 0, bounces: 0, spam: 0 };
         m.set(k.id, r);
       }
       r.domains++; r.counts[d.verdict]++;
@@ -239,6 +275,10 @@ export const byClient = (domains: Judged[]) =>
 /** One row per mail provider. */
 export const byEsp = (domains: Judged[]) =>
   summarize(domains, (d) => [{ id: espName(d.esp), name: espName(d.esp), hue: null }]);
+
+/** One row per inbox provider. */
+export const byProvider = (domains: Judged[]) =>
+  summarize(domains, (d) => [{ id: d.provider ?? "?", name: d.provider ?? "No provider", hue: null }]);
 
 /** One row per TLD. */
 export const byTld = (domains: Judged[]) =>
@@ -264,8 +304,10 @@ export function advise(d: Judged): Advice[] {
   const tenant = c.sender ?? 0, dns = c.dns ?? 0, recipient = (c.restricted ?? 0) + (c.policy ?? 0) + (c.full ?? 0);
 
   if (d.verdict === "gone") return [{ tone: "faint", text: "Deleted in Smartlead: nothing to analyse. Mark it replaced, or send it back to storage to reuse later" }];
-  if (d.verdict === "drop") add("danger", `Delete its inboxes in Smartlead: ${d.ht === "replaced" && d.replacedBy ? `replaced by ${d.replacedBy}` : "Hypertide has cancelled it"}, nothing to reconnect`);
-  if (d.verdict === "dead") add("warning", "Reconnect the inboxes in Smartlead; if they don't come back, cancel it on Hypertide and replace it");
+  if (d.verdict === "ended") return [{ tone: "faint", text: `${d.standing ? STANDING_META[d.standing].label : "Ended"}: history, nothing to fix. Delete any inboxes still in Smartlead` }];
+  if (d.verdict === "grace") return [{ tone: "info", text: "Replaced or cancelled: keep it for replies until its inboxes go, then delete them in Smartlead" }];
+  if (d.verdict === "drop") add("danger", `Delete its inboxes in Smartlead: ${d.ht === "replaced" && d.replacedBy ? `replaced by ${d.replacedBy}` : `${d.provider ?? "the provider"} has cancelled it`}, nothing to reconnect`);
+  if (d.verdict === "dead") add("warning", `Reconnect the inboxes in Smartlead; if they don't come back, cancel it on ${d.provider ?? "the provider"} and replace it`);
   if (tenant >= RULES.senderBounces) add("danger", `${s(tenant, "bounce")} say the tenant or mailbox is blocked or over its limit: pause it in campaigns, check the Microsoft tenant, then lower the daily limit`);
   if (dns >= RULES.senderBounces) add("danger", `${s(dns, "bounce")} say SPF, DKIM or DMARC failed: run Validate DNS and fix the records before sending more`);
   if (d.disconnected && d.inboxes) add("warning", `${n(d.disconnected)} of ${n(d.inboxes + d.disconnected)} inboxes disconnected: reconnect them`);

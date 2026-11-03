@@ -257,8 +257,8 @@ export function StatsView({ initial, initialReview, clients }: { initial: StatsD
   const [tag, setTag] = useState(() => params.get("tag")?.toLowerCase() ?? "");
   const [esp, setEsp] = useState(() => params.get("esp") ?? "");
   const [sender, setSender] = useState(() => params.get("sender") ?? "");
-  // Active domains (in campaigns) apart from the rest (warming, draining, retired).
-  const [statusSet, setStatusSet] = useState<"" | "active" | "other">(() => (params.get("status") === "active" || params.get("status") === "other" ? params.get("status") as "active" | "other" : ""));
+  // Active today (grace period included), or finished: disconnected, replaced, cancelled, expired.
+  const [standing, setStanding] = useState<"current" | "ended" | "all">(() => (params.get("status") === "ended" || params.get("status") === "all" ? params.get("status") as "ended" | "all" : "current"));
   // One line per client to start; open a client to see its domains.
   const [byClient, setByClient] = useState(true);
   const [sl, setSl] = useState<SlFilter>(() => (SL_FILTERS.some(([k]) => k === params.get("sl")) ? params.get("sl") as SlFilter : "in"));
@@ -301,7 +301,7 @@ export function StatsView({ initial, initialReview, clients }: { initial: StatsD
     // Every filter but the one skipped, so each menu counts what picking an option would leave.
     const passes = (d: StatDomain, skip?: Facet) =>
       (!clientId || d.clientId === clientId) &&
-      (!statusSet || (statusSet === "active") === (d.status === "active")) &&
+      (standing === "all" || (standing === "current") === d.current) &&
       (skip === "call" || callMatches(calls.get(d.id))) &&
       (skip === "tag" || !tag || d.allTags.some((t) => t.toLowerCase() === tag)) &&
       (skip === "esp" || !esp || (d.esp ?? "") === esp) &&
@@ -336,7 +336,7 @@ export function StatsView({ initial, initialReview, clients }: { initial: StatsD
         sl: new Map(SL_FILTERS.map(([k]) => [k, data.domains.filter((d) => passes(d, "sl") && sendingOk(d, "sl") && slMatches(d, k)).length])),
       },
     };
-  }, [data.domains, clientId, statusSet, needle, call, calls, tag, esp, sender, sl, sentIn, onlySending]);
+  }, [data.domains, clientId, standing, needle, call, calls, tag, esp, sender, sl, sentIn, onlySending]);
   const filtering = !!(call || tag || esp || sender || sl !== "in");
   const clearFilters = () => { setCall(""); setTag(""); setEsp(""); setSender(""); setSl("in"); };
 
@@ -454,10 +454,11 @@ export function StatsView({ initial, initialReview, clients }: { initial: StatsD
           <option value="">All clients</option>
           {clients.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
         </select>
-        <select className="select rv-filter" data-on={statusSet ? true : undefined} value={statusSet} onChange={(e) => setStatusSet(e.target.value as "" | "active" | "other")} aria-label="Filter by status">
-          <option value="">All domains</option>
-          <option value="active">Active</option>
-          <option value="other">Not active</option>
+        <select className="select rv-filter" data-on={standing !== "current" ? true : undefined} value={standing} onChange={(e) => setStanding(e.target.value as "current" | "ended" | "all")} aria-label="Which domains"
+          title="Active includes domains in their grace period">
+          <option value="current">Active domains</option>
+          <option value="ended">Disconnected or replaced</option>
+          <option value="all">All domains</option>
         </select>
         <select className="select rv-filter" data-on={call ? true : undefined} value={call} onChange={(e) => setCall(e.target.value as CallFilter)} aria-label="Filter by weekly review call"
           title="The weekly review's call for this range. Picking one also shows domains that sent nothing">

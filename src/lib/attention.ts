@@ -10,7 +10,8 @@ import type postgres from "postgres";
 export async function attentionDomainCount(sql: postgres.Sql) {
   const [r] = await sql<{ n: number }[]>`
     select count(*)::int as n from domains d
-    where d.status in ('active', 'warming')
+    join domain_standing st on st.domain_id = d.id
+    where d.status in ('active', 'warming') and (st.current or st.order_live)
       and exists (select 1 from inboxes i where i.domain_id = d.id and i.status <> 'removed')
       and (
         exists (select 1 from inboxes i where i.domain_id = d.id and i.status = 'disconnected')

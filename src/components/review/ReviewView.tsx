@@ -6,18 +6,19 @@ import { DropdownMenu } from "radix-ui";
 import { useMemo, useState, useTransition } from "react";
 import { toast } from "sonner";
 import { loadReview, markDomains, tagDomains } from "@/app/actions";
+import { Findings } from "@/components/compare/Findings";
 import { ConfigureDomains, PasteSelect } from "@/components/domains/DomainBulk";
 import { RangePicker } from "@/components/RangePicker";
 import { SortTh } from "@/components/SortTh";
 import { ClientCell, Empty, Rep, StatusDot, TagList } from "@/components/ui";
-import { BOUNCE_META, BOUNCE_ORDER, type BounceReason } from "@/lib/bounces";
+import { BOUNCE_META, BOUNCE_ORDER, CAUSE_COLOR, type BounceReason } from "@/lib/bounces";
 import { ago, int } from "@/lib/format";
 import { SlBadge } from "@/components/domains/SlStatus";
 import type { ClientRow } from "@/lib/queries";
 import { nice, previousLabel } from "@/lib/range";
 import { MARK_CHOICES, markOf, type Mark } from "@/lib/tag-map";
 import {
-  ESP_ORDER, RULES, SIGNAL_META, SIGNAL_ORDER, VERDICT_META, VERDICT_ORDER, badLists, byClient, byEsp, bySmartleadTag, byTld, espName, judge, sheetRows,
+  ESP_ORDER, RULES, SIGNAL_META, SIGNAL_ORDER, STANDING_META, VERDICT_META, VERDICT_ORDER, badLists, byClient, byEsp, byProvider, bySmartleadTag, byTld, espName, isCurrent, judge, sheetRows,
   type Chip, type ClientSummary, type Judged, type ReviewData, type Signal, type Verdict,
 } from "@/lib/review";
 
@@ -28,23 +29,19 @@ import {
 const LISTS: Verdict[] = ["fix", "rest", "drop", "dead", "watch", "idle"];
 // The tag each list's Tag button suggests. Marks also go to Smartlead.
 const LIST_TAG: Partial<Record<Verdict, Mark>> = { rest: "Replace", drop: "Cancelled", dead: "Disconnected", watch: "Watch" };
-const CAUSE_COLOR: Record<BounceReason, string> = {
-  sender: "var(--danger-solid)", dns: "color-mix(in srgb, var(--danger-solid) 70%, var(--violet-solid))",
-  blocklist: "color-mix(in srgb, var(--danger-solid) 65%, var(--warning-solid))", spam: "var(--warning-solid)",
-  missing: "var(--info-solid)", restricted: "var(--line-strong)", policy: "color-mix(in srgb, var(--faint) 70%, transparent)",
-  full: "var(--line-strong)", temporary: "var(--line)", other: "var(--line)",
-};
 const pct = (n: number, d: number) => (d > 0 ? (100 * n) / d : null);
 const fx = (v: number | null, digits = 1) => (v == null ? "—" : `${v.toFixed(v < 1 && digits === 1 ? 2 : digits)}%`);
 const plural = (n: number, one: string, many = `${one}s`) => `${int(n)} ${n === 1 ? one : many}`;
 
-type SortKey = "verdict" | "name" | "client" | "esp" | "signals" | "sent" | "replies" | "human" | "quiet" | "rep" | "spam" | "missing" | "bounceRate";
+type SortKey = "verdict" | "name" | "client" | "esp" | "provider" | "age" | "signals" | "sent" | "replies" | "human" | "quiet" | "rep" | "spam" | "missing" | "bounceRate";
 const sortValue = (r: Judged, k: SortKey): string | number | null => {
   switch (k) {
     case "verdict": return -VERDICT_ORDER.indexOf(r.verdict) * 1e6 + r.strikes * 1e4 + r.spam;
     case "signals": return r.strikes * 100 + r.chips.length;
     case "client": return r.clientName?.toLowerCase() ?? null;
     case "esp": return espName(r.esp);
+    case "provider": return r.provider;
+    case "age": return r.ageDays;
     case "name": return r.name;
     case "quiet": return r.quietDays;
     case "rep": return r.rep;
@@ -147,11 +144,12 @@ export function ReviewView({ initial, clients }: { initial: ReviewData; clients:
   const [data, setData] = useState(initial);
   const [loading, start] = useTransition();
   const [tagging, startTag] = useTransition();
-  // Active and not active leave out domains deleted in Smartlead: they have their own tab.
-  const [scope, setScope] = useState<"active" | "other" | "gone">("active");
+  // What matters now, or what's finished: disconnected, replaced, cancelled, expired or deleted.
+  const [scope, setScope] = useState<"current" | "ended">("current");
   const [clientId, setClientId] = useState<string | null>(null);
   const [slTag, setSlTag] = useState<string | null>(null);
-  const [groupBy, setGroupBy] = useState<"client" | "tag" | "esp" | "tld">("client");
+  const [groupBy, setGroupBy] = useState<"client" | "tag" | "provider" | "esp" | "tld">("client");
+  const [provider, setProvider] = useState<string | null>(null);
   const [esp, setEsp] = useState<string | null>(null);
   const [tld, setTld] = useState<string | null>(null);
   const [q, setQ] = useState("");
@@ -167,9 +165,9 @@ export function ReviewView({ initial, clients }: { initial: ReviewData; clients:
   });
 
   const judged = useMemo(() => data.domains.map(judge), [data.domains]);
-  const scopeOf = (d: Judged) => (d.verdict === "gone" ? "gone" : d.status === "active" ? "active" : "other");
+  const scopeOf = (d: Judged) => (isCurrent(d.standing) ? "current" : "ended");
   const scopeCount = useMemo(() => {
-    const m = { active: 0, other: 0, gone: 0 };
+    const m = { current: 0, ended: 0 };
     for (const d of judged) m[scopeOf(d)]++;
     return m;
   }, [judged]);
@@ -195,27 +193,30 @@ export function ReviewView({ initial, clients }: { initial: ReviewData; clients:
   [inScope, needle]);
   const ofEsp = (d: Judged) => esp == null || espName(d.esp) === esp;
   const ofTld = (d: Judged) => tld == null || (d.tld ?? "?") === tld;
+  const ofProvider = (d: Judged) => provider == null || (d.provider ?? "?") === provider;
   const ofCall = (d: Judged) => !only || d.verdict === only;
   const ofSig = (d: Judged) => [...signals].every((k) => d.chips.some((c) => c.key === k));
   /** Every filter but the one skipped, so each menu counts what picking an option would leave. */
-  const pass = (d: Judged, skip?: "call" | "esp" | "tld" | "sig") =>
-    (skip === "call" || ofCall(d)) && (skip === "esp" || ofEsp(d)) && (skip === "tld" || ofTld(d)) && (skip === "sig" || ofSig(d));
+  const pass = (d: Judged, skip?: "call" | "esp" | "tld" | "sig" | "provider") =>
+    (skip === "call" || ofCall(d)) && (skip === "esp" || ofEsp(d)) && (skip === "tld" || ofTld(d)) && (skip === "sig" || ofSig(d)) && (skip === "provider" || ofProvider(d));
   const facets = useMemo(() => {
-    const tabs = new Map<Verdict | "", number>([["", 0]]), esps = new Map<string, number>(), tlds = new Map<string, number>(), sigs = new Map<Signal, number>();
+    const tabs = new Map<Verdict | "", number>([["", 0]]), esps = new Map<string, number>(), tlds = new Map<string, number>(), sigs = new Map<Signal, number>(), providers = new Map<string, number>();
     for (const d of searched) {
       if (pass(d, "call")) { tabs.set(d.verdict, (tabs.get(d.verdict) ?? 0) + 1); tabs.set("", tabs.get("")! + 1); }
       if (pass(d, "esp")) esps.set(espName(d.esp), (esps.get(espName(d.esp)) ?? 0) + 1);
       if (pass(d, "tld")) tlds.set(d.tld ?? "?", (tlds.get(d.tld ?? "?") ?? 0) + 1);
+      if (pass(d, "provider")) providers.set(d.provider ?? "?", (providers.get(d.provider ?? "?") ?? 0) + 1);
       if (pass(d, "sig")) for (const c of d.chips) sigs.set(c.key, (sigs.get(c.key) ?? 0) + 1);
     }
     return {
       tabs, sigs,
+      providers: [...providers.entries()].sort((a, b) => b[1] - a[1]).map(([k, n]) => [k, n, k === "?" ? "No provider" : k]) as [string, number, string][],
       esps: [...esps.entries()].sort((a, b) => ESP_ORDER.indexOf(a[0]) - ESP_ORDER.indexOf(b[0])) as [string, number][],
       tlds: [...tlds.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0])).map(([k, n]) => [k, n, k === "?" ? "No TLD" : `.${k}`]) as [string, number, string][],
     };
-  }, [searched, only, esp, tld, signals]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [searched, only, esp, tld, signals, provider]); // eslint-disable-line react-hooks/exhaustive-deps
   // The domains behind the totals: every filter but the call tab.
-  const viewed = useMemo(() => searched.filter((d) => pass(d, "call")), [searched, esp, tld, signals]); // eslint-disable-line react-hooks/exhaustive-deps
+  const viewed = useMemo(() => searched.filter((d) => pass(d, "call")), [searched, esp, tld, signals, provider]); // eslint-disable-line react-hooks/exhaustive-deps
   const rows = useMemo(() => viewed.filter(ofCall)
     .sort((a, b) => cmp(sortValue(a, sort.key), sortValue(b, sort.key), sort.dir) || a.name.localeCompare(b.name)),
   [viewed, only, sort]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -229,8 +230,8 @@ export function ReviewView({ initial, clients }: { initial: ReviewData; clients:
     }
     return k;
   }, [viewed]);
-  const filtering = esp != null || tld != null || signals.size > 0 || !!needle;
-  const clearFilters = () => { setEsp(null); setTld(null); setSignals(new Set()); setQ(""); };
+  const filtering = esp != null || tld != null || provider != null || signals.size > 0 || !!needle;
+  const clearFilters = () => { setEsp(null); setTld(null); setProvider(null); setSignals(new Set()); setQ(""); };
 
   const causes = useMemo(() => {
     const t: Partial<Record<BounceReason, number>> = {};
@@ -258,13 +259,14 @@ export function ReviewView({ initial, clients }: { initial: ReviewData; clients:
     const again = await loadReview({ from: data.from, to: data.to });
     if (again.ok) setData(again.data);
   };
-  const groupRows: ClientSummary[] = groupBy === "client" ? clientRows : groupBy === "tag" ? tagRows : groupBy === "esp" ? byEsp(inScope) : byTld(inScope);
-  const groupOn = (c: ClientSummary) => (groupBy === "client" ? c.id === clientId : groupBy === "tag" ? c.id === slTag : groupBy === "esp" ? c.id === esp : c.id === tld);
+  const groupRows: ClientSummary[] = groupBy === "client" ? clientRows : groupBy === "tag" ? tagRows : groupBy === "esp" ? byEsp(inScope) : groupBy === "provider" ? byProvider(inScope) : byTld(inScope);
+  const groupOn = (c: ClientSummary) => (groupBy === "client" ? c.id === clientId : groupBy === "tag" ? c.id === slTag : groupBy === "esp" ? c.id === esp : groupBy === "provider" ? c.id === provider : c.id === tld);
   const groupPick = (c: ClientSummary) => {
     const on = groupOn(c);
     if (groupBy === "client") pickClient(on ? null : c.id);
     else if (groupBy === "tag") pickTag(on ? null : c.id);
     else if (groupBy === "esp") setEsp(on ? null : c.id);
+    else if (groupBy === "provider") setProvider(on ? null : c.id);
     else setTld(on ? null : c.id);
   };
   // A mark goes to the inboxes in Smartlead as well; any other tag stays in the app.
@@ -295,20 +297,14 @@ export function ReviewView({ initial, clients }: { initial: ReviewData; clients:
     <div className="flex flex-col gap-3" style={{ opacity: loading ? 0.6 : 1, transition: "opacity 120ms" }}>
       <div className="table-bar">
         <div className="view-tabs" role="tablist" aria-label="Domains">
-          <button type="button" role="tab" aria-selected={scope === "active"} className={scope === "active" ? "is-on" : undefined} onClick={() => { setScope("active"); setSelected(new Set()); setOnly(""); }}
-            title="Active domains still in Smartlead">
-            Active <span>{int(scopeCount.active)}</span>
+          <button type="button" role="tab" aria-selected={scope === "current"} className={scope === "current" ? "is-on" : undefined} onClick={() => { setScope("current"); setSelected(new Set()); setOnly(""); }}
+            title={`Connected in Smartlead with a live order, plus domains in their grace period. ${STANDING_META.grace.hint}`}>
+            Active <span>{int(scopeCount.current)}</span>
           </button>
-          <button type="button" role="tab" aria-selected={scope === "other"} className={scope === "other" ? "is-on" : undefined} onClick={() => { setScope("other"); setSelected(new Set()); setOnly(""); }}
-            title="Warming, draining, and any other domain that sent in this range, still in Smartlead">
-            Not active <span>{int(scopeCount.other)}</span>
+          <button type="button" role="tab" aria-selected={scope === "ended"} className={scope === "ended" ? "is-on" : undefined} onClick={() => { setScope("ended"); setSelected(new Set()); setOnly(""); }}
+            title="Domains that have numbers in this range but aren't active today: disconnected, replaced, cancelled, expired or deleted in Smartlead">
+            Disconnected or replaced <span>{int(scopeCount.ended)}</span>
           </button>
-          {scopeCount.gone || scope === "gone" ? (
-            <button type="button" role="tab" aria-selected={scope === "gone"} className={scope === "gone" ? "is-on" : undefined} onClick={() => { setScope("gone"); setSelected(new Set()); setOnly(""); }}
-              title="Every inbox was deleted in Smartlead. Kept out of the other tabs: their numbers are history">
-              Deleted in Smartlead <span>{int(scopeCount.gone)}</span>
-            </button>
-          ) : null}
         </div>
         <RangePicker from={data.from} to={data.to} today={data.today} loading={loading} onChange={load} />
         <span className="rv-client-pick">
@@ -363,6 +359,8 @@ export function ReviewView({ initial, clients }: { initial: ReviewData; clients:
         </div>
       </section>
 
+      {scope === "current" ? <Findings domains={scoped} compareLink /> : null}
+
       <div className="table-wrap rv-board">
         <div className="rv-board-head">
           <div className="view-tabs rv-calls" role="tablist" aria-label="Call">
@@ -375,6 +373,7 @@ export function ReviewView({ initial, clients }: { initial: ReviewData; clients:
           </div>
           <div className="rv-board-tools">
             <SlidersHorizontal size={14} className="text-faint flex-none" aria-hidden />
+            <FacetSelect label="Filter by provider" all="All providers" items={facets.providers} value={provider} onPick={setProvider} />
             <FacetSelect label="Filter by ESP" all="All ESPs" items={facets.esps} value={esp} onPick={setEsp} />
             <FacetSelect label="Filter by TLD" all="All TLDs" items={facets.tlds} value={tld} onPick={setTld} />
             <SignalMenu counts={facets.sigs} value={signals} onToggle={toggleSignal} onClear={() => setSignals(new Set())} />
@@ -412,7 +411,9 @@ export function ReviewView({ initial, clients }: { initial: ReviewData; clients:
                 <SortTh k="client" sort={sort} onSort={sortBy}>Client</SortTh>
                 <SortTh k="verdict" sort={sort} onSort={sortBy}>Call</SortTh>
                 <SortTh k="signals" sort={sort} onSort={sortBy} title="Strikes first: spam, blocklisted, low reputation, no reply, no response">Why</SortTh>
+                <SortTh k="provider" sort={sort} onSort={sortBy} title="Where the inboxes come from: Hypertide for Outlook, Icemail for Google">Provider</SortTh>
                 <SortTh k="esp" sort={sort} onSort={sortBy}>ESP</SortTh>
+                <SortTh k="age" sort={sort} onSort={sortBy} num title="Days since the domain was bought">Age</SortTh>
                 <th title="Connected, disconnected or deleted in Smartlead now, as of the last sync">Smartlead now</th>
                 <SortTh k="sent" sort={sort} onSort={sortBy} num>Sent</SortTh>
                 <SortTh k="replies" sort={sort} onSort={sortBy} num title="Every reply, out of office included">Replies</SortTh>
@@ -447,7 +448,9 @@ export function ReviewView({ initial, clients }: { initial: ReviewData; clients:
                         <span className="rv-why">{r.why}</span>
                       </span>
                     </td>
+                    <td>{r.provider ? <span className={`badge${r.provider === "Icemail" ? " tone-violet" : ""}`}>{r.provider}</span> : <span className="zero">—</span>}</td>
                     <td><EspBadge esp={r.esp} /></td>
+                    <td className="is-num" title={r.connectedDays != null ? `${int(r.connectedDays)} days in Smartlead` : undefined}>{r.ageDays != null ? `${int(r.ageDays)}d` : <span className="zero">—</span>}</td>
                     <td><SlBadge c={{ slConnected: r.inboxes, slDisconnected: r.disconnected, slRemoved: r.removed }} /></td>
                     <td className="is-num">{r.sent ? int(r.sent) : <span className="zero">0</span>}</td>
                     <td className="is-num">{r.replies ? int(r.replies) : <span className={r.sent >= RULES.silentSent ? "metric is-bad" : "zero"}>0</span>}</td>
@@ -484,19 +487,20 @@ export function ReviewView({ initial, clients }: { initial: ReviewData; clients:
           <div className="seg" role="group" aria-label="Group by">
             <button type="button" aria-pressed={groupBy === "client"} onClick={() => setGroupBy("client")}>By client</button>
             <button type="button" aria-pressed={groupBy === "tag"} onClick={() => setGroupBy("tag")}>By Smartlead tag</button>
+            <button type="button" aria-pressed={groupBy === "provider"} onClick={() => setGroupBy("provider")}>By provider</button>
             <button type="button" aria-pressed={groupBy === "esp"} onClick={() => setGroupBy("esp")}>By ESP</button>
             <button type="button" aria-pressed={groupBy === "tld"} onClick={() => setGroupBy("tld")}>By TLD</button>
           </div>
           <span className="card-sub">{groupBy === "client"
             ? "Worst first. Click a client to see only its domains; the arrows up top step through them"
             : groupBy === "tag" ? "Worst first. A domain with two tags counts under both. Click a tag to see only its domains"
-            : `Worst first. Click a${groupBy === "esp" ? "n ESP" : " TLD"} to see only its domains`}</span>
+            : `Worst first. Click a${groupBy === "esp" ? "n ESP" : groupBy === "provider" ? " provider" : " TLD"} to see only its domains`}</span>
         </div>
         <div className="table-scroll" style={{ maxHeight: 320 }}>
           <table className="data-table rv-clients">
             <thead>
               <tr>
-                <th>{groupBy === "client" ? "Client" : groupBy === "tag" ? "Smartlead tag" : groupBy === "esp" ? "ESP" : "TLD"}</th>
+                <th>{groupBy === "client" ? "Client" : groupBy === "tag" ? "Smartlead tag" : groupBy === "esp" ? "ESP" : groupBy === "provider" ? "Provider" : "TLD"}</th>
                 <th className="is-num">Domains</th>
                 {LISTS.map((v) => <th key={v} className="is-num" title={VERDICT_META[v].hint}>{VERDICT_META[v].label}</th>)}
                 <th className="is-num">Sent</th>
@@ -511,7 +515,7 @@ export function ReviewView({ initial, clients }: { initial: ReviewData; clients:
                 return (
                 <tr key={c.id || "none"} data-active={on} className="is-clickable" onClick={() => groupPick(c)}>
                   <td>{groupBy === "client" ? <ClientCell name={c.name} hue={c.hue} /> : groupBy === "esp" ? <EspBadge esp={c.id === "Unknown" ? null : c.id.toUpperCase()} />
-                    : groupBy === "tld" ? <span className="strong">{c.name}</span> : c.id ? <span className="badge">{c.name}</span> : <span className="zero">No tag</span>}</td>
+                    : groupBy === "tld" || groupBy === "provider" ? <span className="strong">{c.name}</span> : c.id ? <span className="badge">{c.name}</span> : <span className="zero">No tag</span>}</td>
                   <td className="is-num">{int(c.domains)}</td>
                   {LISTS.map((v) => (
                     <td key={v} className="is-num">{c.counts[v] ? <span className={`rv-count tone-${VERDICT_META[v].tone}`}>{int(c.counts[v])}</span> : <span className="zero">0</span>}</td>

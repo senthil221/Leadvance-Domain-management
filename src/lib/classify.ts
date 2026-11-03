@@ -137,15 +137,34 @@ export function newText(raw: string) {
   return t.replace(/\s+/g, " ").trim();
 }
 
+// Where someone's own words end and their signature or legal footer begins. A
+// footer's "office hours are", "unsubscribe" or "do not reply" isn't what they said.
+const FOOTER = /\b(?:kind |best |warm |warmest |with )?regards\b|\bsincerely\b|\bcheers,|\bsent from my\b|\bget outlook for\b|\bconfidential(?:ity)? (?:notice|statement|disclaimer)\b|\bdisclaimer\b|\bthis (?:e-?mail|message|communication)(?: and any (?:files|attachments))?(?: \w+){0,4} (?:confidential|privileged|intended)\b|\bthe information (?:contained|in this)\b|\bif you (?:are not the intended|received this)\b/i;
+export function withoutFooter(text: string) {
+  const at = text.search(FOOTER);
+  return at >= 8 ? text.slice(0, at).trim() : text;
+}
+
+/** Negative ones the list below misses: said politely, or put off for later. */
+const SOFT_NO = [
+  /\b(?:we are|we're|i am|i'm) not (?:hiring|recruiting|buying|in the market|currently (?:looking|hiring|interested))\b/,
+  /\bnot (?:right now|for us|for me|something (?:we|i)(?:'re| are| am)?)\b/,
+  /\bno (?:thanks|thank you)\b|\b(?:we|i)(?:'ll| will) pass\b(?! (?:this|it|that|them|you|your|on|along))/,
+  /\b(?:we|i) (?:already )?(?:have|use|work with) (?:a|an|our) (?:\w+ ){0,2}(?:provider|vendor|partner|agency|supplier|solution)\b/,
+  /\bplease (?:do not|don't) (?:follow up|send|write)\b/,
+];
+
 export function classifyReply(body: string | null | undefined, subject?: string | null): ReplyClass {
-  const text = newText(body ?? "").toLowerCase();
-  const subj = (subject ?? "").toLowerCase();
+  const whole = newText(body ?? "").toLowerCase();
+  const text = withoutFooter(whole);
+  // The subject only counts when it's the reply's own: "Automatic reply: …". Re: repeats our subject line.
+  const subj = /^\s*(?:re|fw|fwd)\s*:/i.test(subject ?? "") ? "" : (subject ?? "").toLowerCase();
   const both = `${subj} ${text}`;
   if (OOO.some((r) => r.test(both))) return "ooo";
   if (AUTO.some((r) => r.test(both))) return "auto";
   if (UNSUBSCRIBE.some((r) => r.test(text))) return "unsubscribe";
   if (REFERRAL.some((r) => r.test(text))) return "referral";
   if (WRONG_PERSON.some((r) => r.test(text))) return "wrong_person";
-  if (NEGATIVE.some((r) => r.test(text))) return "negative";
+  if (NEGATIVE.some((r) => r.test(text)) || SOFT_NO.some((r) => r.test(text))) return "negative";
   return "human";
 }

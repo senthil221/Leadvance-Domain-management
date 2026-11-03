@@ -7,7 +7,7 @@ import type { Tone } from "./status";
 // Where a domain is in its life: sending, being set up, free in storage,
 // cooling down (in storage but used too recently to pick again), replaced
 // (draining or burned) or in recovery (resting, or in Hypertide's recovery pool).
-export type Life = "active" | "setup" | "free" | "cooling" | "replaced" | "recovery";
+export type Life = "active" | "setup" | "free" | "cooling" | "replaced" | "recovery" | "expired";
 export const LIFE: Record<Life, { label: string; tone: Tone }> = {
   active: { label: "Active", tone: "success" },
   setup: { label: "Setting up", tone: "info" },
@@ -15,14 +15,17 @@ export const LIFE: Record<Life, { label: string; tone: Tone }> = {
   cooling: { label: "Cooling down", tone: "info" },
   replaced: { label: "Replaced", tone: "warning" },
   recovery: { label: "Recovery", tone: "violet" },
+  expired: { label: "Expired", tone: "danger" },
 };
-export const LIFE_ORDER: Life[] = ["active", "setup", "free", "cooling", "replaced", "recovery"];
+export const LIFE_ORDER: Life[] = ["active", "setup", "free", "cooling", "replaced", "recovery", "expired"];
 /** The Inventory tabs; setting-up domains show under All. */
-export const LIFE_TABS: Life[] = ["active", "free", "cooling", "replaced", "recovery"];
+export const LIFE_TABS: Life[] = ["active", "free", "cooling", "replaced", "recovery", "expired"];
 
 export const inRecoveryPool = (payment: string | null | undefined) => /recovery/i.test(payment ?? "");
 
-export function lifeOf(d: Pick<DomainRow, "status" | "htPayment"> & { coolingUntil?: Date | string | null }): Life {
+export function lifeOf(d: Pick<DomainRow, "status" | "htPayment"> & { coolingUntil?: Date | string | null; expired?: boolean }): Life {
+  // Past its renewal date, it's expired whatever else it says: never Active or Free.
+  if (d.expired) return "expired";
   if (d.status === "in_storage") return d.coolingUntil ? "cooling" : "free";
   if (d.status === "provisioning" || d.status === "warming") return "setup";
   if (d.status === "active") return "active";

@@ -6,8 +6,8 @@ import { slState, slText } from "../src/lib/smartlead-state";
 
 const domain = (over: Partial<ReviewDomain> = {}): ReviewDomain => ({
   id: "d1", name: "welvion.com", status: "active", clientId: null, clientName: "Qualifi", clientHue: null, tags: [],
-  inboxes: 10, disconnected: 0, removed: 0, blacklisted: 0, sent: 800, replies: 4, human: 1, bounces: 20, causes: {},
-  prevSent: 800, prevHuman: 2, prevSpam: 2,
+  inboxes: 10, disconnected: 0, removed: 0, blacklisted: 0, sent: 800, replies: 4, human: 1, bounces: 20, ooo: 1, auto: 0, negative: 1, causes: {},
+  prevSent: 800, prevHuman: 2, prevReplies: 3, prevBounces: 10, prevSpam: 2, ageDays: 200, connectedDays: 120, provider: "Hypertide", standing: "active", graceLeft: null,
   rep: 98, lowRepInboxes: 0, quietDays: 1, neverReplied: false, sentSinceReply: 100, slTags: [], esp: "OUTLOOK", tld: "com", ht: "live", replacedBy: null, ...over,
 });
 
@@ -65,7 +65,7 @@ describe("weekly review calls", () => {
     expect(j.why).toBe("Every inbox (14 inboxes) was deleted in Smartlead");
     // Some inboxes still there: judged as usual.
     expect(judge(domain({ inboxes: 0, disconnected: 3, removed: 11 })).verdict).not.toBe("gone");
-    expect(sheetRows([judge(domain({ inboxes: 0, disconnected: 0, removed: 14 }))]).split("\n")[1].split("\t").at(-1)).toBe("Deleted in Smartlead");
+    expect(sheetRows([judge(domain({ inboxes: 0, disconnected: 0, removed: 14 }))]).split("\n")[1].split("\t").at(-3)).toBe("Deleted in Smartlead");
   });
 
   it("rests a domain with spam rejections and no human replies", () => {
@@ -143,12 +143,12 @@ describe("weekly review calls", () => {
     const c = judge(domain({ ...gone, ht: "cancelled" }));
     expect(c.verdict).toBe("drop");
     expect(c.why).toBe("Cancelled on Hypertide, 50 of 50 inboxes disconnected");
-    expect(c.chips[0]).toMatchObject({ key: "ended", text: "HT cancelled", tone: "danger" });
+    expect(c.chips[0]).toMatchObject({ key: "ended", text: "Hypertide cancelled", tone: "danger" });
     const r = judge(domain({ ...gone, ht: "replaced", replacedBy: "newco.com" }));
     expect([r.verdict, r.chips[0].text]).toEqual(["drop", "Replaced → newco.com"]);
     // Missing from Hypertide's order list isn't proof: it misses live domains too.
     const none = judge(domain({ ...gone, ht: "none" }));
-    expect([none.verdict, none.why, none.chips[0].text]).toEqual(["dead", "No Hypertide order on this account, 50 of 50 inboxes disconnected", "No HT order"]);
+    expect([none.verdict, none.why, none.chips[0].text]).toEqual(["dead", "No Hypertide order on this account, 50 of 50 inboxes disconnected", "No Hypertide order"]);
     expect(judge(domain({ ...gone, ht: "gone" })).verdict).toBe("dead");
     expect(judge(domain({ ...gone, ht: "live" })).verdict).toBe("dead");
     expect(judge(domain({ ...gone, ht: null })).verdict).toBe("dead");

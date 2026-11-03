@@ -41,10 +41,10 @@ async function InventoryContent() {
   await getCurrentUser();
   const [{ accounts, tlds, renewals, totals }, domains, clients, ht] = await Promise.all([getInventory(), listDomains(), listClients(), getHypertideSummary()]);
   const money = (c: number) => `${(c / 100).toLocaleString("en-US", { maximumFractionDigits: 0 })}`;
-  const life = { active: 0, setup: 0, free: 0, cooling: 0, replaced: 0, recovery: 0 };
+  const life = { active: 0, setup: 0, free: 0, cooling: 0, replaced: 0, recovery: 0, expired: 0 };
   for (const d of domains) life[lifeOf(d)]++;
-  const activeCapacity = domains.filter((d) => d.status === "active").reduce((a, d) => a + d.capacity, 0);
-  const activeInboxes = domains.filter((d) => d.status === "active").reduce((a, d) => a + d.inboxCount, 0);
+  const activeCapacity = domains.filter((d) => lifeOf(d) === "active").reduce((a, d) => a + d.capacity, 0);
+  const activeInboxes = domains.filter((d) => lifeOf(d) === "active").reduce((a, d) => a + d.inboxCount, 0);
   const weekly = ht.replacedLast28 / 4;
   const weeksLeft = weekly > 0 ? life.free / weekly : null;
   const htConnected = Boolean(process.env.HYPERTIDE_API_KEY);
@@ -78,7 +78,10 @@ async function InventoryContent() {
         <div className="stat">
           <span className="stat-label">Owned · yearly cost</span>
           <span className="stat-value">{int(totals.owned)}</span>
-          <span className="stat-foot">{totals.annualCents ? `${money(totals.annualCents)} a year, excluding replaced` : `across ${accounts.length} registrar account${accounts.length === 1 ? "" : "s"}`}</span>
+          <span className="stat-foot">
+            {totals.annualCents ? `${money(totals.annualCents)} a year, excluding replaced` : `across ${accounts.length} registrar account${accounts.length === 1 ? "" : "s"}`}
+            {totals.expired ? <> · <Link href="/inventory?view=expired#domains" className="hover:underline">{int(totals.expired)} expired</Link></> : null}
+          </span>
         </div>
       </section>
 
@@ -191,6 +194,7 @@ function BreakdownCard({ id, title, rows, cooling, hint }: { id: string; title: 
               <th className="is-num" title="In storage and rested: ready to use">Free</th>
               <th className="is-num" title={`In storage but used in the last ${cooling} days (Hypertide order, sends or replacement): not offered as a replacement yet`}>Cooling</th>
               <th className="is-num" title="Draining, burned or resting">Replaced</th>
+              <th className="is-num" title="Past their expiry date. Not counted anywhere else in this table">Expired</th>
               <th className="is-num" title="Renews in the next 30 days (replaced domains not counted)">Renew 30d</th>
               {showCost ? <th className="is-num">Per year</th> : null}
             </tr>
@@ -209,6 +213,7 @@ function BreakdownCard({ id, title, rows, cooling, hint }: { id: string; title: 
                 <td className="is-num">{cell(r, r.free, "free")}</td>
                 <td className="is-num">{cell(r, r.cooling, "cooling")}</td>
                 <td className="is-num">{cell(r, r.replaced, "replaced")}</td>
+                <td className="is-num">{cell(r, r.expired, "expired")}</td>
                 <td className="is-num">{r.expiring30 ? <span className="text-warning-ink">{int(r.expiring30)}</span> : <span className="zero">0</span>}</td>
                 {showCost ? <td className="is-num">{r.annualCents ? `$${int(Math.round(r.annualCents / 100))}` : <span className="zero">—</span>}</td> : null}
               </tr>
@@ -224,6 +229,7 @@ function BreakdownCard({ id, title, rows, cooling, hint }: { id: string; title: 
                 <td className="is-num">{int(sum("free"))}</td>
                 <td className="is-num">{int(sum("cooling"))}</td>
                 <td className="is-num">{int(sum("replaced"))}</td>
+                <td className="is-num">{int(sum("expired"))}</td>
                 <td className="is-num">{int(sum("expiring30"))}</td>
                 {showCost ? <td className="is-num">${int(Math.round(sum("annualCents") / 100))}</td> : null}
               </tr>

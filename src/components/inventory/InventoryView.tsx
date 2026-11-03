@@ -273,7 +273,7 @@ export function InventoryView({ domains, clients }: { domains: DomainRow[]; clie
                   {on("capacity") ? <Th k="capacity" num>Per day</Th> : null}
                   {on("age") ? <Th k="age" num>Active</Th> : null}
                   {on("bought") ? <Th k="purchasedAt" num>Bought</Th> : null}
-                  {on("renews") ? <Th k="expiresAt" num>Renews</Th> : null}
+                  {on("renews") ? <Th k="expiresAt" num>{view === "expired" ? "Expired on" : "Renews"}</Th> : null}
                 </tr>
               </thead>
               <tbody>
@@ -361,7 +361,7 @@ export function InventoryView({ domains, clients }: { domains: DomainRow[]; clie
                       <td className="is-num text-muted">{d.purchasedAt ? shortDate(d.purchasedAt) : <span className="zero">—</span>}</td>
                       ) : null}
                       {on("renews") ? (
-                      <td className="is-num text-muted">{d.expiresAt ? shortDate(d.expiresAt) : <span className="zero">—</span>}</td>
+                      <td className="is-num text-muted" title={d.expired && d.registrarStatus ? `The registrar says: ${d.registrarStatus}` : undefined}>{d.expiresAt ? shortDate(d.expiresAt) : <span className="zero">—</span>}{d.expired && /redemption/i.test(d.registrarStatus ?? "") ? <> <Badge tone="warning">redemption</Badge></> : null}</td>
                       ) : null}
                     </tr>
                   );

@@ -21,6 +21,51 @@ export const BOUNCE_META: Record<BounceReason, { label: string; tone: Tone; hint
   other: { label: "Other", tone: "faint", hint: "Couldn't tell why from the bounce notice" },
 };
 export const BOUNCE_ORDER: BounceReason[] = ["sender", "dns", "blocklist", "spam", "missing", "restricted", "policy", "full", "temporary", "other"];
+export const CAUSE_COLOR: Record<BounceReason, string> = {
+  sender: "var(--danger-solid)", dns: "color-mix(in srgb, var(--danger-solid) 70%, var(--violet-solid))",
+  blocklist: "color-mix(in srgb, var(--danger-solid) 65%, var(--warning-solid))", spam: "var(--warning-solid)",
+  missing: "var(--info-solid)", restricted: "var(--line-strong)", policy: "color-mix(in srgb, var(--faint) 70%, transparent)",
+  full: "var(--line-strong)", temporary: "var(--line)", other: "var(--line)",
+};
+
+// Status codes that mean one thing whatever words surround them. Generic ones
+// (5.7.1 above all, used for spam, blocklists and policy alike) aren't here:
+// their wording decides. Enhanced codes follow RFC 3463 plus Microsoft's and Google's own.
+const CODES: [RegExp, BounceReason][] = [
+  [/^[45]\.2\.2$/, "full"],
+  [/^5\.7\.(705|700|750|708|233)$|^5\.1\.8$|^5\.4\.5$/, "sender"],
+  [/^5\.7\.(2[3-7]|30|509|515)$|^5\.1\.7$/, "dns"],
+  [/^5\.7\.(511|6[0-4]\d)$/, "blocklist"],
+  [/^[45]\.7\.(350|28|367)$/, "spam"],
+  [/^5\.7\.(129|13[1-4]|52[01])$/, "restricted"],
+  [/^5\.1\.(0|1|2|3|6|10)$|^5\.2\.1$|^5\.4\.(1|4|310|312|316)$/, "missing"],
+];
+
+/**
+ * The code in a notice: the enhanced status (5.1.1) when there is one, else the
+ * three-digit reply (550). Reads the first one that's the server's own, not an
+ * address, version or IP.
+ */
+export function bounceCode(text: string | null | undefined): string | null {
+  const t = (text ?? "").replace(/\[[\d.:a-f]+\]/gi, " ");
+  const enhanced = t.match(/(?<![\w.])([45]\.\d{1,3}\.\d{1,3})(?![\d.])/);
+  if (enhanced) return enhanced[1];
+  // A bare 450 in a sentence could be anything ("limit of 450 recipients"): only where a server would put it.
+  const reply = t.match(/(?:^|[:;'"(#=]\s*|\b(?:error|code|smtp|reply|status)\s+)([45]\d\d)(?=[\s\-:,.]|$)/i);
+  return reply ? reply[1] : null;
+}
+
+/**
+ * Host names say nothing about why a mail bounced, but plenty of filters are
+ * called something like mx.spamexperts.com or d123.barracudanetworks.com, so
+ * "550 no such user" from them read as spam. Block list zones stay, they're the reason.
+ */
+const LIST_ZONE = /spamhaus|spamcop|sorbs|uceprotect|invaluement|mailspike|psbl|uribl|surbl|barracudacentral|dnsbl|\.rbl\./i;
+function withoutHosts(t: string) {
+  return t
+    .replace(/[\w.+'-]+@[\w-]+(\.[\w-]+)+/g, " ")
+    .replace(/\b(?:https?:\/\/)?[a-z0-9][\w-]*(\.[a-z0-9][\w-]*)+(?:\/[^\s)]*)?/gi, (h) => (/^\d+(\.\d+)*$/.test(h) || LIST_ZONE.test(h) ? h : " "));
+}
 
 // First match wins, so the specific causes come before the catch-alls (5.7.x).
 const RULES: [BounceReason, RegExp][] = [
@@ -37,9 +82,9 @@ const RULES: [BounceReason, RegExp][] = [
     /has no a, aaaa,? or mx (dns )?records|(not|weren'?t) recognized as a valid sender|trusted location|spf validation error|misconfigured settings at|sender (address rejected: )?domain (does not exist|not found)|unknown sender domain/,
   ].map((r) => r.source).join("|"), "i")],
   ["blocklist", /spamhaus|spamcop|barracuda|\bsorbs\b|uceprotect|invaluement|mailspike|\bpsbl\b|uribl|surbl|\bdbl\d*\b|blocked using|dnsbl|\brbl\b|black ?list|block ?list|badmailfrom|banned sending ip|banned sender|\bs3150\b|\bs3140\b|\b5\.7\.(511|6[0-4]\d)\b/i],
-  ["spam", /spam|unsolicited|junk|reputation|bulk (mail|sender)|phishing|content (rejected|filter)|\b[45]\.7\.(350|28|367)\b/i],
+  ["spam", /spam|unsolicited|junk|reputation|complaints|bulk (mail|sender)|phishing|content (rejected|filter)|\b[45]\.7\.(350|28|367)\b/i],
   ["restricted", /only accepts? (mail|messages) from|allowed senders list|don'?t have permission to send|isn'?t set up to receive messages|sender not allowed|couldn'?t be forwarded|group you tried to contact|permission to post|auto.?forward|restricted to internal|distribution list|\b5\.7\.(129|13[1-4]|52[01])\b/i],
-  ["missing", /wasn'?t found|does(n'?t| not) exist|no such (user|recipient|mailbox)|user unknown|unknown (user|recipient)|recipient (address )?(not found|rejected)|address rejected|invalid (recipient|address|mailbox)|mailbox (not found|unavailable)|no longer with|account (that you tried to reach )?(has been |is )?(disabled|inactive)|domain (name )?not found|no mx|invalid mx|aren'?t set up correctly|nxdomain|\b5\.1\.(0|1|2|3|6|10)\b/i],
+  ["missing", /wasn'?t found|(couldn'?t|could not) be found|address not found|does(n'?t| not) exist|no such (user|recipient|mailbox)|user unknown|unknown (user|recipient)|recipient (address )?(not found|rejected)|address rejected|invalid (recipient|address|mailbox)|mailbox (not found|unavailable)|no longer with|account (that you tried to reach )?(has been |is )?(disabled|inactive)|domain (name )?not found|no mx|invalid mx|aren'?t set up correctly|nxdomain|\b5\.1\.(0|1|2|3|6|10)\b/i],
   ["policy", /block(ed)?\b|policy|administrative prohibition|access denied|not permitted|not authori[sz]ed|sender (denied|rejected)|refused|rejected (by|due|for)|\b5\.7\.\d+\b/i],
   ["temporary", /temporar|didn'?t respond|try again|timed? ?out|deferred|greylist|graylist|\b4\.\d\.\d+\b/i],
 ];
@@ -54,7 +99,12 @@ export function trimNotice(text: string): string {
 export function bounceReason(text: string | null | undefined, senderOriginated = false): BounceReason {
   const t = text ? trimNotice(text).trim() : "";
   if (!t) return senderOriginated ? "sender" : "other";
-  for (const [reason, re] of RULES) if (re.test(t)) return reason;
+  const code = bounceCode(t);
+  if (code) for (const [re, reason] of CODES) if (re.test(code)) return reason;
+  const words = withoutHosts(t);
+  // A try-again code is temporary unless its words blame our reputation, as Gmail's 4.7.28 and Yahoo's TSS04 do.
+  if (code && /^4/.test(code) && !/spam|unsolicited|reputation|complaints|block ?list|black ?list|dnsbl/i.test(words)) return "temporary";
+  for (const [reason, re] of RULES) if (re.test(words)) return reason;
   return "other";
 }
 

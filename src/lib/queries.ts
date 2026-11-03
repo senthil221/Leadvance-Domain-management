@@ -94,10 +94,10 @@ export async function getOverview() {
   const [[totals], attention, activity, fleetRows, [rates]] = await Promise.all([
     sql<{ active: number; storage: number; warming: number; retiredLast28: number; storageLow: number; flagged: number }[]>`
       select
-        (select count(distinct a.domain_id)::int from alerts a join domains d on d.id = a.domain_id
-          where a.status = 'open' and d.status in ('active', 'warming')) as flagged,
+        (select count(distinct a.domain_id)::int from alerts a join domain_standing st on st.domain_id = a.domain_id
+          where a.status = 'open' and st.current) as flagged,
         count(*) filter (where status = 'active')::int as active,
-        count(*) filter (where status = 'in_storage')::int as storage,
+        count(*) filter (where status = 'in_storage' and (expires_at is null or expires_at >= current_date))::int as storage,
         count(*) filter (where status in ('provisioning', 'warming'))::int as warming,
         (select count(*)::int from domain_status_history
           where to_status = 'draining' and at > now() - interval '28 days') as retired_last28,
@@ -112,7 +112,8 @@ export async function getOverview() {
       join health_rules r on r.id = a.rule_id
       left join clients c on c.id = d.client_id
       left join domain_health_7d h on h.domain_id = d.id
-      where a.status = 'open' and d.status in ('active', 'warming')
+      join domain_standing st on st.domain_id = d.id
+      where a.status = 'open' and st.current
       order by (r.severity = 'critical') desc, a.opened_at desc
       limit 8`,
     sql<ActivityRow[]>`
@@ -124,7 +125,8 @@ export async function getOverview() {
     sql<{ clientId: string; name: string; hue: number; status: DomainStatus; n: number }[]>`
       select c.id as client_id, c.name, c.hue, d.status, count(*)::int as n
       from domains d join clients c on c.id = d.client_id
-      where d.status in ('provisioning', 'warming', 'active', 'draining')
+      join domain_standing st on st.domain_id = d.id
+      where d.status = 'provisioning' or (st.current and d.status in ('warming', 'active', 'draining'))
       group by c.id, c.name, c.hue, d.status`,
     sql<{ sent7: number; human7: number; sentPrev: number; humanPrev: number; bounces7: number }[]>`
       select
@@ -216,6 +218,9 @@ export type DomainRow = {
   lastUsedOn: Date | null;
   /** A free domain used too recently to pick again, until this day. */
   coolingUntil: Date | null;
+  /** Past its renewal date, and what the registrar calls it (redemption…). */
+  expired: boolean;
+  registrarStatus: string | null;
   /** Live Icemail mailboxes on it, what they cost a month and when the next one bills. */
   icemailMailboxes: number | null;
   icemailMonthly: number | null;
@@ -243,6 +248,7 @@ export async function listDomains() {
       ) as spark,
       d.tags, grace_days_left(d.status, d.draining_since) as grace_days_left, d.nameservers, d.draining_since, d.burned_at, d.cost_cents, d.registrar_api_access as api_access, d.nameservers_checked_at, d.nameservers_answering,
       d.last_used_on, case when d.status = 'in_storage' and d.last_used_on + reuse_after_days() > current_date then d.last_used_on + reuse_after_days() end as cooling_until,
+      coalesce(d.expires_at < current_date, false) as expired, d.registrar_status,
       ho.status as ht_order_status, ho.payment_status as ht_payment,
       nr.status as ns_request_status, nr.message as ns_request_message, nr.target as ns_request_target,
       rp.new_domain_id as replaced_by_id, rp.name as replaced_by_name, rp.created_at as replaced_at,
@@ -421,7 +427,7 @@ export async function listStorageCandidates(limit = 200) {
   return sql<StorageCandidate[]>`
     select d.id, d.name, d.tld, v.name as registrar, d.purchased_at, d.last_used_on
     from domains d left join vendors v on v.id = d.registrar_id
-    where d.status = 'in_storage' and (d.last_used_on is null or d.last_used_on + reuse_after_days() <= current_date)
+    where d.status = 'in_storage' and (d.expires_at is null or d.expires_at >= current_date) and (d.last_used_on is null or d.last_used_on + reuse_after_days() <= current_date)
     order by (d.last_used_on is not null), (d.registrar_id is null), d.purchased_at nulls last, d.created_at, d.name
     limit ${limit}`;
 }
@@ -435,19 +441,21 @@ export type RenewalRow = { id: string; name: string; status: DomainStatus; regis
 /** Where domains stand, counted per group (registrar account or TLD). */
 export type Breakdown = {
   key: string; label: string; sub: string | null; total: number; active: number; setup: number;
-  free: number; cooling: number; replaced: number; usedBefore: number; expiring30: number; annualCents: number;
+  free: number; cooling: number; replaced: number; usedBefore: number; expired: number; expiring30: number; annualCents: number;
 };
 
+// An expired domain counts only as expired, never as owned, active or free.
 const breakdownCounts = (s: typeof sql) => s`
-  count(*)::int as total,
-  count(*) filter (where d.status = 'active')::int as active,
-  count(*) filter (where d.status in ('provisioning', 'warming'))::int as setup,
-  count(*) filter (where d.status = 'in_storage' and (d.last_used_on is null or d.last_used_on + reuse_after_days() <= current_date))::int as free,
-  count(*) filter (where d.status = 'in_storage' and d.last_used_on + reuse_after_days() > current_date)::int as cooling,
-  count(*) filter (where d.status in ('draining', 'burned', 'resting'))::int as replaced,
-  count(*) filter (where d.status = 'in_storage' and d.last_used_on is not null)::int as used_before,
+  count(*) filter (where d.expires_at is null or d.expires_at >= current_date)::int as total,
+  count(*) filter (where d.status = 'active' and (d.expires_at is null or d.expires_at >= current_date))::int as active,
+  count(*) filter (where d.status in ('provisioning', 'warming') and (d.expires_at is null or d.expires_at >= current_date))::int as setup,
+  count(*) filter (where d.status = 'in_storage' and (d.expires_at is null or d.expires_at >= current_date) and (d.last_used_on is null or d.last_used_on + reuse_after_days() <= current_date))::int as free,
+  count(*) filter (where d.status = 'in_storage' and (d.expires_at is null or d.expires_at >= current_date) and d.last_used_on + reuse_after_days() > current_date)::int as cooling,
+  count(*) filter (where d.status in ('draining', 'burned', 'resting') and (d.expires_at is null or d.expires_at >= current_date))::int as replaced,
+  count(*) filter (where d.status = 'in_storage' and (d.expires_at is null or d.expires_at >= current_date) and d.last_used_on is not null)::int as used_before,
+  count(*) filter (where d.expires_at < current_date)::int as expired,
   count(*) filter (where d.expires_at between current_date and current_date + 30 and d.status not in ('burned', 'resting'))::int as expiring30,
-  coalesce(sum(d.cost_cents) filter (where d.status not in ('burned', 'resting')), 0)::int as annual_cents`;
+  coalesce(sum(d.cost_cents) filter (where d.status not in ('burned', 'resting') and (d.expires_at is null or d.expires_at >= current_date)), 0)::int as annual_cents`;
 
 export async function getInventory() {
   const [accounts, tlds, renewals, [totals]] = await Promise.all([
@@ -463,11 +471,13 @@ export async function getInventory() {
       from domains d left join vendors v on v.id = d.registrar_id left join clients c on c.id = d.client_id
       where d.expires_at between current_date and current_date + 60
       order by d.expires_at, d.name`,
-    sql<{ owned: number; storage: number; cooling: number; reuseAfterDays: number; annualCents: number; retiredRenewing: number }[]>`
-      select count(*)::int as owned, count(*) filter (where status = 'in_storage')::int as storage,
-        count(*) filter (where status = 'in_storage' and last_used_on + reuse_after_days() > current_date)::int as cooling,
+    sql<{ owned: number; expired: number; storage: number; cooling: number; reuseAfterDays: number; annualCents: number; retiredRenewing: number }[]>`
+      select count(*) filter (where expires_at is null or expires_at >= current_date)::int as owned,
+        count(*) filter (where expires_at < current_date)::int as expired,
+        count(*) filter (where status = 'in_storage' and (expires_at is null or expires_at >= current_date))::int as storage,
+        count(*) filter (where status = 'in_storage' and (expires_at is null or expires_at >= current_date) and last_used_on + reuse_after_days() > current_date)::int as cooling,
         reuse_after_days() as reuse_after_days,
-        coalesce(sum(cost_cents) filter (where status not in ('burned', 'resting')), 0)::int as annual_cents,
+        coalesce(sum(cost_cents) filter (where status not in ('burned', 'resting') and (expires_at is null or expires_at >= current_date)), 0)::int as annual_cents,
         count(*) filter (where status in ('burned', 'resting') and auto_renew is not false and expires_at between current_date and current_date + 60)::int as retired_renewing
       from domains`,
   ]);
@@ -640,6 +650,8 @@ export type InboxListRow = InboxRow & {
   domainOrder: OrderState | null; domainOrderStatus: string | null; domainProvider: string | null;
   /** All the domain's inboxes in Smartlead (not deleted), and how many are disconnected, whatever a view shows. */
   domainInboxes: number; domainDisconnected: number;
+  /** Active, in grace, or still paid for: everything else stays out of the default view. */
+  domainInScope: boolean;
 };
 
 /**
@@ -711,8 +723,10 @@ export async function listInboxes() {
       d.dns_spf, d.dns_dkim, d.dns_dmarc, d.dns_mx, d.dns_checked_at, d.nameservers_answering as ns_answering,
       d.blacklist_domain_count as bl_domain, d.blacklist_ip_count as bl_ip, d.blacklist_listings as bl_listings, d.blacklist_checked_at as bl_checked_at,
       ord.state as domain_order, ord.order_status as domain_order_status, ord.provider as domain_provider,
-      dom.n as domain_inboxes, dom.disconnected as domain_disconnected
+      dom.n as domain_inboxes, dom.disconnected as domain_disconnected,
+      coalesce(st.current or st.order_live, false) as domain_in_scope
     from inboxes i join domains d on d.id = i.domain_id left join clients c on c.id = d.client_id
+    left join domain_standing st on st.domain_id = d.id
     left join ev on ev.inbox_id = i.id
     left join camp on camp.inbox_id = i.id
     left join ord on ord.domain_id = d.id
@@ -750,6 +764,8 @@ export async function listSendingPlans() {
 // ---------------------------------------------------------------------------
 
 export type StatDomain = {
+  /** Active or in its grace period today, and if not, why. */
+  current: boolean; standing: import("./review").Standing | null;
   id: string; name: string; status: DomainStatus; clientId: string | null; clientName: string | null; clientHue: number | null;
   tags: string[]; inboxes: number; capacity: number;
   /** Sender names on the domain's connected inboxes, and their mail provider (Outlook, Google, SMTP). */
@@ -790,9 +806,10 @@ export async function getStats(from: string, to: string): Promise<StatsData> {
           where i.domain_id = d.id and i.status <> 'removed' and trim(t) <> ''
             and lower(trim(t)) <> all (select lower(dt) from unnest(coalesce(d.tags, '{}')) dt) group by 1) x) as all_tags,
         coalesce(p.sent, 0) as prev_sent, coalesce(p.replies, 0) as prev_replies, coalesce(p.human, 0) as prev_human, coalesce(p.bounces, 0) as prev_bounces,
-        sl.sl_connected, sl.sl_disconnected, sl.sl_removed
+        sl.sl_connected, sl.sl_disconnected, sl.sl_removed, coalesce(st.current, false) as current, st.standing
       from domains d cross join r
       left join clients c on c.id = d.client_id
+      left join domain_standing st on st.domain_id = d.id
       left join lateral (
       select count(*) filter (where i.status = 'connected')::int as sl_connected,
         count(*) filter (where i.status = 'disconnected')::int as sl_disconnected,
@@ -879,8 +896,10 @@ export type EventRow = {
   bounceRemote: string | null;
   /** Why it bounced, worked out when it arrived (bounces only; older ones until the bounce_causes job reaches them). */
   bounceCause: import("./bounces").BounceReason | null;
+  /** Is the sending domain active or in its grace period today? */
+  current: boolean;
 };
-export type EventsData = { from: string; to: string; today: string; events: EventRow[]; sent: Record<string, number> };
+export type EventsData = { from: string; to: string; today: string; events: EventRow[]; sent: Record<string, number>; currentDomains: string[] };
 
 /**
  * Replies or bounces between two days (inclusive, in the stats timezone),
@@ -896,6 +915,7 @@ export async function getEvents(kind: "reply" | "bounce", from: string, to: stri
         nullif(trim(e.payload->>'to_name'), '') as lead_name, e.inbox_email,
         e.domain_id, coalesce(d.name, e.domain_name) as domain, e.campaign_name, e.sequence_number as sequence,
         coalesce(d.client_id, e.client_id) as client_id, c.name as client_name, c.hue as client_hue, e.recipient_esp, e.bounce_cause,
+        coalesce(st.current, false) as current,
         coalesce(e.payload->>'ui_master_inbox_link', e.payload->>'app_url') as link,
         case when e.kind = 'bounce' then left(coalesce(e.payload->'bounce_message'->>'text', e.payload->>'description'), 600) end as bounce_text,
         -- Office 365 quotes the receiving server's own error only in the HTML version.
@@ -904,15 +924,17 @@ export async function getEvents(kind: "reply" | "bounce", from: string, to: stri
       from email_events e cross join tz
       -- The sending domain's client, as on every other page; the event's own only when the domain has none.
       left join domains d on d.id = e.domain_id left join clients c on c.id = coalesce(d.client_id, e.client_id)
+      left join domain_standing st on st.domain_id = e.domain_id
       where e.kind = ${kind}::event_kind
         and (e.occurred_at at time zone tz.z)::date between ${from}::date and ${to}::date
       order by e.occurred_at desc
       limit 5000`,
-    sql<{ domainId: string; sent: number }[]>`
-      select domain_id, sum(sent)::int as sent from domain_daily_stats
-      where day between ${from}::date and ${to}::date group by domain_id`,
+    sql<{ domainId: string; sent: number; current: boolean }[]>`
+      select s.domain_id, sum(s.sent)::int as sent, coalesce(bool_or(st.current), false) as current from domain_daily_stats s
+      left join domain_standing st on st.domain_id = s.domain_id
+      where s.day between ${from}::date and ${to}::date group by s.domain_id`,
   ]);
-  return { from, to, today: t.today, events, sent: Object.fromEntries(sent.map((s) => [s.domainId, s.sent])) };
+  return { from, to, today: t.today, events, sent: Object.fromEntries(sent.map((s) => [s.domainId, s.sent])), currentDomains: sent.filter((s) => s.current).map((s) => s.domainId) };
 }
 
 /**
@@ -929,10 +951,11 @@ export async function getReview(from: string, to: string): Promise<import("./rev
     sql<import("./review").ReviewDomain[]>`
       with tz as (select coalesce((select value #>> '{}' from settings where key = 'stats_timezone'), 'UTC') as z),
       cur as (
-        select domain_id, sum(sent)::int as sent, sum(replies)::int as replies, sum(human_replies)::int as human, sum(bounces)::int as bounces
+        select domain_id, sum(sent)::int as sent, sum(replies)::int as replies, sum(human_replies)::int as human, sum(bounces)::int as bounces,
+          sum(ooo)::int as ooo, sum(auto_replies)::int as auto, sum(negative)::int as negative
         from domain_daily_stats where day between ${from}::date and ${to}::date group by 1),
       prev as (
-        select domain_id, sum(sent)::int as sent, sum(human_replies)::int as human
+        select domain_id, sum(sent)::int as sent, sum(human_replies)::int as human, sum(replies)::int as replies, sum(bounces)::int as bounces
         from domain_daily_stats where day between ${pf}::date and ${pt}::date group by 1),
       ev as (
         select e.domain_id,
@@ -966,8 +989,13 @@ export async function getReview(from: string, to: string): Promise<import("./rev
         (select count(*)::int from inboxes i where i.domain_id = d.id and i.status = 'disconnected') as disconnected,
         (coalesce(d.blacklist_domain_count, 0) + coalesce(d.blacklist_ip_count, 0))::int as blacklisted,
         coalesce(cur.sent, 0) as sent, coalesce(cur.replies, 0) as replies, coalesce(cur.human, 0) as human, coalesce(cur.bounces, 0) as bounces,
+        coalesce(cur.ooo, 0) as ooo, coalesce(cur.auto, 0) as auto, coalesce(cur.negative, 0) as negative,
         coalesce(ev.causes, '{}'::jsonb) as causes,
-        coalesce(prev.sent, 0) as prev_sent, coalesce(prev.human, 0) as prev_human, coalesce(ev.prev_spam, 0) as prev_spam,
+        coalesce(prev.sent, 0) as prev_sent, coalesce(prev.human, 0) as prev_human, coalesce(prev.replies, 0) as prev_replies, coalesce(prev.bounces, 0) as prev_bounces, coalesce(ev.prev_spam, 0) as prev_spam,
+        -- How old the domain is, and how long it has been in Smartlead.
+        (current_date - coalesce(d.purchased_at, d.registered_at)::date)::int as age_days,
+        (select (current_date - min(i.smartlead_created_at)::date)::int from inboxes i where i.domain_id = d.id and i.status <> 'removed') as connected_days,
+        st.provider, st.standing, st.grace_left,
         rep.rep, coalesce(rep.low, 0) as low_rep_inboxes,
         quiet.days as quiet_days, coalesce(quiet.never, false) as never_replied, coalesce(quiet.sent_since, 0) as sent_since_reply,
         (select coalesce(array_agg(x.t order by x.n desc, x.t), '{}') from (
@@ -976,27 +1004,23 @@ export async function getReview(from: string, to: string): Promise<import("./rev
         (select case when count(distinct i.provider_type) > 1 then 'MIXED' else max(i.provider_type) end from inboxes i
           where i.domain_id = d.id and i.status <> 'removed') as esp, d.tld,
         rp.name as replaced_by,
-        -- NPC is what Hypertide's dashboard shows as Cancelled. "none": a Hypertide
-        -- domain this account has no order for (only once orders have been synced).
+        -- Where the order stands at the domain's provider, Hypertide or Icemail. NPC is what
+        -- Hypertide's dashboard shows as Cancelled. "none": no order on this account.
         case when rp.name is not null then 'replaced'
-          when ho.status in ('NPC', 'Cancelled') then 'cancelled'
-          when ho.gone then 'gone'
-          when ho.found then 'live'
-          when ip.name = 'Hypertide' and exists (select 1 from hypertide_orders) then 'none'
+          when st.order_state = 'cancelled' then 'cancelled'
+          when st.order_state = 'gone' then 'gone'
+          when st.order_state in ('active', 'pending') then 'live'
+          when st.order_state = 'missing' then 'none'
         end as ht,
         sl.sl_removed as removed
       from domains d
       left join clients c on c.id = d.client_id
-      left join vendors ip on ip.id = d.inbox_provider_id
+      join domain_standing st on st.domain_id = d.id
       left join lateral (
       select count(*) filter (where i.status = 'connected')::int as sl_connected,
         count(*) filter (where i.status = 'disconnected')::int as sl_disconnected,
         count(*) filter (where i.status = 'removed')::int as sl_removed
       from inboxes i where i.domain_id = d.id) sl on true
-      left join lateral (
-        select true as found, o.status, o.gone_at is not null as gone from hypertide_orders o
-        where o.domain_id = d.id or o.domain_name = d.name
-        order by (o.gone_at is null) desc, o.last_seen_at desc limit 1) ho on true
       left join lateral (
         select coalesce(
           (select nd.name from replacement_items ri
@@ -1008,7 +1032,8 @@ export async function getReview(from: string, to: string): Promise<import("./rev
       left join ev on ev.domain_id = d.id
       left join rep on rep.domain_id = d.id
       left join quiet on quiet.domain_id = d.id
-      where d.status in ('warming', 'active', 'draining') or cur.sent > 0
+      -- Live today, or anything that has numbers in this range: the page splits them.
+      where st.current or cur.sent > 0 or cur.replies > 0 or cur.bounces > 0
       order by d.name`,
     sql<import("./review").ReviewCampaign[]>`
       with tz as (select coalesce((select value #>> '{}' from settings where key = 'stats_timezone'), 'UTC') as z)
@@ -1141,7 +1166,7 @@ export async function listDeadDomains() {
   return sql<DeadDomainRow[]>`
     select x.domain_id, d.name, d.status, d.tld, c.name as client_name, c.hue as client_hue, ip.name as inbox_provider,
       x.cause, x.connected, x.disconnected, x.removed, x.provider_type, x.last_send_day
-    from dead_domains x join domains d on d.id = x.domain_id
+    from live_dead_domains x join domains d on d.id = x.domain_id
     left join clients c on c.id = d.client_id
     left join vendors ip on ip.id = d.inbox_provider_id
     order by (x.cause = 'dns_gone') desc, x.cause, x.last_send_day desc nulls last, d.name`;
@@ -1206,36 +1231,38 @@ export async function getInsights() {
   const [[issues], [cap], clients, trend] = await Promise.all([
     sql<Issues[]>`
       select
-        (select count(distinct a.domain_id)::int from alerts a join domains d on d.id = a.domain_id
-          where a.status = 'open' and d.status in ('active', 'warming')) as flagged,
-        (select count(*)::int from dead_domains) as dead,
-        (select count(*)::int from domains where nameservers_answering = false and status not in ('burned', 'resting')) as no_zone,
-        (select count(*)::int from inboxes i join domains d on d.id = i.domain_id where i.status = 'disconnected' and d.status in ('active', 'warming')) as disconnected,
-        (select count(*)::int from inboxes i join domains d on d.id = i.domain_id where i.status = 'connected' and i.warmup_reputation < 90 and d.status in ('active', 'warming')) as low_rep,
+        (select count(distinct a.domain_id)::int from alerts a join domain_standing st on st.domain_id = a.domain_id
+          where a.status = 'open' and st.current) as flagged,
+        (select count(*)::int from live_dead_domains) as dead,
+        (select count(*)::int from domains d join domain_standing st on st.domain_id = d.id where d.nameservers_answering = false and (st.current or st.order_live)) as no_zone,
+        (select count(*)::int from inboxes i join domain_standing st on st.domain_id = i.domain_id where i.status = 'disconnected' and (st.current or st.order_live)) as disconnected,
+        (select count(*)::int from inboxes i join domain_standing st on st.domain_id = i.domain_id where i.status = 'connected' and i.warmup_reputation < 90 and st.current) as low_rep,
         (select count(*)::int from hypertide_orders where gone_at is null and payment_status not ilike 'paid%' and payment_status not ilike '%recovery%') as ht_unpaid,
         (select count(distinct o.domain_id)::int from hypertide_orders o join domains d on d.id = o.domain_id
-          where o.gone_at is null and o.status in ('NPC', 'Cancelled') and d.status in ('active', 'warming', 'provisioning')
+          join domain_standing st on st.domain_id = d.id
+          where o.gone_at is null and o.status in ('NPC', 'Cancelled') and st.connected > 0 and st.standing <> 'grace'
+          and d.status in ('active', 'warming', 'provisioning')
           and not exists (select 1 from hypertide_orders o2 where o2.domain_id = d.id and o2.gone_at is null and coalesce(o2.status, '') not in ('NPC', 'Cancelled'))) as ht_cancelled_live,
         (select count(distinct o.domain_id)::int from hypertide_orders o join domains d on d.id = o.domain_id
           where o.gone_at is null and o.status = 'Done' and d.status in ('burned', 'resting')) as billed_retired,
-        (select count(*)::int from domains where expires_at between current_date and current_date + 14 and status not in ('burned', 'resting')) as renew14,
+        (select count(*)::int from domains d join domain_standing st on st.domain_id = d.id where d.expires_at between current_date and current_date + 14 and (st.current or st.order_live)) as renew14,
         (select count(*)::int from replacement_readiness where ready) as ready_for_campaigns,
         (select count(*)::int from nameserver_requests where status = 'failed' and created_at > now() - interval '7 days') as ns_failed,
         (select count(distinct inbox_id)::int from inbox_setting_changes where status = 'failed' and created_at > now() - interval '2 days') as settings_failed,
         (select count(*)::int from domains d where d.status = 'provisioning'
           and coalesce((select max(h.at) from domain_status_history h where h.domain_id = d.id), d.created_at) < now() - interval '10 days') as stuck_setup,
-        (select count(*)::int from domains where status = 'in_storage' and (last_used_on is null or last_used_on + reuse_after_days() <= current_date)) as free,
-        (select count(*) from domains where status = 'in_storage' and (last_used_on is null or last_used_on + reuse_after_days() <= current_date)) <= coalesce((select (value #>> '{}')::int from settings where key = 'storage_low_threshold'), 20) as free_low`,
+        (select count(*)::int from domains where status = 'in_storage' and (expires_at is null or expires_at >= current_date) and (last_used_on is null or last_used_on + reuse_after_days() <= current_date)) as free,
+        (select count(*) from domains where status = 'in_storage' and (expires_at is null or expires_at >= current_date) and (last_used_on is null or last_used_on + reuse_after_days() <= current_date)) <= coalesce((select (value #>> '{}')::int from settings where key = 'storage_low_threshold'), 20) as free_low`,
     sql<{ capacity: number; sentToday: number; inboxes: number }[]>`
       select coalesce(sum(i.daily_limit), 0)::int as capacity, coalesce(sum(i.daily_sent), 0)::int as sent_today, count(*)::int as inboxes
-      from inboxes i join domains d on d.id = i.domain_id
-      where i.status = 'connected' and d.status = 'active'`,
+      from inboxes i join domains d on d.id = i.domain_id join domain_standing st on st.domain_id = d.id
+      where i.status = 'connected' and d.status = 'active' and st.current`,
     sql<ClientInsight[]>`
       select c.id, c.name, c.hue,
-        count(distinct d.id) filter (where d.status = 'active')::int as active,
-        count(distinct d.id) filter (where d.status in ('provisioning', 'warming'))::int as warming,
-        (select count(*)::int from inboxes i join domains x on x.id = i.domain_id where x.client_id = c.id and i.status = 'connected' and x.status = 'active') as inboxes,
-        (select coalesce(sum(i.daily_limit), 0)::int from inboxes i join domains x on x.id = i.domain_id where x.client_id = c.id and i.status = 'connected' and x.status = 'active') as capacity,
+        count(distinct d.id) filter (where d.status = 'active' and st.current)::int as active,
+        count(distinct d.id) filter (where d.status = 'provisioning' or (d.status = 'warming' and st.current))::int as warming,
+        (select count(*)::int from inboxes i join domains x on x.id = i.domain_id join domain_standing y on y.domain_id = x.id where x.client_id = c.id and i.status = 'connected' and x.status = 'active' and y.current) as inboxes,
+        (select coalesce(sum(i.daily_limit), 0)::int from inboxes i join domains x on x.id = i.domain_id join domain_standing y on y.domain_id = x.id where x.client_id = c.id and i.status = 'connected' and x.status = 'active' and y.current) as capacity,
         coalesce(sum(s.sent) filter (where s.day > current_date - 7), 0)::int as sent,
         coalesce(sum(s.replies) filter (where s.day > current_date - 7), 0)::int as replies,
         coalesce(sum(s.human_replies) filter (where s.day > current_date - 7), 0)::int as human,
@@ -1243,7 +1270,9 @@ export async function getInsights() {
         coalesce(sum(s.sent) filter (where s.day <= current_date - 7), 0)::int as sent_prev
       from clients c
       left join domains d on d.client_id = c.id
-      left join domain_daily_stats s on s.domain_id = d.id and s.day > current_date - 14
+      left join domain_standing st on st.domain_id = d.id
+      -- Sending numbers count only domains that are live today.
+      left join domain_daily_stats s on s.domain_id = d.id and st.current and s.day > current_date - 14
       where c.archived_at is null
       group by c.id
       order by 8 desc, c.name`,
@@ -1251,7 +1280,7 @@ export async function getInsights() {
       select to_char(g.day, 'YYYY-MM-DD') as day, coalesce(sum(s.sent), 0)::int as sent, coalesce(sum(s.replies), 0)::int as replies,
         coalesce(sum(s.human_replies), 0)::int as human, coalesce(sum(s.bounces), 0)::int as bounces
       from generate_series(current_date - 13, current_date, interval '1 day') g(day)
-      left join domain_daily_stats s on s.day = g.day::date
+      left join (domain_daily_stats s join domain_standing st on st.domain_id = s.domain_id and st.current) on s.day = g.day::date
       group by g.day order by g.day`,
   ]);
   return { issues, capacity: cap, clients, trend };

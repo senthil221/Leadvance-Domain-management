@@ -47,6 +47,7 @@ export async function syncHypertideOrders(sql: Sql, ctx: StepContext & { hyperti
         left join domains d on d.name = r.domain
         on conflict (id) do update set
           -- The order moved to another domain: Hypertide replaced the old one.
+          replaced_at = case when hypertide_orders.domain_name <> excluded.domain_name then now() else hypertide_orders.replaced_at end,
           replaced_domains = case when hypertide_orders.domain_name <> excluded.domain_name
             and not (hypertide_orders.domain_name = any(hypertide_orders.replaced_domains))
             then hypertide_orders.replaced_domains || hypertide_orders.domain_name else hypertide_orders.replaced_domains end,

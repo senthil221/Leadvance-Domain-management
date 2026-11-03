@@ -60,7 +60,8 @@ export async function syncAccounts(sql: Sql, sl: Smartlead) {
       select r.domain,
         (case when max(coalesce(r.daily_limit, 0)) > 0 then 'active' else 'warming' end)::domain_status,
         (select coalesce(c.merged_into, c.id) from clients c where c.smartlead_client_id = max(r.client_id)),
-        (select v.id from vendors v where v.name = 'Hypertide')
+        -- Google inboxes come from Icemail, Outlook from Hypertide.
+        (select v.id from vendors v where v.name = case when max(r.provider_type) in ('GMAIL', 'GOOGLE') then 'Icemail' else 'Hypertide' end)
       from ${recordset(tx)}
       where r.domain ~ '^[a-z0-9-]+(\\.[a-z0-9-]+)+$'
       group by r.domain

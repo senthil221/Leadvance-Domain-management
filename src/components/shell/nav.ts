@@ -1,4 +1,4 @@
-import { Activity, ArrowLeftRight, BarChart3, ClipboardCheck, Globe, Inbox, LayoutGrid, MailX, MessageSquareText, Settings2, type LucideIcon } from "lucide-react";
+import { Activity, ArrowLeftRight, BarChart3, ClipboardCheck, Columns2, Globe, Inbox, LayoutGrid, MailX, MessageSquareText, Settings2, type LucideIcon } from "lucide-react";
 
 export type NavItem = { href: string; label: string; icon: LucideIcon; key: string };
 export type NavGroup = NavItem & { pages: NavItem[] };
@@ -11,6 +11,7 @@ export const PAGES = {
   replacements: { href: "/replacements", label: "Replacements", icon: ArrowLeftRight, key: "r" },
   inboxes: { href: "/inboxes", label: "Smartlead", icon: Inbox, key: "i" },
   review: { href: "/review", label: "Weekly review", icon: ClipboardCheck, key: "w" },
+  compare: { href: "/compare", label: "Compare", icon: Columns2, key: "c" },
   stats: { href: "/stats", label: "Stats", icon: BarChart3, key: "t" },
   replies: { href: "/activity", label: "Replies", icon: MessageSquareText, key: "a" },
   bounces: { href: "/bounces", label: "Bounces", icon: MailX, key: "b" },
@@ -30,7 +31,7 @@ export const NAV: { label: string; items: NavGroup[] }[] = [
       { ...P.overview, pages: [] },
       { ...P.inboxes, pages: [] },
       { ...P.inventory, pages: [{ ...P.inventory, label: "Inventory" }, P.replacements] },
-      { ...P.review, label: "Performance", icon: BarChart3, pages: [P.review, P.stats, P.replies, P.bounces] },
+      { ...P.review, label: "Performance", icon: BarChart3, pages: [P.review, P.compare, P.stats, P.replies, P.bounces] },
     ],
   },
   { label: "Manage", items: [{ ...P.settings, pages: [P.settings, P.health] }] },

@@ -8,7 +8,7 @@ import { toast } from "sonner";
 import { loadEventDetail, loadEvents, reclassifyReply } from "@/app/actions";
 import { RangePicker } from "@/components/RangePicker";
 import { ClientCell, Empty, Skeleton } from "@/components/ui";
-import { BOUNCE_META, BOUNCE_ORDER, bounceLine, bounceReason, type BounceReason } from "@/lib/bounces";
+import { BOUNCE_META, BOUNCE_ORDER, bounceCode, bounceLine, bounceReason, type BounceReason } from "@/lib/bounces";
 import type { ReplyClass } from "@/lib/classify";
 import { int } from "@/lib/format";
 import type { EventDetail, EventRow, EventsData } from "@/lib/queries";
@@ -25,6 +25,12 @@ type Meta = { label: string; tone: string };
 const REPLY_TAGS = Object.keys(REPLY_CLASS_META) as ReplyClass[];
 const POSITIVE = new Set(["human", "referral"]);
 const NOT_A_FIT = new Set(["negative", "wrong_person", "unsubscribe"]);
+const AUTOMATIC = new Set(["ooo", "auto"]);
+// Whose problem a bounce is. Together they cover every reason.
+const OUR_SIDE = new Set<string>(["sender", "dns"]);
+const REPUTATION = new Set<string>(["blocklist", "spam"]);
+const LIST = new Set<string>(["missing"]);
+const RECIPIENT = new Set<string>(["restricted", "policy", "full", "temporary", "other"]);
 
 const tagOf = (kind: Kind, e: EventRow) => (kind === "reply" ? e.replyClass ?? "human" : (e.bounceCause ?? bounceReason(`${e.bounceRemote ?? ""} ${e.bounceText ?? ""}`)));
 const metaOf = (kind: Kind, t: string): Meta => (kind === "reply" ? (REPLY_CLASS_META as Record<string, Meta>)[t] : BOUNCE_META[t as BounceReason]) ?? { label: t, tone: "faint" };
@@ -72,6 +78,8 @@ export function EventsView({ kind, initial }: { kind: Kind; initial: EventsData 
   const [data, setData] = useState(initial);
   const [tags, setTags] = useState<Set<string>>(new Set());
   const [scope, setScope] = useState<{ client?: string; domain?: string }>({});
+  // Only domains active today (or in their grace period) unless asked otherwise.
+  const [which, setWhich] = useState<"current" | "ended">("current");
   const [openClients, setOpenClients] = useState<Set<string>>(new Set());
   const [q, setQ] = useState("");
   const [limit, setLimit] = useState(PAGE);
@@ -85,10 +93,15 @@ export function EventsView({ kind, initial }: { kind: Kind; initial: EventsData 
     if (r.ok) { setData(r.data); setLimit(PAGE); } else toast.error(r.error);
   });
 
-  const rows: Row[] = useMemo(() => data.events.map((e) => {
+  const whichCount = useMemo(() => {
+    const current = data.events.filter((e) => e.current).length;
+    return { current, ended: data.events.length - current };
+  }, [data.events]);
+  const rows: Row[] = useMemo(() => data.events.filter((e) => e.current === (which === "current")).map((e) => {
     const x = { ...e, replyClass: overrides.get(e.id) ?? e.replyClass };
     return { ...x, tag: tagOf(kind, x) };
-  }), [data.events, overrides, kind]);
+  }), [data.events, overrides, kind, which]);
+  const currentDomains = useMemo(() => new Set(data.currentDomains), [data.currentDomains]);
 
   // The rail and the numbers follow the type filter and search, not the rail's own selection.
   const needle = q.trim().toLowerCase();
@@ -110,7 +123,7 @@ export function EventsView({ kind, initial }: { kind: Kind; initial: EventsData 
   const sentInScope = scope.domain
     ? clients.flatMap((c) => c.domains).find((d) => d.key === scope.domain)?.sent ?? 0
     : scope.client ? clients.find((c) => c.key === scope.client)?.sent ?? 0
-    : Object.values(data.sent).reduce((a, b) => a + b, 0);
+    : Object.entries(data.sent).reduce((a, [id, n]) => (currentDomains.has(id) === (which === "current") ? a + n : a), 0);
 
   const days = useMemo(() => {
     const out: { key: string; label: string; rows: Row[] }[] = [];
@@ -147,13 +160,14 @@ export function EventsView({ kind, initial }: { kind: Kind; initial: EventsData 
         { label: "Replies", value: shown.length, foot: `${pct(shown.length, sentInScope)} of ${int(sentInScope)} sent`, set: null },
         { label: "Positive", value: count(POSITIVE), foot: `${pct(count(POSITIVE), sentInScope)} · interested and referrals`, set: POSITIVE, tone: "success" },
         { label: "Not a fit", value: count(NOT_A_FIT), foot: "not interested, wrong person, unsubscribe", set: NOT_A_FIT, tone: "warning" },
-        { label: "Automatic", value: count(new Set(["ooo", "auto"])), foot: "out of office and auto-replies", set: new Set(["ooo", "auto"]) },
+        { label: "Automatic", value: count(AUTOMATIC), foot: "out of office and auto-replies", set: AUTOMATIC },
       ]
     : [
         { label: "Bounces", value: shown.length, foot: `${pct(shown.length, sentInScope)} of ${int(sentInScope)} sent`, set: null },
-        { label: "Blocked", value: count(new Set(["blocked"])), foot: "spam, policy or sender block lists", set: new Set(["blocked"]), tone: "warning" },
-        { label: "No such address", value: count(new Set(["missing"])), foot: "lead list quality", set: new Set(["missing"]) },
-        { label: "Recipient side", value: count(new Set(["restricted", "full", "temporary", "other"])), foot: "rules, full mailboxes, delays", set: new Set(["restricted", "full", "temporary", "other"]) },
+        { label: "Our setup", value: count(OUR_SIDE), foot: "tenant, mailbox or DNS: fix first", set: OUR_SIDE, tone: "danger" },
+        { label: "Reputation", value: count(REPUTATION), foot: "spam rejections and block lists", set: REPUTATION, tone: "warning" },
+        { label: "Bad addresses", value: count(LIST), foot: "don't exist: the lead list", set: LIST, tone: "info" },
+        { label: "Recipient side", value: count(RECIPIENT), foot: "their rules, full, delays, unclear", set: RECIPIENT },
       ];
   const sameSet = (a: Set<string> | null) => (a === null ? tags.size === 0 : a.size === tags.size && [...a].every((x) => tags.has(x)));
 
@@ -163,6 +177,12 @@ export function EventsView({ kind, initial }: { kind: Kind; initial: EventsData 
   return (
     <div className="flex flex-col gap-3">
       <div className="table-bar">
+        <div className="view-tabs" role="tablist" aria-label="Which domains">
+          <button type="button" role="tab" aria-selected={which === "current"} className={which === "current" ? "is-on" : undefined} title="Domains active today, plus any in their grace period"
+            onClick={() => { setWhich("current"); setScope({}); setLimit(PAGE); }}>Active <span>{int(whichCount.current)}</span></button>
+          <button type="button" role="tab" aria-selected={which === "ended"} className={which === "ended" ? "is-on" : undefined} title="Sent from domains that are disconnected, replaced, cancelled, expired or deleted today"
+            onClick={() => { setWhich("ended"); setScope({}); setLimit(PAGE); }}>Disconnected or replaced <span>{int(whichCount.ended)}</span></button>
+        </div>
         <TagFilter kind={kind} order={order} counts={tagCounts} tags={tags} onToggle={toggleTag} onClear={() => setTags(new Set())} />
         <RangePicker from={data.from} to={data.to} today={data.today} loading={loading} onChange={load} />
         <span className="spacer-auto" />
@@ -226,6 +246,7 @@ export function EventsView({ kind, initial }: { kind: Kind; initial: EventsData 
               {g.rows.map((r) => {
                 const m = metaOf(kind, r.tag);
                 const text = kind === "reply" ? r.preview : bounceLine(r.bounceText, r.bounceRemote);
+                const code = kind === "bounce" ? bounceCode(`${r.bounceRemote ?? ""} ${r.bounceText ?? ""}`) : null;
                 return (
                   <button key={r.id} type="button" className="ev-item" aria-current={selected === r.id || undefined} onClick={() => setSelected(r.id)}>
                     <span className="ev-avatar" aria-hidden="true">{initialsOf(r.leadName, r.leadEmail)}</span>
@@ -237,7 +258,10 @@ export function EventsView({ kind, initial }: { kind: Kind; initial: EventsData 
                       <span className="ev-snippet">{text ?? "No preview"}</span>
                     </span>
                     <span className="ev-item-side">
-                      <span className={`badge tone-${m.tone}`}>{m.label}</span>
+                      <span className="flex items-center gap-1.5">
+                        {code ? <span className="ev-code" title="The error code in the bounce notice">{code}</span> : null}
+                        <span className={`badge tone-${m.tone}`}>{m.label}</span>
+                      </span>
                       <span className="ev-item-meta">{r.domain ?? ""} · {timeLabel.format(new Date(r.occurredAt))}</span>
                     </span>
                   </button>
@@ -339,6 +363,7 @@ function EventPanel({ kind, row, onClose, onReclassify }: { kind: Kind; row: Row
                   </div>
                 ) : (
                   <div className="flex items-center gap-2">
+                    {bounceCode(`${row.bounceRemote ?? ""} ${row.bounceText ?? ""}`) ? <span className="ev-code">{bounceCode(`${row.bounceRemote ?? ""} ${row.bounceText ?? ""}`)}</span> : null}
                     <span className={`badge tone-${BOUNCE_META[row.tag as BounceReason].tone}`}>{BOUNCE_META[row.tag as BounceReason].label}</span>
                     <span className="text-[12.5px] text-muted">{BOUNCE_META[row.tag as BounceReason].hint}</span>
                   </div>

@@ -498,18 +498,19 @@ export function InboxesView({ inboxes, clients, plans, smartleadConnected, dryRu
   }, [inboxes, clients, clientId, esp, provider]);
   const [limitText, setLimitText] = useState(String(inboxLimit));
   const fresh = useMemo<Sets>(() => ({ fresh: freshDomains(inboxes, newMaxAgeDays), crowded: crowdedDomains(inboxes, inboxLimit) }), [inboxes, newMaxAgeDays, inboxLimit]);
-  const attentionCount = useMemo(() => group(base.filter(tabMatch("attention", fresh))).filter((g) => reasonsOf(g).length > 0).length, [base, fresh]);
+  const attentionCount = useMemo(() => group(base.filter((i) => i.domainInScope && tabMatch("attention", fresh)(i))).filter((g) => reasonsOf(g).length > 0).length, [base, fresh]);
   const lowRepInboxes = useMemo(() => base.filter((i) => i.status === "connected" && i.warmupReputation != null && i.warmupReputation < 90).length, [base]);
   // Domains in every view but Disconnected, which counts inboxes.
   const counts = useMemo(() => {
-    const domains = (k: TabKey) => new Set(base.filter(tabMatch(k, fresh)).map((i) => i.domainId)).size;
-    return { active: domains("active"), warming: domains("warming"), attention: attentionCount, cleanup: domains("cleanup"), disconnected: base.filter(tabMatch("disconnected", fresh)).length, all: domains("all") } as Record<TabKey, number>;
+    const inView = (k: TabKey) => base.filter((i) => (k === "all" || i.domainInScope) && tabMatch(k, fresh)(i));
+    const domains = (k: TabKey) => new Set(inView(k).map((i) => i.domainId)).size;
+    return { active: domains("active"), warming: domains("warming"), attention: attentionCount, cleanup: domains("cleanup"), disconnected: inView("disconnected").length, all: domains("all") } as Record<TabKey, number>;
   }, [base, attentionCount, fresh]);
 
   const groups = useMemo(() => {
     const match = tabMatch(tab, fresh);
     const needle = q.trim().toLowerCase();
-    const shown = base.filter((i) => match(i) && (!needle || i.email.includes(needle) || i.domain.includes(needle) || i.senderName?.toLowerCase().includes(needle) || i.smartleadTags.some((t) => t.toLowerCase().includes(needle))));
+    const shown = base.filter((i) => match(i) && (tab === "all" || i.domainInScope) && (!needle || i.email.includes(needle) || i.domain.includes(needle) || i.senderName?.toLowerCase().includes(needle) || i.smartleadTags.some((t) => t.toLowerCase().includes(needle))));
     return group(shown).filter((g) => tab !== "attention" || reasonsOf(g).length > 0).sort((a, b) => {
       const x = sortValue(a, sort.key), y = sortValue(b, sort.key);
       if (x === y) return a.domain.localeCompare(b.domain);
