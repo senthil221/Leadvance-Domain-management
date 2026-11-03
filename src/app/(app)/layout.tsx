@@ -35,6 +35,7 @@ async function NavWithCounts() {
   return (
     <NavLinks
       badges={{
+        "/": { value: c.connectionProblems, warning: true },
         "/inventory": { value: c.byStatus.active ?? 0 },
         "/replacements": { value: c.runningBatches, warning: true },
         "/inboxes": { value: c.attention, warning: true },

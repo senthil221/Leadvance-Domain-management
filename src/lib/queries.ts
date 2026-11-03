@@ -5,6 +5,7 @@ import { attentionDomainCount } from "./attention";
 import { monday, previousRange } from "./range";
 import { senderOverview, tagOverview } from "./tag-list";
 import { sql } from "./db";
+import type { ConnectionProblem } from "@/lib/connections";
 import type { DomainStatus, ReplacementReason, StepStatus } from "./status";
 
 // ---------------------------------------------------------------------------
@@ -41,15 +42,16 @@ export async function listVendors() {
   return sql<VendorRow[]>`select id, name, kind, api_supported from vendors order by kind, name`;
 }
 
-export type NavCounts = { byStatus: Record<DomainStatus, number>; openAlerts: number; runningBatches: number; attention: number };
+export type NavCounts = { byStatus: Record<DomainStatus, number>; openAlerts: number; runningBatches: number; connectionProblems: number; attention: number };
 
 export async function getNavCounts(): Promise<NavCounts> {
   const [statusRows, [extra], attention] = await Promise.all([
     sql<{ status: DomainStatus; n: number }[]>`select status, count(*)::int as n from domains group by status`,
-    sql<{ openAlerts: number; runningBatches: number }[]>`
+    sql<{ openAlerts: number; runningBatches: number; connectionProblems: number }[]>`
       select
         (select count(*)::int from alerts where status = 'open') as open_alerts,
-        (select count(*)::int from replacement_batches where status = 'running') as running_batches`,
+        (select count(*)::int from replacement_batches where status = 'running') as running_batches,
+        (select count(*)::int from order_connections where problem) as connection_problems`,
     attentionDomainCount(sql),
   ]);
   const byStatus = Object.fromEntries(statusRows.map((r) => [r.status, r.n])) as Record<DomainStatus, number>;
@@ -1143,6 +1145,61 @@ export async function listDeadDomains() {
     left join clients c on c.id = d.client_id
     left join vendors ip on ip.id = d.inbox_provider_id
     order by (x.cause = 'dns_gone') desc, x.cause, x.last_send_day desc nulls last, d.name`;
+}
+
+export type ConnectionRow = {
+  provider: string; name: string; domainId: string | null; clientName: string | null; clientHue: number | null; state: ConnectionProblem;
+  connected: number; disconnected: number; removed: number; warmupOff: number; warmupBlocked: number;
+};
+export type ConnectionProvider = { provider: string; orders: number; connected: number; ok: number; problems: number; settingUp: number; retiring: number };
+export type ConnectionCheckData = {
+  providers: ConnectionProvider[]; problems: ConnectionRow[]; withoutOrder: number;
+  syncs: { label: string; at: Date | null; stale: boolean }[];
+};
+
+/**
+ * Active orders against Smartlead: how many of each provider's are connected and
+ * warming, the domains that aren't, and whether the syncs behind this are running.
+ * A sync counts as stale once it has failed or missed a few runs.
+ */
+export async function getConnectionCheck(): Promise<ConnectionCheckData> {
+  const [providers, problems, [extra], jobs] = await Promise.all([
+    sql<ConnectionProvider[]>`
+      select provider, count(*)::int as orders,
+        count(*) filter (where state in ('ok', 'warmup_off', 'warmup_blocked', 'dns_gone'))::int as connected,
+        count(*) filter (where state = 'ok')::int as ok,
+        count(*) filter (where problem)::int as problems,
+        count(*) filter (where state = 'setting_up')::int as setting_up,
+        count(*) filter (where state = 'retiring')::int as retiring
+      from order_connections group by provider order by provider`,
+    sql<ConnectionRow[]>`
+      select x.provider, x.name, x.domain_id, c.name as client_name, c.hue as client_hue, x.state,
+        x.connected, x.disconnected, x.removed, x.warmup_off, x.warmup_blocked
+      from order_connections x
+      left join domains d on d.id = x.domain_id
+      left join clients c on c.id = d.client_id
+      where x.problem order by x.provider, x.state, x.name`,
+    sql<{ withoutOrder: number }[]>`
+      select count(*)::int as without_order from domains d
+      where d.status in ('active', 'warming') and d.name !~ '\.onmicrosoft\.com$'
+        and exists (select 1 from inboxes i where i.domain_id = d.id and i.status = 'connected')
+        and not exists (select 1 from order_connections x where x.domain_id = d.id)`,
+    sql<{ job: string; at: Date | null; stale: boolean }[]>`
+      select job, last_finished_at as at,
+        last_ok is not true or last_finished_at < now() - case job when 'hypertide-orders' then interval '30 minutes' else interval '2 hours' end as stale
+      from job_state where job in ('hypertide-orders', 'smartlead-accounts', 'icemail')`,
+  ]);
+  const job = (name: string, label: string) => {
+    const j = jobs.find((x) => x.job === name);
+    return { label, at: j?.at ?? null, stale: j?.stale ?? true };
+  };
+  const has = (p: string) => providers.some((x) => x.provider === p);
+  const syncs = [
+    job("smartlead-accounts", "Smartlead"),
+    ...(has("Hypertide") ? [job("hypertide-orders", "Hypertide")] : []),
+    ...(has("Icemail") ? [job("icemail", "Icemail")] : []),
+  ];
+  return { providers, problems, withoutOrder: extra.withoutOrder, syncs };
 }
 
 export async function getInsights() {

@@ -6,10 +6,11 @@ import { ArrowRight, ArrowUpRight, CircleCheck, History } from "lucide-react";
 import { AttentionList } from "@/components/overview/AttentionList";
 import { DeadDomains } from "@/components/overview/DeadDomains";
 import { ClientsTable } from "@/components/overview/ClientsTable";
+import { ConnectionCheck } from "@/components/overview/ConnectionCheck";
 import { Dot, Empty, PageHead, Skeleton } from "@/components/ui";
 import { getCurrentUser } from "@/lib/auth";
 import { ago, int } from "@/lib/format";
-import { getInsights, getOverview, listDeadDomains, type Issues, type TrendDay } from "@/lib/queries";
+import { getConnectionCheck, getInsights, getOverview, listDeadDomains, type Issues, type TrendDay } from "@/lib/queries";
 import { STATUS_META, type DomainStatus, type Tone } from "@/lib/status";
 
 export const metadata: Metadata = { title: "Overview" };
@@ -63,8 +64,9 @@ function actions(i: Issues, weeksLeft: number | null): { tone: Tone; n: number; 
 
 async function OverviewContent() {
   await getCurrentUser();
-  const [o, ins, dead] = await Promise.all([getOverview(), getInsights(), listDeadDomains()]);
+  const [o, ins, dead, connections] = await Promise.all([getOverview(), getInsights(), listDeadDomains(), getConnectionCheck()]);
   const todo = actions(ins.issues, o.weeksLeft);
+  if (connections.problems.length) todo.unshift({ tone: "danger", n: connections.problems.length, text: "domains with an active order not fully connected and warming", href: "#connections" });
   const t7 = ins.trend.slice(7), p7 = ins.trend.slice(0, 7);
   const sum = (d: TrendDay[], k: "sent" | "replies" | "human" | "bounces") => d.reduce((a, x) => a + x[k], 0);
   const sent7 = sum(t7, "sent"), sentP = sum(p7, "sent");
@@ -78,6 +80,8 @@ async function OverviewContent() {
 
   return (
     <>
+      <ConnectionCheck data={connections} />
+
       <section className="stats is-6" aria-label="Key numbers">
         <Link href="/inboxes" className="stat">
           <span className="stat-label">Sent today</span>
