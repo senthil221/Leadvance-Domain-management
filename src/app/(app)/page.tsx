@@ -2,11 +2,15 @@ import { DomainLink } from "@/components/domains/DomainLink";
 import type { Metadata } from "next";
 import Link from "next/link";
 import { Suspense } from "react";
-import { ArrowRight, ArrowUpRight, CircleCheck, History } from "lucide-react";
+import { ArrowRight, ArrowUpRight, BarChart3, CircleCheck, Globe, History, MailX, MessageSquareText, Send, Sparkles, UserRoundCheck } from "lucide-react";
 import { AttentionList } from "@/components/overview/AttentionList";
-import { DeadDomains } from "@/components/overview/DeadDomains";
 import { ClientsTable } from "@/components/overview/ClientsTable";
 import { ConnectionCheck } from "@/components/overview/ConnectionCheck";
+import { DeadDomains } from "@/components/overview/DeadDomains";
+import { Insights, readInsights } from "@/components/overview/Insights";
+import { Delta, Kpi, Sparkline } from "@/components/overview/Kpi";
+import { OverviewTabs, type OverviewTab } from "@/components/overview/OverviewTabs";
+import { SendTrend } from "@/components/overview/SendTrend";
 import { Dot, Empty, PageHead, Skeleton } from "@/components/ui";
 import { getCurrentUser } from "@/lib/auth";
 import { ago, int } from "@/lib/format";
@@ -31,14 +35,6 @@ export default function OverviewPage() {
 }
 
 const rate = (n: number, d: number) => (d > 0 ? (100 * n) / d : null);
-
-function Delta({ now, before, points = false, invert = false }: { now: number | null; before: number | null; points?: boolean; invert?: boolean }) {
-  if (now == null || before == null || (!points && before === 0)) return null;
-  const d = points ? now - before : (100 * (now - before)) / before;
-  if (Math.abs(d) < (points ? 0.05 : 1)) return null;
-  const good = invert ? d < 0 : d > 0;
-  return <span className={good ? "delta-up" : "delta-down"}>{d > 0 ? "+" : "−"}{Math.abs(d).toFixed(points ? 2 : 0)}{points ? " pts" : "%"}</span>;
-}
 
 // The action list: each line is something to fix, worst first, and only
 // shown when it applies.
@@ -66,196 +62,149 @@ async function OverviewContent() {
   await getCurrentUser();
   const [o, ins, dead, connections] = await Promise.all([getOverview(), getInsights(), listDeadDomains(), getConnectionCheck()]);
   const todo = actions(ins.issues, o.weeksLeft);
-  if (connections.problems.length) todo.unshift({ tone: "danger", n: connections.problems.length, text: "domains with an active order not fully connected and warming", href: "#connections" });
-  const t7 = ins.trend.slice(7), p7 = ins.trend.slice(0, 7);
+  const t7 = ins.trend.slice(-7), p7 = ins.trend.slice(0, -7);
   const sum = (d: TrendDay[], k: "sent" | "replies" | "human" | "bounces") => d.reduce((a, x) => a + x[k], 0);
   const sent7 = sum(t7, "sent"), sentP = sum(p7, "sent");
   const replyRate = rate(sum(t7, "replies"), sent7), replyRateP = rate(sum(p7, "replies"), sentP);
   const humanRate = rate(sum(t7, "human"), sent7), humanRateP = rate(sum(p7, "human"), sentP);
   const bounceRate = rate(sum(t7, "bounces"), sent7), bounceRateP = rate(sum(p7, "bounces"), sentP);
   const used = ins.capacity.capacity ? (100 * ins.capacity.sentToday) / ins.capacity.capacity : null;
-  const maxDay = Math.max(1, ...ins.trend.map((d) => d.sent));
   const fleetTotals = FLEET_STATES.map((s) => ({ s, n: o.fleet.reduce((a, f) => a + (f.counts[s] ?? 0), 0) }));
-  const fleetMax = Math.max(1, ...o.fleet.map((f) => f.total));
+  const dayLabel = (d: TrendDay) => new Date(`${d.day}T00:00:00Z`).toLocaleDateString("en-GB", { day: "numeric", month: "short", timeZone: "UTC" });
+  const spark = (value: (d: TrendDay) => number | null, show: (v: number) => string) =>
+    ins.trend.map((d) => { const v = value(d); return { value: v, label: `${dayLabel(d)}: ${v == null ? "nothing sent" : show(v)}` }; });
+  const pctOf = (digits: number) => (v: number) => `${v.toFixed(digits)}%`;
+  const bounceTone: Tone = bounceRate != null && bounceRate >= 3 ? "danger" : bounceRate != null && bounceRate >= 2 ? "warning" : "success";
+  const lines = readInsights(ins.trend, ins.clients, ins.capacity.capacity);
+
+  const issues: OverviewTab[] = [
+    ...(dead.length ? [{ key: "dead", label: "Dead domains", count: dead.length, tone: "danger" as const, content: <DeadDomains rows={dead} /> }] : []),
+    { key: "flagged", label: "Flagged", count: o.totals.flagged, tone: "warning", content: <AttentionList rows={o.attention} /> },
+    {
+      key: "changes", label: "Recent changes",
+      content: o.activity.length === 0 ? (
+        <Empty icon={History} title="Nothing yet">Status changes and replacements show up here.</Empty>
+      ) : (
+        <div className="list">
+          {o.activity.map((a) => (
+            <div key={a.id} className="list-row">
+              <Dot tone={STATUS_META[a.toStatus].tone} />
+              <div className="list-main">
+                <DomainLink id={a.domainId} className="list-title hover:underline">{a.domain}</DomainLink>
+                <span className="list-meta">Moved to {STATUS_META[a.toStatus].label}{a.reason ? ` · ${a.reason}` : ""} · {a.actor}</span>
+              </div>
+              <span className="list-meta w-16 text-right">{ago(a.at)}</span>
+            </div>
+          ))}
+        </div>
+      ),
+    },
+  ];
 
   return (
-    <>
+    <div className="overview">
       <ConnectionCheck data={connections} />
 
-      <section className="stats is-6" aria-label="Key numbers">
-        <Link href="/inboxes" className="stat">
-          <span className="stat-label">Sent today</span>
-          <span className="stat-value">{int(ins.capacity.sentToday)}</span>
-          <span className="stat-foot">{used != null ? `${used.toFixed(0)}% of ${int(ins.capacity.capacity)} a day` : "no active inboxes"}</span>
-        </Link>
-        <Link href="/stats" className="stat">
-          <span className="stat-label">Sent · 7 days</span>
-          <span className="stat-value">{int(sent7)}</span>
-          <span className="stat-foot"><Delta now={sent7} before={sentP} /> vs week before</span>
-        </Link>
-        <Link href="/stats" className="stat">
-          <span className="stat-label">Reply rate · 7d</span>
-          <span className="stat-value">{replyRate == null ? "—" : `${replyRate.toFixed(2)}%`}</span>
-          <span className="stat-foot"><Delta now={replyRate} before={replyRateP} points /> {int(sum(t7, "replies"))} replies</span>
-        </Link>
-        <Link href="/activity" className="stat">
-          <span className="stat-label">Human replies · 7d</span>
-          <span className="stat-value">{int(sum(t7, "human"))}</span>
-          <span className="stat-foot"><Delta now={humanRate} before={humanRateP} points /> {humanRate == null ? "" : `${humanRate.toFixed(2)}% of sent`}</span>
-        </Link>
-        <Link href="/stats" className="stat">
-          <span className="stat-label"><Dot tone={bounceRate != null && bounceRate >= 3 ? "danger" : bounceRate != null && bounceRate >= 2 ? "warning" : "success"} />Bounce rate · 7d</span>
-          <span className="stat-value">{bounceRate == null ? "—" : `${bounceRate.toFixed(1)}%`}</span>
-          <span className="stat-foot"><Delta now={bounceRate} before={bounceRateP} points invert /> {int(sum(t7, "bounces"))} bounces</span>
-        </Link>
-        <Link href="/inventory?view=free" className="stat">
-          <span className="stat-label"><Dot tone={ins.issues.freeLow ? "warning" : "faint"} />Free domains</span>
-          <span className="stat-value">{int(o.totals.storage)}</span>
-          <span className={`stat-foot${ins.issues.freeLow ? " text-warning-ink" : ""}`}>
-            {o.weeksLeft == null ? "no replacements in 4 weeks" : `≈ ${Math.floor(o.weeksLeft)} weeks at ${o.weeklyBurn.toFixed(1)}/week`}
-          </span>
-        </Link>
+      <section className="kpis" aria-label="Key numbers">
+        <Kpi href="/inboxes" label="Sent today" icon={Send} accent="brand" value={int(ins.capacity.sentToday)}
+          foot={used != null ? `of ${int(ins.capacity.capacity)} a day` : "no active inboxes"}>
+          <span className="kpi-meter"><span style={{ width: `${Math.min(100, used ?? 0)}%` }} /></span>
+        </Kpi>
+        <Kpi href="/stats" label="Sent · 7 days" icon={BarChart3} accent="brand" value={int(sent7)} delta={<Delta now={sent7} before={sentP} />} foot="vs week before">
+          <Sparkline points={spark((d) => d.sent, int)} />
+        </Kpi>
+        <Kpi href="/stats" label="Reply rate · 7d" icon={MessageSquareText} accent="violet" value={replyRate == null ? "—" : `${replyRate.toFixed(2)}%`}
+          delta={<Delta now={replyRate} before={replyRateP} points />} foot={`${int(sum(t7, "replies"))} replies`}>
+          <Sparkline points={spark((d) => rate(d.replies, d.sent), pctOf(2))} />
+        </Kpi>
+        <Kpi href="/activity" label="Human replies · 7d" icon={UserRoundCheck} accent="info" value={int(sum(t7, "human"))}
+          delta={<Delta now={humanRate} before={humanRateP} points />} foot={humanRate == null ? "" : `${humanRate.toFixed(2)}% of sent`}>
+          <Sparkline points={spark((d) => d.human, int)} />
+        </Kpi>
+        <Kpi href="/stats" label="Bounce rate · 7d" icon={MailX} accent={bounceTone} alert={bounceTone !== "success"} value={bounceRate == null ? "—" : `${bounceRate.toFixed(1)}%`}
+          delta={<Delta now={bounceRate} before={bounceRateP} points invert />} foot={`${int(sum(t7, "bounces"))} bounces`}>
+          <Sparkline points={spark((d) => rate(d.bounces, d.sent), pctOf(1))} />
+        </Kpi>
+        <Kpi href="/inventory?view=free" label="Free domains" icon={Globe} accent={ins.issues.freeLow ? "warning" : "faint"} alert={ins.issues.freeLow} value={int(o.totals.storage)}
+          foot={o.weeksLeft == null ? "no replacements in 4 weeks" : `at ${o.weeklyBurn.toFixed(1)} a week`}>
+          <span className="kpi-runway">{o.weeksLeft == null ? "Plenty of runway" : `About ${Math.floor(o.weeksLeft)} weeks left`}</span>
+        </Kpi>
       </section>
 
-      <div className="grid gap-3 xl:grid-cols-[minmax(0,1fr)_minmax(0,1.25fr)]">
-        <div className="flex min-w-0 flex-col gap-3">
-          <section className="card" aria-labelledby="todo-title">
-            <div className="card-head">
-              <h2 id="todo-title" className="card-title">Needs action</h2>
-              <span className="card-sub">{todo.length ? `${todo.length} thing${todo.length === 1 ? "" : "s"}` : "all clear"}</span>
-            </div>
-            {todo.length === 0 ? (
-              <Empty icon={CircleCheck} title="Nothing needs you">Domains, inboxes, DNS and orders all look healthy.</Empty>
-            ) : (
-              <div className="list">
-                {todo.map((a) => (
-                  <Link key={a.text} href={a.href} className="list-row hover:bg-surface-3" style={{ minHeight: 38 }}>
-                    <Dot tone={a.tone} />
-                    <span className="num w-10 text-right font-semibold text-ink">{int(a.n)}</span>
-                    <span className="list-main truncate text-ink-soft">{a.text}</span>
-                    <ArrowRight size={13} className="flex-none text-faint" />
-                  </Link>
-                ))}
-              </div>
-            )}
-          </section>
-
-          {dead.length ? (
-            <section className="card" id="dead" aria-labelledby="dead-title" style={{ scrollMarginTop: 72 }}>
-              <div className="card-head">
-                <h2 id="dead-title" className="card-title">Dead domains</h2>
-                <span className="card-sub" title="Active domains with no inbox connected in Smartlead, or connected inboxes on a domain whose DNS no longer answers. From the last Smartlead sync and DNS check.">nothing on them can send</span>
-              </div>
-              <DeadDomains rows={dead} />
-            </section>
-          ) : null}
-
-          <section className="card" aria-labelledby="attention-title">
-            <div className="card-head">
-              <h2 id="attention-title" className="card-title">Flagged domains</h2>
-              {o.totals.flagged > 0 ? <span className="card-sub">{o.totals.flagged}</span> : null}
-              <Link href="/health" className="card-link">Health rules <ArrowRight size={13} strokeWidth={1.5} /></Link>
-            </div>
-            <AttentionList rows={o.attention} />
-          </section>
-        </div>
-
-        <div className="flex min-w-0 flex-col gap-3">
-          <section className="card" aria-labelledby="trend-title">
-            <div className="card-head">
-              <h2 id="trend-title" className="card-title">Last 14 days</h2>
-              <span className="card-sub">sent per day · reply rate in the tooltip</span>
-              <Link href="/stats" className="card-link">Stats <ArrowRight size={13} strokeWidth={1.5} /></Link>
-            </div>
-            <div className="card-body">
-              <div className="trend" role="img" aria-label="Emails sent per day over the last 14 days">
-                {ins.trend.map((d) => {
-                  const r = rate(d.replies, d.sent);
-                  const day = new Date(`${d.day}T00:00:00Z`);
-                  return (
-                    <div key={d.day} className="trend-col" title={`${day.toLocaleDateString("en-GB", { weekday: "short", day: "numeric", month: "short", timeZone: "UTC" })}: ${int(d.sent)} sent, ${int(d.replies)} replies${r != null ? ` (${r.toFixed(2)}%)` : ""}, ${int(d.bounces)} bounces`}>
-                      <span className="trend-bar" style={{ height: `${Math.max(2, (100 * d.sent) / maxDay)}%` }} />
-                      <span className="trend-label">{day.getUTCDate()}</span>
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
-          </section>
-
-          <section className="card" aria-labelledby="clients-title">
-            <div className="card-head">
-              <h2 id="clients-title" className="card-title">Clients · 7 days</h2>
-              <div className="fleet-legend ml-auto">
-                {fleetTotals.map(({ s, n }) => <span key={s}><span className={`dot tone-${STATUS_META[s].tone}`} />{STATUS_META[s].label} <b>{int(n)}</b></span>)}
-              </div>
-            </div>
-            {ins.clients.length ? <ClientsTable clients={ins.clients} /> : <p className="card-body zero">No clients yet.</p>}
-            {o.fleet.length ? (
-              <div className="card-body flex flex-col border-t border-line">
-                {o.fleet.map((f) => (
-                  <Link key={f.clientId} href={`/inventory?client=${f.clientId}&view=all`} className="fleet-row -mx-1 rounded-md px-1 hover:bg-surface-3">
-                    <span className="truncate text-ink-soft">{f.name}</span>
-                    <span className="fleet-bar" style={{ width: `${Math.max(8, (f.total / fleetMax) * 100)}%` }}>
-                      {FLEET_STATES.filter((s) => f.counts[s]).map((s) => (
-                        <span key={s} className={`tone-${STATUS_META[s].tone}`} style={{ flex: f.counts[s] }} title={`${STATUS_META[s].label}: ${f.counts[s]}`} />
-                      ))}
-                    </span>
-                    <span className="num text-right text-muted">{int(f.total)}</span>
-                  </Link>
-                ))}
-              </div>
-            ) : null}
-          </section>
-        </div>
-      </div>
-
-      <section className="card" aria-labelledby="activity-title">
-        <div className="card-head">
-          <h2 id="activity-title" className="card-title">Recent changes</h2>
-          <Link href="/replacements" className="card-link">Replacements <ArrowUpRight size={13} strokeWidth={1.5} /></Link>
-        </div>
-        {o.activity.length === 0 ? (
-          <Empty icon={History} title="Nothing yet">Status changes and replacements show up here.</Empty>
-        ) : (
-          <div className="list">
-            {o.activity.slice(0, 6).map((a) => (
-              <div key={a.id} className="list-row">
-                <Dot tone={STATUS_META[a.toStatus].tone} />
-                <div className="list-main">
-                  <span className="truncate">
-                    <DomainLink id={a.domainId} className="strong text-ink hover:underline">{a.domain}</DomainLink>
-                    <span className="text-muted"> moved to </span>
-                    <span className="text-ink">{STATUS_META[a.toStatus].label}</span>
-                    {a.reason ? <span className="text-muted"> · {a.reason}</span> : null}
-                  </span>
-                </div>
-                <span className="list-meta hidden sm:block">{a.actor}</span>
-                <span className="list-meta w-16 text-right">{ago(a.at)}</span>
-              </div>
-            ))}
+      <div className="ov-grid">
+        <section className="card ov-area-needs" aria-labelledby="todo-title">
+          <div className="card-head">
+            <h2 id="todo-title" className="card-title">Needs action</h2>
+            <span className="card-sub">{todo.length ? `${todo.length} thing${todo.length === 1 ? "" : "s"}` : "all clear"}</span>
           </div>
-        )}
-      </section>
-    </>
+          {todo.length === 0 ? (
+            <Empty icon={CircleCheck} title={connections.problems.length ? "Nothing else needs you" : "Nothing needs you"}>
+              {connections.problems.length ? "Apart from the connections above, domains" : "Domains"}, DNS and orders all look healthy.
+            </Empty>
+          ) : (
+            <div className="list">
+              {todo.map((a) => (
+                <Link key={a.text} href={a.href} className={`action acc-${a.tone}`}>
+                  <span className="action-n">{int(a.n)}</span>
+                  <span className="action-text">{a.text}</span>
+                  <ArrowRight size={13} className="flex-none text-faint" aria-hidden="true" />
+                </Link>
+              ))}
+            </div>
+          )}
+        </section>
+
+        <section className="card ov-area-trend" aria-labelledby="trend-title">
+          <div className="card-head">
+            <h2 id="trend-title" className="card-title">Sending</h2>
+            <div className="st-legend">
+              <span><i className="is-recent" />Last 7 days <b>{int(sent7)}</b></span>
+              <span><i />7 days before <b>{int(sentP)}</b></span>
+            </div>
+            <Link href="/stats" className="card-link">Stats <ArrowUpRight size={13} strokeWidth={1.5} /></Link>
+          </div>
+          <div className="card-body"><SendTrend days={ins.trend} /></div>
+        </section>
+
+        <section className="card ov-area-insights" aria-labelledby="insights-title">
+          <div className="card-head">
+            <h2 id="insights-title" className="card-title inline-flex items-center gap-2"><Sparkles size={13} strokeWidth={1.75} className="text-faint" aria-hidden="true" />This week</h2>
+          </div>
+          <Insights lines={lines} />
+        </section>
+
+        <OverviewTabs id="dead" label="Domains to deal with" tabs={issues} />
+
+        <section className="card ov-area-clients" aria-labelledby="clients-title">
+          <div className="card-head">
+            <h2 id="clients-title" className="card-title">Clients</h2>
+            <div className="fleet-legend ml-auto">
+              {fleetTotals.filter(({ n }) => n > 0).map(({ s, n }) => <span key={s}><span className={`dot tone-${STATUS_META[s].tone}`} />{STATUS_META[s].label} <b>{int(n)}</b></span>)}
+            </div>
+          </div>
+          {ins.clients.length ? <ClientsTable clients={ins.clients} fleet={o.fleet} /> : <p className="card-body zero">No clients yet.</p>}
+        </section>
+      </div>
+    </div>
   );
 }
 
 function OverviewSkeleton() {
   return (
-    <>
-      <div className="stats is-6">
+    <div className="overview">
+      <div className="card" style={{ height: 168 }}><div className="card-body flex flex-col gap-3"><Skeleton w={90} h={11} /><Skeleton w={70} h={40} /><Skeleton w={140} h={12} /></div></div>
+      <div className="kpis">
         {[0, 1, 2, 3, 4, 5].map((i) => (
-          <div key={i} className="stat"><Skeleton w={80} h={11} /><Skeleton w={60} h={22} /><Skeleton w={110} h={10} /></div>
+          <div key={i} className="kpi"><Skeleton w={80} h={11} /><Skeleton w={60} h={22} /><Skeleton w={110} h={10} /></div>
         ))}
       </div>
-      <div className="grid gap-3 xl:grid-cols-[minmax(0,1fr)_minmax(0,1.25fr)]">
+      <div className="grid gap-3 xl:grid-cols-2">
         {[0, 1].map((i) => (
           <div key={i} className="card"><div className="card-head"><Skeleton w={110} h={12} /></div>
             <div className="card-body flex flex-col gap-4">{[0, 1, 2, 3, 4].map((j) => <Skeleton key={j} h={14} />)}</div>
           </div>
         ))}
       </div>
-    </>
+    </div>
   );
 }
