@@ -1,6 +1,6 @@
 "use client";
 
-import { ArrowDownRight, ArrowLeft, ArrowUpRight, BarChart3, Check, Columns2, Minus, Pencil, TriangleAlert, Unplug } from "lucide-react";
+import { ArrowDownRight, ArrowLeft, ArrowUpRight, BarChart3, Check, Columns2, Minus, Pencil, TriangleAlert, Unplug, Wrench } from "lucide-react";
 import Link from "next/link";
 import { useMemo, useState, useTransition } from "react";
 import { DomainLink } from "@/components/domains/DomainLink";
@@ -175,6 +175,7 @@ export function ClientSending({ initial }: { initial: ClientSendingData }) {
     <>
       <PageHead title={client.name}>
         <Link href="/clients" className="btn"><ArrowLeft size={14} strokeWidth={1.75} aria-hidden="true" />All clients</Link>
+        <Link href={`/fix?client=${client.id}`} className="btn"><Wrench size={14} strokeWidth={1.75} aria-hidden="true" />Fix queue</Link>
         <Link href={`/compare?client=${client.id}&dim=tag`} className="btn"><Columns2 size={14} strokeWidth={1.75} aria-hidden="true" />Compare tags</Link>
         <Link href={`/stats?client=${client.id}`} className="btn"><BarChart3 size={14} strokeWidth={1.75} aria-hidden="true" />Stats</Link>
       </PageHead>

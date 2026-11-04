@@ -783,6 +783,49 @@ a.kpi:hover { border-color: var(--accent-line, var(--line-strong)); }
 .cmp-close { margin-left: auto; }
 .cmp-domain-table { max-height: 420px; }
 
+/* Fix queue. */
+.fx-stat { border: 0; background: none; text-align: left; cursor: pointer; font: inherit; }
+.fx-stat:hover { background: var(--surface-2); }
+.fx-stat:focus-visible { outline: none; box-shadow: inset 0 0 0 2px var(--brand-line); }
+.fx-stat.is-on { background: var(--surface-2); box-shadow: inset 0 -2px 0 var(--brand-solid); }
+.fx-mark { display: inline-block; flex: none; width: 8px; height: 8px; border-radius: 3px; background: var(--line-strong); }
+.fx-mark.is-urgent { background: var(--danger-solid); }
+.fx-mark.is-soon { background: var(--warning-solid); }
+.fx-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 10px 14px; border-bottom: 1px solid var(--line); }
+.fx-select { width: 150px; }
+.fx-search { width: 170px; height: 28px; }
+.fx-actions { display: inline-flex; flex-wrap: wrap; gap: 6px; margin-left: auto; }
+.fx-kinds { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 8px 14px; border-bottom: 1px solid var(--line); }
+.fx-kind { display: inline-flex; align-items: center; gap: 6px; height: 26px; padding: 0 9px; border: 1px solid var(--line); border-radius: 7px; background: var(--surface); color: var(--muted); font-size: 12.5px; cursor: pointer; }
+.fx-kind .num { color: var(--ink); font-weight: 500; }
+.fx-kind:hover { border-color: var(--line-strong); color: var(--ink); }
+.fx-kind:focus-visible { outline: none; box-shadow: var(--focus-ring); }
+.fx-kind.is-on { background: var(--surface-2); border-color: var(--brand-line); color: var(--ink); font-weight: 500; }
+.fx-kind-clear { display: inline-flex; align-items: center; gap: 4px; padding: 0 4px; border: 0; background: none; color: var(--muted); font-size: 12px; cursor: pointer; }
+.fx-kind-clear:hover { color: var(--ink); }
+.fx-snooze-all { display: inline-flex; align-items: center; gap: 5px; margin-left: auto; color: var(--faint); }
+.fx-snooze-all .select { width: 160px; }
+.fx-table td { vertical-align: top; }
+.fx-tier th { position: sticky; left: 0; padding: 12px 14px 6px; background: var(--surface); text-align: left; font-size: 12.5px; font-weight: 600; color: var(--ink); }
+.fx-tier .fx-mark { margin-right: 7px; }
+.fx-tier-hint { margin-left: 8px; font-weight: 400; font-size: 12px; color: var(--faint); }
+.fx-domain { min-width: 190px; }
+.fx-name { display: block; font-weight: 500; color: var(--ink); }
+.fx-name:hover { text-decoration: underline; }
+.fx-sub { display: flex; align-items: center; gap: 8px; margin-top: 3px; font-size: 12px; color: var(--muted); }
+.fx-provider { color: var(--faint); font-size: 11.5px; }
+.fx-problem { min-width: 240px; }
+.fx-problem b { display: block; font-weight: 500; color: var(--ink); }
+.fx-evidence { display: block; margin-top: 2px; font-size: 12px; color: var(--muted); white-space: normal; }
+.fx-also { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 5px; }
+.fx-chip { padding: 1px 6px; border-radius: 5px; background: var(--surface-3); color: var(--muted); font-size: 11px; cursor: default; }
+.fx-next { min-width: 200px; white-space: normal; font-size: 12.5px; color: var(--ink-soft); }
+.fx-risk { min-width: 96px; }
+.fx-risk .num { font-weight: 500; }
+.fx-risk-track { display: block; width: 64px; height: 4px; margin: 5px 0 0 auto; border-radius: 2px; background: var(--surface-3); overflow: hidden; }
+.fx-risk-track > span { display: block; height: 100%; border-radius: 2px; background: var(--brand-solid); }
+.fx-snooze .select { width: 88px; height: 26px; font-size: 12px; color: var(--muted); }
+
 /* Clients: promised volume against what went out. */
 .cl-verdict { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 0; padding: 10px 14px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); font-size: 13.5px; font-weight: 500; color: var(--ink); }
 .cl-verdict svg { flex: none; }

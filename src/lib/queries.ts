@@ -2,6 +2,7 @@ import { parseSavedPairs } from "@/lib/tag-map";
 import { parseWarmupProgram } from "@/lib/warmup-program";
 import "server-only";
 import { attentionDomainCount } from "./attention";
+import { FIX_FACTS_SQL, fixQueue, type FixFact, type FixItem, type FixSnooze } from "./fix-queue";
 import { addDays, monday, previousRange } from "./range";
 import { senderOverview, tagOverview } from "./tag-list";
 import { sql } from "./db";
@@ -42,10 +43,22 @@ export async function listVendors() {
   return sql<VendorRow[]>`select id, name, kind, api_supported from vendors order by kind, name`;
 }
 
-export type NavCounts = { byStatus: Record<DomainStatus, number>; openAlerts: number; runningBatches: number; connectionProblems: number; attention: number };
+export type NavCounts = { byStatus: Record<DomainStatus, number>; openAlerts: number; runningBatches: number; connectionProblems: number; attention: number; fixToday: number };
+
+export type FixQueueData = { items: FixItem[]; snoozed: (FixItem & { until: string })[]; slSyncedAt: Date | null };
+
+/** Every problem on the live domains, worst first. */
+export async function getFixQueue(): Promise<FixQueueData> {
+  const [facts, snoozes, [sync]] = await Promise.all([
+    sql.unsafe<FixFact[]>(FIX_FACTS_SQL),
+    sql<FixSnooze[]>`select domain_name as name, kind, to_char(until at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"') as until from fix_snoozes where until > now()`,
+    sql<{ at: Date | null }[]>`select last_finished_at as at from job_state where job = 'smartlead-accounts'`,
+  ]);
+  return { ...fixQueue([...facts], [...snoozes]), slSyncedAt: sync?.at ?? null };
+}
 
 export async function getNavCounts(): Promise<NavCounts> {
-  const [statusRows, [extra], attention] = await Promise.all([
+  const [statusRows, [extra], attention, fix] = await Promise.all([
     sql<{ status: DomainStatus; n: number }[]>`select status, count(*)::int as n from domains group by status`,
     sql<{ openAlerts: number; runningBatches: number; connectionProblems: number }[]>`
       select
@@ -53,9 +66,10 @@ export async function getNavCounts(): Promise<NavCounts> {
         (select count(*)::int from replacement_batches where status = 'running') as running_batches,
         (select count(*)::int from order_connections where problem) as connection_problems`,
     attentionDomainCount(sql),
+    getFixQueue(),
   ]);
   const byStatus = Object.fromEntries(statusRows.map((r) => [r.status, r.n])) as Record<DomainStatus, number>;
-  return { byStatus, ...extra, attention };
+  return { byStatus, ...extra, attention, fixToday: fix.items.filter((i) => i.tier === "urgent").length };
 }
 
 // ---------------------------------------------------------------------------

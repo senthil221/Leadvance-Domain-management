@@ -141,6 +141,7 @@ async function OverviewContent() {
           <div className="card-head">
             <h2 id="todo-title" className="card-title">Needs action</h2>
             <span className="card-sub">{todo.length ? `${todo.length} thing${todo.length === 1 ? "" : "s"}` : "all clear"}</span>
+            <Link href="/fix" className="card-link">Fix queue <ArrowRight size={13} strokeWidth={1.5} aria-hidden="true" /></Link>
           </div>
           {todo.length === 0 ? (
             <Empty icon={CircleCheck} title={connections.problems.length ? "Nothing else needs you" : "Nothing needs you"}>

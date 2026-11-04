@@ -3,6 +3,7 @@
 import { refresh } from "next/cache";
 import { after } from "next/server";
 import { z } from "zod";
+import { FIX_KINDS, type FixKind } from "@/lib/fix-queue";
 import { requireActor } from "@/lib/auth";
 import { jobSql, sql } from "@/lib/db";
 import { hypertideAcceptsDomain } from "@/integrations/hypertide";
@@ -940,6 +941,38 @@ export async function setClientPromise(input: z.input<typeof clientPromiseInput>
     await sql`update clients set promised_daily = ${v.promisedDaily}, send_weekends = ${v.sendWeekends} where id = ${v.id}`;
     refresh();
     return { ok: true, data: undefined };
+  } catch (e) {
+    return fail(e);
+  }
+}
+
+const fixRow = z.object({ name: z.string().min(1).max(255), kind: z.enum(FIX_KINDS as [FixKind, ...FixKind[]]) });
+const snoozeInput = z.object({ rows: z.array(fixRow).min(1).max(2000), days: z.number().int().min(1).max(30) });
+
+/** Puts problems on the fix queue off for some days. They come back on their own. */
+export async function snoozeFix(input: z.input<typeof snoozeInput>): Promise<ActionResult<{ message?: string }>> {
+  try {
+    const actor = await requireActor();
+    const { rows, days } = snoozeInput.parse(input);
+    await sql`
+      insert into fix_snoozes (domain_name, kind, until, snoozed_by)
+      select x.name, x.kind, now() + make_interval(days => ${days}), ${actor}
+      from jsonb_to_recordset(${sql.json(rows)}) as x(name text, kind text)
+      on conflict (domain_name, kind) do update set until = excluded.until, snoozed_by = excluded.snoozed_by`;
+    refresh();
+    return { ok: true, data: {} };
+  } catch (e) {
+    return fail(e);
+  }
+}
+
+export async function wakeFix(input: z.input<typeof fixRow>): Promise<ActionResult<{ message?: string }>> {
+  try {
+    await requireActor();
+    const { name, kind } = fixRow.parse(input);
+    await sql`delete from fix_snoozes where domain_name = ${name} and kind = ${kind}`;
+    refresh();
+    return { ok: true, data: {} };
   } catch (e) {
     return fail(e);
   }
