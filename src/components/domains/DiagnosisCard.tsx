@@ -5,7 +5,7 @@ import { useState } from "react";
 import { toast } from "sonner";
 import { markDiagnosis } from "@/app/actions";
 import { Badge } from "@/components/ui";
-import { DIAGNOSIS_ACTIONS, DIAGNOSIS_VERDICTS, diagnosisCost, type StoredDiagnosis } from "@/lib/diagnose";
+import { DIAGNOSIS_ACTIONS, DIAGNOSIS_VERDICTS, diagnosisCost, modelName, type StoredDiagnosis } from "@/lib/diagnose";
 import { ago } from "@/lib/format";
 
 /** Asks the AI why this domain is or isn't performing. It only advises: nothing here changes the domain. */
@@ -49,7 +49,7 @@ export function DiagnosisCard({ domainId, initial }: { domainId: string; initial
     </button>
   );
   const r = diagnosis?.result;
-  const cost = diagnosis ? diagnosisCost(diagnosis) : null;
+  const cost = diagnosisCost(diagnosis?.costUsd);
 
   return (
     <section className="card" aria-label="Diagnosis">
@@ -90,8 +90,8 @@ export function DiagnosisCard({ domainId, initial }: { domainId: string; initial
 
             <div className="dx-foot">
               <span>
-                {diagnosis.model ? "AI" : "Rules, no AI used"} · {ago(diagnosis.createdAt)}
-                {cost != null ? ` · about $${cost < 0.01 ? "0.01" : cost.toFixed(2)}` : ""}
+                {diagnosis.model ? modelName(diagnosis.model) : "Rules, no AI used"} · {ago(diagnosis.createdAt)}
+                {cost ? ` · ${cost}` : ""}
               </span>
               {diagnosis.model ? (
                 <span className="dx-mark" role="group" aria-label="Was this right?">

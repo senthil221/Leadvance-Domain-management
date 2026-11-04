@@ -54,6 +54,7 @@ export type StoredDiagnosis = {
   result: Diagnosis;
   inputTokens: number | null;
   outputTokens: number | null;
+  costUsd: number | null;
   feedback: "right" | "wrong" | null;
 };
 
@@ -238,14 +239,18 @@ export function checkDiagnosis(raw: DiagnosisRaw, facts: DiagnosisFacts): Diagno
   };
 }
 
-// Opus 5.5 prices per million tokens, for showing roughly what a run cost.
-const PRICE_PER_M = { input: 4, output: 20 };
-export const DIAGNOSIS_MODEL = "claude-opus-5-5";
+/** Cheap, and good enough to read numbers. Set OPENROUTER_MODEL to use another one. */
+export const DEFAULT_DIAGNOSIS_MODEL = "deepseek/deepseek-v4.1-flash";
 
-export function diagnosisCost(d: Pick<StoredDiagnosis, "model" | "inputTokens" | "outputTokens">) {
-  if (d.model !== DIAGNOSIS_MODEL || d.inputTokens == null || d.outputTokens == null) return null;
-  return (d.inputTokens * PRICE_PER_M.input + d.outputTokens * PRICE_PER_M.output) / 1e6;
+/** What a run cost, as OpenRouter reported it. */
+export function diagnosisCost(costUsd: number | null | undefined) {
+  if (costUsd == null) return null;
+  if (costUsd < 0.001) return "under $0.001";
+  return `$${costUsd.toFixed(costUsd < 0.01 ? 3 : 2)}`;
 }
+
+/** "deepseek/deepseek-v4.1-flash" reads as "deepseek-v4.1-flash". */
+export const modelName = (model: string) => model.split("/").pop()!;
 
 export const DIAGNOSIS_SYSTEM = `You diagnose one sending domain for a cold email agency. The user will act on your answer, so a wrong call costs real sending volume.
 

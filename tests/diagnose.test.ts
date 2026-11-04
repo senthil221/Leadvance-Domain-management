@@ -1,13 +1,12 @@
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
-import Anthropic from "@anthropic-ai/sdk";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
-import { answerWithoutAi, buildFacts, checkDiagnosis, diagnosisCost, DIAGNOSIS_MODEL, factLabel, gapBetween, resolveFacts, sent28, type DiagnosisInput, type DiagnosisRaw } from "../src/lib/diagnose";
+import { answerWithoutAi, buildFacts, checkDiagnosis, DEFAULT_DIAGNOSIS_MODEL, diagnosisCost, factLabel, modelName, gapBetween, resolveFacts, sent28, type DiagnosisInput, type DiagnosisRaw } from "../src/lib/diagnose";
 import type { FixFact } from "../src/lib/fix-queue";
 
 vi.mock("../src/lib/db", () => ({ sql: Object.assign(() => ({}), { json: (v: unknown) => v }) }));
 vi.mock("../src/lib/queries", () => ({ getDiagnosisInput: vi.fn() }));
-const { askClaude, DiagnosisError } = await import("../src/lib/diagnose-ai");
+const { askAi, DiagnosisError } = await import("../src/lib/diagnose-ai");
 
 const fact = (over: Partial<FixFact> = {}): FixFact => ({
   domainId: "d-1", name: "madeupsender.com", status: "active", standing: "active", current: true, orderLive: true, orderState: "active", provider: "Hypertide",
@@ -131,53 +130,98 @@ describe("checking the answer", () => {
 });
 
 describe("cost", () => {
-  it("works out from tokens, and only for the model it knows the price of", () => {
-    expect(diagnosisCost({ model: DIAGNOSIS_MODEL, inputTokens: 2000, outputTokens: 1000 })).toBeCloseTo(0.028);
-    expect(diagnosisCost({ model: "another-model", inputTokens: 2000, outputTokens: 1000 })).toBeNull();
-    expect(diagnosisCost({ model: null, inputTokens: null, outputTokens: null })).toBeNull();
+  it("shows what OpenRouter reported, in words that fit small amounts", () => {
+    expect(diagnosisCost(0.0004)).toBe("under $0.001");
+    expect(diagnosisCost(0.0027)).toBe("$0.003");
+    expect(diagnosisCost(0.042)).toBe("$0.04");
+    expect(diagnosisCost(null)).toBeNull();
+    expect(modelName(DEFAULT_DIAGNOSIS_MODEL)).toBe("deepseek-v4.1-flash");
   });
 });
 
 describe("asking the AI", () => {
   let server: Server;
-  let client: Anthropic;
-  let seen: { body: Record<string, never>; beta: string | undefined } | null = null;
+  let setup: { apiKey: string; baseUrl: string; model: string };
+  let seen: { body: Record<string, never>; auth: string | undefined; url: string | undefined } | null = null;
+  let status = 200;
   let reply: Record<string, unknown> = {};
+  const answer = (content: string, finish = "stop") => ({ choices: [{ finish_reason: finish, message: { role: "assistant", content } }] });
 
   beforeAll(async () => {
     server = createServer((req, res) => {
       let body = "";
       req.on("data", (c) => (body += c));
       req.on("end", () => {
-        seen = { body: JSON.parse(body), beta: req.headers["anthropic-beta"] as string | undefined };
+        seen = { body: JSON.parse(body), auth: req.headers.authorization, url: req.url };
+        res.statusCode = status;
         res.setHeader("content-type", "application/json");
-        res.end(JSON.stringify({ id: "msg_1", type: "message", role: "assistant", model: DIAGNOSIS_MODEL, stop_reason: "end_turn", usage: { input_tokens: 900, output_tokens: 300 }, content: [{ type: "text", text: JSON.stringify(raw()) }], ...reply }));
+        res.end(JSON.stringify({ id: "gen-1", model: DEFAULT_DIAGNOSIS_MODEL, usage: { prompt_tokens: 900, completion_tokens: 300, cost: 0.0002 }, ...reply }));
       });
     });
     await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
-    client = new Anthropic({ apiKey: "made-up-for-tests", baseURL: `http://127.0.0.1:${(server.address() as AddressInfo).port}`, maxRetries: 0 });
+    setup = { apiKey: "made-up-for-tests", baseUrl: `http://127.0.0.1:${(server.address() as AddressInfo).port}`, model: DEFAULT_DIAGNOSIS_MODEL };
   });
   afterAll(() => { server.close(); });
 
   const facts = buildFacts(input(), fact());
 
   it("sends only the facts, asks for the right shape, and reads the answer", async () => {
-    reply = {};
-    const a = await askClaude(facts, client);
-    expect(a).toMatchObject({ model: DIAGNOSIS_MODEL, inputTokens: 900, outputTokens: 300 });
+    status = 200;
+    reply = answer(JSON.stringify(raw()));
+    const a = await askAi(facts, setup);
+    expect(a).toMatchObject({ model: DEFAULT_DIAGNOSIS_MODEL, inputTokens: 900, outputTokens: 300, costUsd: 0.0002 });
     expect(a.raw.verdict).toBe("underperforming");
-    const { body, beta } = seen!;
-    expect(beta).toContain("server-side-fallback-2026-07-01");
-    expect(body).toMatchObject({ model: DIAGNOSIS_MODEL, fallbacks: "default" });
-    expect((body.messages as { content: string }[])[0].content).toBe(JSON.stringify(facts));
+    const { body, auth, url } = seen!;
+    expect(url).toBe("/chat/completions");
+    expect(auth).toBe("Bearer made-up-for-tests");
+    expect(body).toMatchObject({ model: DEFAULT_DIAGNOSIS_MODEL, provider: { data_collection: "deny", require_parameters: true, sort: "price" } });
+    expect((body.messages as { content: string }[])[1].content).toBe(JSON.stringify(facts));
     expect(JSON.stringify(body)).not.toContain("madeupsender");
-    expect(JSON.stringify((body.output_config as { format: unknown }).format)).toContain("wouldChange");
   });
 
-  it("refuses to save a declined, cut-off or malformed answer", async () => {
-    reply = { stop_reason: "refusal", content: [] };
-    await expect(askClaude(facts, client)).rejects.toBeInstanceOf(DiagnosisError);
-    reply = { stop_reason: "max_tokens", content: [{ type: "text", text: "{\"verdict\":" }] };
-    await expect(askClaude(facts, client)).rejects.toThrow();
+  it("asks for a schema strict hosts will accept", async () => {
+    status = 200;
+    reply = answer(JSON.stringify(raw()));
+    await askAi(facts, setup);
+    const format = (seen!.body.response_format as { json_schema: { strict: boolean; schema: { additionalProperties: boolean; required: string[]; properties: { reasons: { items: { additionalProperties: boolean } } } } } }).json_schema;
+    expect(format.strict).toBe(true);
+    expect(format.schema).not.toHaveProperty("$schema");
+    expect(format.schema.additionalProperties).toBe(false);
+    expect(format.schema.required).toContain("wouldChange");
+    expect(format.schema.properties.reasons.items.additionalProperties).toBe(false);
+  });
+
+  it("reads an answer wrapped in a code fence", async () => {
+    status = 200;
+    reply = answer("```json\n" + JSON.stringify(raw()) + "\n```");
+    expect((await askAi(facts, setup)).raw.verdict).toBe("underperforming");
+  });
+
+  it("copes when the cost isn't reported", async () => {
+    status = 200;
+    reply = { ...answer(JSON.stringify(raw())), usage: undefined };
+    expect(await askAi(facts, setup)).toMatchObject({ inputTokens: null, costUsd: null });
+  });
+
+  it("won't accept a cut-off, malformed or wrong-shaped answer", async () => {
+    status = 200;
+    reply = answer("{\"verdict\":", "length");
+    await expect(askAi(facts, setup)).rejects.toThrow("cut off");
+    reply = answer("not json");
+    await expect(askAi(facts, setup)).rejects.toThrow("wrong shape");
+    reply = answer(JSON.stringify({ ...raw(), verdict: "great" }));
+    await expect(askAi(facts, setup)).rejects.toThrow("wrong shape");
+    reply = { error: { code: 402, message: "no credit" } };
+    await expect(askAi(facts, setup)).rejects.toThrow("out of credit");
+    await expect(askAi(facts, setup)).rejects.toBeInstanceOf(DiagnosisError);
+  });
+
+  it("explains a refused key, no credit and no suitable host", async () => {
+    reply = {};
+    for (const [code, words] of [[401, "refused the API key"], [402, "out of credit"], [404, "privacy and price limits"], [429, "rate limiting"], [500, "error 500"]] as const) {
+      status = code;
+      await expect(askAi(facts, setup)).rejects.toThrow(words);
+    }
+    status = 200;
   });
 });

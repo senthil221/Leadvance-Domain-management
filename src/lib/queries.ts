@@ -470,7 +470,7 @@ export async function getDomainDetail(id: string): Promise<DomainDetail | null> 
       from alerts a join health_rules r on r.id = a.rule_id
       where a.domain_id = ${id} and a.status = 'open' order by a.opened_at desc`,
     sql<StoredDiagnosis[]>`
-      select id, created_at, created_by, model, result, input_tokens, output_tokens, feedback
+      select id, created_at, created_by, model, result, input_tokens, output_tokens, cost_usd::float8 as cost_usd, feedback
       from domain_diagnoses where domain_id = ${id} order by id desc limit 1`,
   ]);
 
