@@ -93,8 +93,19 @@ describe("bounces: the code decides, then the words", () => {
     expect(bounceReason("451 4.4.4 Mail received as unauthenticated, incoming to a recipient domain configured in a hosted tenant which has no mail-enabled subscriptions")).toBe("missing");
   });
 
-  it("a mail loop is neither a bad address nor a delay", () => {
-    expect(bounceReason("554 5.4.14 Hop count exceeded - possible mail loop")).toBe("other");
+  it("a mail loop is the recipient's own setup, neither a bad address nor a delay", () => {
+    expect(bounceReason("554 5.4.14 Hop count exceeded - possible mail loop")).toBe("restricted");
+    expect(bounceReason("550 misconfigured forwarding address")).toBe("restricted");
+  });
+  it("a sender domain nobody can resolve is DNS, even with the address in brackets", () => {
+    expect(bounceReason("553 #5.1.8 Domain of sender address <amy@example.com> does not exist")).toBe("dns");
+    expect(bounceReason("Message expired - 451 #4.1.8 Domain of sender address <amy@example.com> does not resolve")).toBe("dns");
+    expect(bounceReason("Message permanently deferred due to unresolvable example.com from domain")).toBe("dns");
+  });
+  it("a server that won't take mail for the address means the address is no good", () => {
+    expect(bounceReason("454 4.7.1 <amy@example.com>: Relay access denied")).toBe("missing");
+    expect(bounceReason("authentication required to relay - 550 Please turn on SMTP Authentication in your mail client")).toBe("missing");
+    expect(bounceReason("550 Disabled recipient address")).toBe("missing");
   });
 
   it("finds the server's own error further down a Microsoft notice, past its help text", () => {

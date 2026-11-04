@@ -44,11 +44,14 @@ const CODES: [RegExp, BounceReason][] = [
 // Wording that settles it even when a code says otherwise: "550 5.1.0 sender rejected"
 // isn't a bad address, and a sender domain nobody can find is our DNS whatever the code.
 const PHRASES: [RegExp, BounceReason][] = [
-  [/sender address rejected:? domain not found|domain of sender address\s+(does not exist|does not resolve)|sender domain not found|has no a, aaaa,? or mx/i, "dns"],
+  [/sender address rejected:? domain not found|domain of sender address[\s<>\[\]]*(does not exist|does not resolve)|sender domain not found|has no a, aaaa,? or mx|unresolvable\b.{0,80}\bfrom domain/i, "dns"],
   [/sender address\s*(\[[^\]]*\]\s*)?blocked|blocked using/i, "blocklist"],
   [/\bsender rejected\b|reject due to policy restrictions/i, "policy"],
   [/no mail-enabled subscriptions|mailbox is disabled|no mailbox by that name|has been suspended|no longer at\b|unable to receive email|account closed|domain\s+no longer available/i, "missing"],
-  [/hop count exceeded|mail loop/i, "other"],
+  // Their mail goes round in circles, or a forward is broken: the recipient's own setup, nothing to do with the sender.
+  [/hop count exceeded|mail loop|misconfigured forwarding address/i, "restricted"],
+  // The server doesn't take mail for that address at all.
+  [/relay access denied|authentication required to relay|please turn on smtp authentication|disabled recipient address/i, "missing"],
 ];
 
 /**

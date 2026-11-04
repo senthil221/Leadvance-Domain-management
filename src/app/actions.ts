@@ -886,6 +886,51 @@ export async function loadReview(input: z.input<typeof statsRange>): Promise<Act
   }
 }
 
+/** Compare's numbers for a range: the domains and their days, for the trend lines. */
+export async function loadCompare(input: z.input<typeof statsRange>): Promise<ActionResult<{ review: import("@/lib/review").ReviewData; daily: import("@/lib/queries").CompareDay[] }>> {
+  try {
+    await requireActor();
+    const { from, to } = statsRange.parse(input);
+    const { getReview, getCompareDaily } = await import("@/lib/queries");
+    const [review, daily] = await Promise.all([getReview(from, to), getCompareDaily(from, to)]);
+    return { ok: true, data: { review, daily } };
+  } catch (e) {
+    return fail(e);
+  }
+}
+
+/** One client's sending for a range. */
+export async function loadClientSending(input: { id: string; from: string; to: string }): Promise<ActionResult<import("@/lib/queries").ClientSendingData>> {
+  try {
+    await requireActor();
+    const { from, to } = statsRange.parse(input);
+    const { getClientSending } = await import("@/lib/queries");
+    const data = await getClientSending(z.uuid().parse(input.id), from, to);
+    return data ? { ok: true, data } : { ok: false, error: "That client doesn't exist any more" };
+  } catch (e) {
+    return fail(e);
+  }
+}
+
+const clientPromiseInput = z.object({
+  id: z.uuid(),
+  promisedDaily: z.number().int("Use a whole number").min(0).max(10_000_000).nullable(),
+  sendWeekends: z.boolean(),
+});
+
+/** What a client was promised per day. Empty clears it. */
+export async function setClientPromise(input: z.input<typeof clientPromiseInput>): Promise<ActionResult> {
+  try {
+    await requireActor();
+    const v = clientPromiseInput.parse(input);
+    await sql`update clients set promised_daily = ${v.promisedDaily}, send_weekends = ${v.sendWeekends} where id = ${v.id}`;
+    refresh();
+    return { ok: true, data: undefined };
+  } catch (e) {
+    return fail(e);
+  }
+}
+
 /** One domain's bounces in the range, by cause, notice, campaign and recipient provider (Performance). */
 export async function loadBounceDetail(input: { domainId: string; from: string; to: string }): Promise<ActionResult<import("@/lib/bounce-detail").BounceDetail>> {
   try {

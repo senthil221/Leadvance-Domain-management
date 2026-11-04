@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { ageBand, bounceMix, findings, groupsBy, keysOf, summarize, zScore } from "../src/lib/compare";
+import { ageBand, bounceMix, findings, groupsBy, headline, keysOf, standAgainst, summarize, trendBuckets, trendSeries, wilson, zScore } from "../src/lib/compare";
 import { isCurrent, judge, type ReviewDomain } from "../src/lib/review";
 
 let seq = 0;
@@ -119,5 +119,107 @@ describe("standing in the review", () => {
   it("doesn't ask for action on a domain that's finished but still connected", () => {
     expect(judge(domain({ standing: "expired" })).verdict).toBe("ended");
     expect(judge(domain({ standing: "cancelled", ht: "cancelled" })).verdict).toBe("ended");
+  });
+});
+
+describe("comparing any number of groups", () => {
+  const many2 = (n: number, over: Partial<ReviewDomain>) => Array.from({ length: n }, () => domain(over));
+
+  it("gives a wider likely range the less was sent", () => {
+    const small = wilson(2, 100)!, big = wilson(200, 10000)!;
+    expect(small[1] - small[0]).toBeGreaterThan(big[1] - big[0]);
+    expect(small[0]).toBeLessThan(2);
+    expect(small[1]).toBeGreaterThan(2);
+    expect(wilson(0, 0)).toBeNull();
+  });
+
+  it("calls a group ahead or behind only when the gap can't be chance", () => {
+    const good = many2(5, { tags: ["good"], sent: 2000, human: 60 });
+    const bad = many2(5, { tags: ["bad"], sent: 2000, human: 4 });
+    const all = summarize("all", "All", [...good, ...bad]);
+    expect(standAgainst(summarize("good", "good", good), all, "human").state).toBe("ahead");
+    expect(standAgainst(summarize("bad", "bad", bad), all, "human").state).toBe("behind");
+    // Too little sent to say.
+    expect(standAgainst(summarize("few", "few", [domain({ sent: 100, human: 10 })]), all, "human").state).toBe("low");
+    // Sent and reputation aren't better or worse.
+    expect(standAgainst(summarize("good", "good", good), all, "sent").state).toBe("none");
+  });
+
+  it("reads a higher bounce rate as behind, not ahead", () => {
+    const high = many2(5, { sent: 2000, bounces: 200 }), low = many2(5, { sent: 2000, bounces: 10 });
+    const all = summarize("all", "All", [...high, ...low]);
+    expect(standAgainst(summarize("h", "h", high), all, "bounce").state).toBe("behind");
+    expect(standAgainst(summarize("l", "l", low), all, "bounce").state).toBe("ahead");
+  });
+
+  it("says so when nothing separates them", () => {
+    const a = summarize("a", "A", many2(3, { sent: 1000, human: 5 })), b = summarize("b", "B", many2(3, { sent: 1000, human: 5 }));
+    const all = summarize("all", "All", [...a.rows, ...b.rows]);
+    expect(headline([a, b], all, "human")).toContain("No clear winner");
+    expect(headline([], all, "sent")).toContain("Pick");
+  });
+
+  it("names the group that's ahead", () => {
+    const a = summarize("a", "Alpha", many2(5, { sent: 2000, human: 60 })), b = summarize("b", "Beta", many2(5, { sent: 2000, human: 4 }));
+    const all = summarize("all", "All", [...a.rows, ...b.rows]);
+    const line = headline([b, a], all, "human");
+    expect(line).toContain("Alpha");
+    expect(line).toContain("ahead");
+    expect(line).toContain("Beta");
+  });
+
+  it("draws a line per group, leaving out days with too little sent", () => {
+    const a = domain({ id: "a" }), b = domain({ id: "b" });
+    const row = (domainId: string, day: string, sent: number, human: number) => ({ domainId, day, sent, replies: human, human, ooo: 0, auto: 0, bounces: 1, blocked: 0, rep: 90 });
+    const buckets = trendBuckets("2026-11-02", "2026-11-04");
+    expect(buckets).toHaveLength(3);
+    const daily = [row("a", "2026-11-02", 100, 5), row("a", "2026-11-03", 5, 5), row("b", "2026-11-02", 100, 1)];
+    const [x, y] = trendSeries(daily, [{ key: "A", ids: new Set([a.id]) }, { key: "B", ids: new Set([b.id]) }], "human", buckets);
+    expect(x.values).toEqual([5, null, null]);
+    expect(y.values).toEqual([1, null, null]);
+    expect(trendSeries(daily, [{ key: "A", ids: new Set([a.id]) }], "sent", buckets)[0].values).toEqual([100, 5, 0]);
+  });
+
+  it("goes weekly on long ranges and keeps the last days in the last week", () => {
+    const b = trendBuckets("2026-08-01", "2026-10-31");
+    expect(b[0].to).toBe("2026-08-07");
+    expect(b.at(-1)!.to).toBe("2026-10-31");
+    const s = trendSeries([{ domainId: "a", day: "2026-08-05", sent: 50, replies: 0, human: 0, ooo: 0, auto: 0, bounces: 0, blocked: 0, rep: null }], [{ key: "A", ids: new Set(["a"]) }], "sent", b);
+    expect(s[0].values[0]).toBe(50);
+  });
+
+  it("raises what the servers said about our own setup, with what to do", () => {
+    const list = [...many2(3, { causes: { dns: 20 }, bounces: 20 }), ...many2(5, { causes: { missing: 2 }, bounces: 2 })];
+    const f = findings(list).find((x) => x.id === "cause:dns")!;
+    expect(f.title).toContain("60 bounces across 3 domains");
+    expect(f.action).toContain("DNS");
+    expect(f.domainIds).toHaveLength(3);
+  });
+
+  it("doesn't raise a reason that's only a handful of bounces", () => {
+    const list = many2(3, { causes: { blocklist: 1 }, bounces: 1 });
+    expect(findings(list).find((x) => x.id === "cause:blocklist")).toBeUndefined();
+  });
+
+  it("notices a group's bounces rising against its own past", () => {
+    const list = [...many2(5, { tld: "info", sent: 2000, bounces: 120, prevSent: 2000, prevBounces: 10 }), ...many2(5, { tld: "com", sent: 2000, bounces: 12, prevSent: 2000, prevBounces: 12 })];
+    const f = findings(list, ["tld"], 10).find((x) => x.id === "tld:info:bounce-up")!;
+    expect(f.title).toContain("went from");
+    expect(f.sure).toBeTruthy();
+  });
+
+  it("only mentions a client's volume falling when asked to look, and links to the client", () => {
+    const list = [...many2(4, { clientId: "c9", clientName: "Client Nine", sent: 200, prevSent: 2000 }), ...many2(4, { clientId: "c8", clientName: "Client Eight", sent: 2000, prevSent: 2000 })];
+    expect(findings(list, ["tld"], 10).find((x) => x.id.endsWith(":volume"))).toBeUndefined();
+    const f = findings(list, ["tld"], 10, { volumeDrop: 0.3 }).find((x) => x.id === "client:c9:volume")!;
+    expect(f.title).toContain("90% less");
+    expect(f.href).toBe("/clients/c9");
+  });
+
+  it("every finding says what to do", () => {
+    const list = [...many2(5, { tld: "info", sent: 2000, bounces: 200, human: 60 }), ...many2(5, { tld: "com", sent: 2000, bounces: 10, human: 4 })];
+    const all = findings(list, ["tld"], 10);
+    expect(all.length).toBeGreaterThan(0);
+    for (const f of all) expect(f.action.length).toBeGreaterThan(5);
   });
 });

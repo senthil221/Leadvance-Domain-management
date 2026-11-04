@@ -2,7 +2,7 @@ import { parseSavedPairs } from "@/lib/tag-map";
 import { parseWarmupProgram } from "@/lib/warmup-program";
 import "server-only";
 import { attentionDomainCount } from "./attention";
-import { monday, previousRange } from "./range";
+import { addDays, monday, previousRange } from "./range";
 import { senderOverview, tagOverview } from "./tag-list";
 import { sql } from "./db";
 import type { ConnectionProblem } from "@/lib/connections";
@@ -1048,6 +1048,119 @@ export async function getReview(from: string, to: string): Promise<import("./rev
   return { from, to, today: t.today, slSyncedAt: t.slSyncedAt, domains, campaigns };
 }
 
+/** Each domain's numbers per day, for the trend lines on Compare. Only days with something on them. */
+export type CompareDay = {
+  domainId: string; day: string; sent: number; replies: number; human: number; ooo: number; auto: number; bounces: number; blocked: number; rep: number | null;
+};
+export async function getCompareDaily(from: string, to: string): Promise<CompareDay[]> {
+  return sql<CompareDay[]>`
+    with tz as (select coalesce((select value #>> '{}' from settings where key = 'stats_timezone'), 'UTC') as z),
+    blocked as (
+      select e.domain_id, (e.occurred_at at time zone tz.z)::date as day, count(*)::int as n
+      from email_events e cross join tz
+      where e.kind = 'bounce' and e.bounce_cause in ('spam', 'blocklist') and e.domain_id is not null
+        and (e.occurred_at at time zone tz.z)::date between ${from}::date and ${to}::date
+      group by 1, 2)
+    select s.domain_id, to_char(s.day, 'YYYY-MM-DD') as day, s.sent, s.replies, s.human_replies as human, s.ooo, s.auto_replies as auto, s.bounces, coalesce(b.n, 0) as blocked, s.warmup_reputation as rep
+    from domain_daily_stats s left join blocked b on b.domain_id = s.domain_id and b.day = s.day
+    where s.day between ${from}::date and ${to}::date and (s.sent > 0 or s.replies > 0 or s.bounces > 0 or s.warmup_reputation is not null)`;
+}
+
+export type ClientSendingRow = {
+  id: string; name: string; hue: number; promisedDaily: number | null; sendWeekends: boolean;
+  domains: number; inboxes: number; capacity: number; disconnected: number; lostCapacity: number;
+};
+export type ClientDomainRow = {
+  id: string; name: string; status: string; standing: import("./review").Standing | null; current: boolean; provider: string | null;
+  sent: number; /** Finished days only, to set against the days before. */ sentFinished: number; prevSent: number;
+  human: number; bounces: number; inboxes: number; disconnected: number; capacity: number; tags: string[];
+};
+export type ClientSendingData = {
+  client: ClientSendingRow; from: string; to: string; today: string;
+  /** The finished days of the range and the same weekdays before them. */ prevFrom: string | null; prevTo: string | null;
+  days: import("./client-sending").SendDay[]; prevDays: { day: string; sent: number }[]; domains: ClientDomainRow[];
+};
+
+const clientRows = (where: { id?: string }) => sql<ClientSendingRow[]>`
+  select c.id, c.name, c.hue, c.promised_daily, c.send_weekends,
+    (select count(*)::int from domains d join domain_standing st on st.domain_id = d.id where d.client_id = c.id and d.status = 'active' and st.current) as domains,
+    k.inboxes, k.capacity, k.disconnected, k.lost_capacity
+  from clients c
+  left join lateral (
+    select count(*) filter (where i.status = 'connected' and st.current)::int as inboxes,
+      coalesce(sum(i.daily_limit) filter (where i.status = 'connected' and st.current), 0)::int as capacity,
+      -- Down but paid for: reconnecting these is the quickest way to get volume back.
+      count(*) filter (where i.status = 'disconnected' and st.order_live)::int as disconnected,
+      coalesce(sum(i.daily_limit) filter (where i.status = 'disconnected' and st.order_live), 0)::int as lost_capacity
+    from inboxes i join domains d on d.id = i.domain_id join domain_standing st on st.domain_id = d.id
+    where d.client_id = c.id and d.status = 'active') k on true
+  where c.archived_at is null ${where.id ? sql`and c.id = ${where.id}` : sql``}
+  order by c.name`;
+
+/** Every client with what it was promised and the last 28 days it sent, on any domain. */
+export async function getClientsSending() {
+  const { to: today } = await lastDays(1);
+  const from = addDays(today, -28);
+  const [clients, days] = await Promise.all([
+    clientRows({}),
+    sql<{ clientId: string; day: string; sent: number }[]>`
+      select d.client_id, to_char(s.day, 'YYYY-MM-DD') as day, sum(s.sent)::int as sent
+      from domain_daily_stats s join domains d on d.id = s.domain_id
+      where d.client_id is not null and s.day >= ${from}::date and s.day <= ${today}::date
+      group by 1, 2`,
+  ]);
+  return { today, from, clients, days };
+}
+
+/** One client's sending per day and by domain, with the same weekdays before to compare with. */
+export async function getClientSending(id: string, from: string, to: string): Promise<ClientSendingData | null> {
+  const { to: today } = await lastDays(1);
+  const [client] = await clientRows({ id });
+  if (!client) return null;
+  // Today isn't over, so it would read as a drop against a full day last week.
+  const last = to >= today ? addDays(today, -1) : to;
+  const prev = last >= from ? previousRange(from, last) : null;
+  const [days, prevDays, domains] = await Promise.all([
+    sql<import("./client-sending").SendDay[]>`
+      select to_char(g.day, 'YYYY-MM-DD') as day, coalesce(sum(s.sent), 0)::int as sent, coalesce(sum(s.replies), 0)::int as replies,
+        coalesce(sum(s.human_replies), 0)::int as human, coalesce(sum(s.bounces), 0)::int as bounces,
+        (count(s.domain_id) filter (where s.sent > 0))::int as senders
+      from generate_series(${from}::date, ${to}::date, interval '1 day') g(day)
+      left join (domain_daily_stats s join domains d on d.id = s.domain_id and d.client_id = ${id}) on s.day = g.day::date
+      group by g.day order by g.day`,
+    prev ? sql<{ day: string; sent: number }[]>`
+      select to_char(g.day, 'YYYY-MM-DD') as day, coalesce(sum(s.sent), 0)::int as sent
+      from generate_series(${prev[0]}::date, ${prev[1]}::date, interval '1 day') g(day)
+      left join (domain_daily_stats s join domains d on d.id = s.domain_id and d.client_id = ${id}) on s.day = g.day::date
+      group by g.day order by g.day` : Promise.resolve([]),
+    sql<ClientDomainRow[]>`
+      with m as (
+        select s.domain_id,
+          coalesce(sum(s.sent) filter (where s.day between ${from}::date and ${to}::date), 0)::int as sent,
+          coalesce(sum(s.sent) filter (where s.day between ${from}::date and ${last}::date), 0)::int as sent_finished,
+          coalesce(sum(s.sent) filter (where ${prev?.[0] ?? null}::date is not null and s.day between ${prev?.[0] ?? null}::date and ${prev?.[1] ?? null}::date), 0)::int as prev_sent,
+          coalesce(sum(s.human_replies) filter (where s.day between ${from}::date and ${to}::date), 0)::int as human,
+          coalesce(sum(s.bounces) filter (where s.day between ${from}::date and ${to}::date), 0)::int as bounces
+        from domain_daily_stats s join domains x on x.id = s.domain_id
+        where x.client_id = ${id} and s.day >= least(${from}::date, coalesce(${prev?.[0] ?? null}::date, ${from}::date)) and s.day <= ${to}::date
+        group by 1)
+      select d.id, d.name, d.status::text as status, st.standing, st.current, st.provider,
+        coalesce(m.sent, 0) as sent, coalesce(m.sent_finished, 0) as sent_finished, coalesce(m.prev_sent, 0) as prev_sent,
+        coalesce(m.human, 0) as human, coalesce(m.bounces, 0) as bounces,
+        (select count(*)::int from inboxes i where i.domain_id = d.id and i.status = 'connected') as inboxes,
+        (select count(*)::int from inboxes i where i.domain_id = d.id and i.status = 'disconnected') as disconnected,
+        (select coalesce(sum(i.daily_limit), 0)::int from inboxes i where i.domain_id = d.id and i.status = 'connected') as capacity,
+        (select coalesce(array_agg(distinct x.t), '{}') from (
+          select trim(t) as t from unnest(d.tags) t
+          union select trim(t) from inboxes i cross join unnest(i.smartlead_tags) t where i.domain_id = d.id and i.status <> 'removed') x where x.t <> '') as tags
+      from domains d join domain_standing st on st.domain_id = d.id
+      left join m on m.domain_id = d.id
+      where d.client_id = ${id} and (st.current or m.sent > 0 or m.prev_sent > 0)
+      order by coalesce(m.sent, 0) desc, d.name`,
+  ]);
+  return { client, from, to, today, prevFrom: prev?.[0] ?? null, prevTo: prev?.[1] ?? null, days, prevDays, domains };
+}
+
 /** One domain's bounces in a range, for Performance. */
 export async function getBounceDetail(domainId: string, from: string, to: string): Promise<import("./bounce-detail").BounceDetail> {
   const events = await sql<import("./bounce-detail").BounceEvent[]>`
@@ -1055,7 +1168,7 @@ export async function getBounceDetail(domainId: string, from: string, to: string
     select e.bounce_cause as cause, e.occurred_at as at, e.campaign_id::int as campaign_id, e.campaign_name, e.recipient_esp as esp,
       left(coalesce(e.payload->'bounce_message'->>'text', e.payload->>'description', e.payload->>'bounce_reason'), 600) as text,
       left(replace(substring(regexp_replace(coalesce(e.payload->'bounce_message'->>'html', ''), '<[^>]+>', ' ', 'g')
-        from 'Remote server returned an error.{0,250}'), '&gt;', '>'), 300) as remote
+        from '(?:Remote server returned an error|[[:<:]]Error:[[:space:]]+[45][0-9]{2}[ -]).{0,250}'), '&gt;', '>'), 300) as remote
     from email_events e cross join tz
     where e.kind = 'bounce' and e.domain_id = ${domainId}
       and (e.occurred_at at time zone tz.z)::date between ${from}::date and ${to}::date
@@ -1151,6 +1264,7 @@ export type Issues = {
 export type ClientInsight = {
   id: string; name: string; hue: number; active: number; warming: number; inboxes: number; capacity: number;
   sent: number; replies: number; human: number; bounces: number; sentPrev: number;
+  promisedDaily: number | null; sendWeekends: boolean; sentYesterday: number; yesterday: string;
 };
 export type TrendDay = { day: string; sent: number; replies: number; human: number; bounces: number };
 
@@ -1267,7 +1381,12 @@ export async function getInsights() {
         coalesce(sum(s.replies) filter (where s.day > current_date - 7), 0)::int as replies,
         coalesce(sum(s.human_replies) filter (where s.day > current_date - 7), 0)::int as human,
         coalesce(sum(s.bounces) filter (where s.day > current_date - 7), 0)::int as bounces,
-        coalesce(sum(s.sent) filter (where s.day <= current_date - 7), 0)::int as sent_prev
+        coalesce(sum(s.sent) filter (where s.day <= current_date - 7), 0)::int as sent_prev,
+        c.promised_daily, c.send_weekends,
+        -- Everything the client's domains sent yesterday, live today or not: that's what went out.
+        (select coalesce(sum(y.sent), 0)::int from domain_daily_stats y join domains x on x.id = y.domain_id
+          where x.client_id = c.id and y.day = (now() at time zone coalesce((select value #>> '{}' from settings where key = 'stats_timezone'), 'UTC'))::date - 1) as sent_yesterday,
+        to_char((now() at time zone coalesce((select value #>> '{}' from settings where key = 'stats_timezone'), 'UTC'))::date - 1, 'YYYY-MM-DD') as yesterday
       from clients c
       left join domains d on d.client_id = c.id
       left join domain_standing st on st.domain_id = d.id

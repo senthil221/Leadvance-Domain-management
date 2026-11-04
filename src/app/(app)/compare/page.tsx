@@ -3,25 +3,32 @@ import { Suspense } from "react";
 import { CompareView } from "@/components/compare/CompareView";
 import { PageHead, TableSkeleton } from "@/components/ui";
 import { getCurrentUser } from "@/lib/auth";
-import { getReview, thisWeek } from "@/lib/queries";
+import { DIMS, type Dim } from "@/lib/compare";
+import { getCompareDaily, getReview, lastDays } from "@/lib/queries";
 
 export const metadata: Metadata = { title: "Compare" };
 
-export default function ComparePage() {
+type Search = { client?: string; dim?: string; group?: string };
+
+export default function ComparePage({ searchParams }: { searchParams: Promise<Search> }) {
   return (
     <>
-      <PageHead title="Performance" sub="Compare TLDs, providers, ESPs, tags, clients and domain ages, to see what's working and what isn't" />
+      <PageHead title="Performance" sub="Compare TLDs, providers, ESPs, tags, clients and domain ages, to see what's working and why" />
       <div className="page-body">
         <Suspense fallback={<TableSkeleton rows={10} />}>
-          <CompareData />
+          <CompareData searchParams={searchParams} />
         </Suspense>
       </div>
     </>
   );
 }
 
-async function CompareData() {
+async function CompareData({ searchParams }: { searchParams: Promise<Search> }) {
   await getCurrentUser();
-  const { from, to } = await thisWeek(); // Monday to today; the date picker changes it
-  return <CompareView initial={await getReview(from, to)} />;
+  const search = await searchParams;
+  // Two weeks by default: enough days for the trend lines to say something. The date picker changes it.
+  const { from, to } = await lastDays(14);
+  const [initial, daily] = await Promise.all([getReview(from, to), getCompareDaily(from, to)]);
+  const dim = DIMS.includes(search.dim as Dim) ? (search.dim as Dim) : undefined;
+  return <CompareView initial={initial} initialDaily={daily} startClient={search.client ?? ""} startDim={dim} startGroup={search.group ?? null} />;
 }

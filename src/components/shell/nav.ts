@@ -1,4 +1,4 @@
-import { Activity, ArrowLeftRight, BarChart3, ClipboardCheck, Columns2, Globe, Inbox, LayoutGrid, MailX, MessageSquareText, Settings2, type LucideIcon } from "lucide-react";
+import { Activity, ArrowLeftRight, BarChart3, ClipboardCheck, Columns2, Globe, Inbox, LayoutGrid, MailX, MessageSquareText, Settings2, Users, type LucideIcon } from "lucide-react";
 
 export type NavItem = { href: string; label: string; icon: LucideIcon; key: string };
 export type NavGroup = NavItem & { pages: NavItem[] };
@@ -7,6 +7,7 @@ export type NavGroup = NavItem & { pages: NavItem[] };
 // command palette lists them all.
 export const PAGES = {
   overview: { href: "/", label: "Overview", icon: LayoutGrid, key: "o" },
+  clients: { href: "/clients", label: "Clients", icon: Users, key: "l" },
   inventory: { href: "/inventory", label: "Domains", icon: Globe, key: "d" },
   replacements: { href: "/replacements", label: "Replacements", icon: ArrowLeftRight, key: "r" },
   inboxes: { href: "/inboxes", label: "Smartlead", icon: Inbox, key: "i" },
@@ -29,6 +30,7 @@ export const NAV: { label: string; items: NavGroup[] }[] = [
     label: "Workspace",
     items: [
       { ...P.overview, pages: [] },
+      { ...P.clients, pages: [] },
       { ...P.inboxes, pages: [] },
       { ...P.inventory, pages: [{ ...P.inventory, label: "Inventory" }, P.replacements] },
       { ...P.review, label: "Performance", icon: BarChart3, pages: [P.review, P.compare, P.stats, P.replies, P.bounces] },
