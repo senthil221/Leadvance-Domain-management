@@ -5,6 +5,7 @@ import { ArrowLeftRight, ArrowRight, Copy, X } from "lucide-react";
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
 import { loadDomainDetail } from "@/app/actions";
+import { DiagnosisCard } from "./DiagnosisCard";
 import { Badge, ClientCell, Dot, Metric, Rep, Skeleton, StatusDot } from "@/components/ui";
 import { ago, daysSince, int, shortDate } from "@/lib/format";
 import { DEAD_CAUSES } from "@/lib/dead";
@@ -90,6 +91,8 @@ export function DomainSheet({
                     ))}
                   </div>
                 ) : null}
+
+                <DiagnosisCard key={d.domain.id} domainId={d.domain.id} initial={d.diagnosis} />
 
                 {d.lineage.replaced || d.lineage.replacedBy ? (
                   <div className="card">

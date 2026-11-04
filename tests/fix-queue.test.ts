@@ -156,6 +156,8 @@ describe("the facts", () => {
 
   beforeAll(async () => {
     pg = await PGlite.create();
+    // Production runs in UTC. Without this, "today" differs from current_date for part of each day on a machine elsewhere.
+    await pg.exec("set timezone = 'UTC'");
     for (const m of loadMigrations()) await pg.exec(m.sql);
   }, 60_000);
   afterAll(async () => { await pg?.close(); });

@@ -826,6 +826,29 @@ a.kpi:hover { border-color: var(--accent-line, var(--line-strong)); }
 .fx-risk-track > span { display: block; height: 100%; border-radius: 2px; background: var(--brand-solid); }
 .fx-snooze .select { width: 88px; height: 26px; font-size: 12px; color: var(--muted); }
 
+/* Domain diagnosis. */
+.dx-head-action { margin-left: auto; }
+.dx-body { display: flex; flex-direction: column; gap: 10px; font-size: 13px; }
+.dx-intro { color: var(--muted); }
+.dx-error { padding: 8px 10px; border-radius: 7px; background: var(--danger-soft); color: var(--danger-ink); font-size: 12.5px; }
+.dx-verdict { display: flex; align-items: center; gap: 8px; }
+.dx-sure { font-size: 12px; color: var(--faint); }
+.dx-headline { font-weight: 500; color: var(--ink); }
+.dx-reasons { display: flex; flex-direction: column; gap: 9px; margin: 0; padding: 0; list-style: none; color: var(--ink-soft); }
+.dx-facts { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 4px; }
+.dx-fact { padding: 1px 6px; border-radius: 5px; background: var(--surface-3); color: var(--muted); font-size: 11px; }
+.dx-fact b { font-weight: 500; color: var(--ink); }
+.dx-plan { display: flex; flex-direction: column; gap: 7px; margin: 0; padding-top: 10px; border-top: 1px solid var(--line); }
+.dx-plan dt { font-size: 11.5px; color: var(--faint); }
+.dx-plan dd { margin: 1px 0 0; color: var(--ink-soft); }
+.dx-plan dd b { font-weight: 500; color: var(--ink); }
+.dx-foot { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; padding-top: 8px; border-top: 1px solid var(--line); font-size: 12px; color: var(--faint); }
+.dx-mark { display: inline-flex; align-items: center; gap: 6px; }
+.dx-mark button[aria-pressed="true"] { background: var(--surface-3); color: var(--ink); border-color: var(--line-strong); }
+.dx-spin { animation: dx-spin 1.1s linear infinite; }
+@keyframes dx-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .dx-spin { animation: none; } }
+
 /* Clients: promised volume against what went out. */
 .cl-verdict { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 0; padding: 10px 14px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); font-size: 13.5px; font-weight: 500; color: var(--ink); }
 .cl-verdict svg { flex: none; }

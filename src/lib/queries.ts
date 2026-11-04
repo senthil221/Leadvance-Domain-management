@@ -2,6 +2,7 @@ import { parseSavedPairs } from "@/lib/tag-map";
 import { parseWarmupProgram } from "@/lib/warmup-program";
 import "server-only";
 import { attentionDomainCount } from "./attention";
+import type { DiagnosisInput, CauseRow, PeerRow, StoredDiagnosis, WeekRow } from "./diagnose";
 import { FIX_FACTS_SQL, fixQueue, type FixFact, type FixItem, type FixSnooze } from "./fix-queue";
 import { addDays, monday, previousRange } from "./range";
 import { senderOverview, tagOverview } from "./tag-list";
@@ -346,7 +347,52 @@ export type DomainDetail = {
     replacedBy: { domainId: string; name: string; at: Date; reason: ReplacementReason; note: string | null } | null;
   };
   alerts: { id: string; ruleName: string; metric: string; value: number | null; severity: string; openedAt: Date }[];
+  diagnosis: StoredDiagnosis | null;
 };
+
+/** The numbers a diagnosis reads. Names, tag wording, status reasons and message text are left out on purpose. */
+export async function getDiagnosisInput(id: string): Promise<DiagnosisInput | null> {
+  const [own] = await sql<(DiagnosisInput["own"] & { today: string })[]>`
+    with t as (select (now() at time zone coalesce((select value #>> '{}' from settings where key = 'stats_timezone'), 'UTC'))::date as today)
+    select d.tld, to_char(t.today, 'YYYY-MM-DD') as today,
+      (t.today - d.purchased_at::date)::int as age_days,
+      (select (t.today - min(i.smartlead_created_at)::date)::int from inboxes i where i.domain_id = d.id and i.status <> 'removed') as days_in_smartlead
+    from domains d cross join t where d.id = ${id}`;
+  if (!own) return null;
+  const today = own.today;
+  const [facts, weeks, causes, peers, changes] = await Promise.all([
+    sql.unsafe<FixFact[]>(FIX_FACTS_SQL),
+    sql<WeekRow[]>`
+      select ((${today}::date - s.day) / 7)::int as week, sum(s.sent)::int as sent, (count(*) filter (where s.sent > 0))::int as days_sent,
+        sum(s.human_replies)::int as human_replies, sum(s.replies)::int as all_replies, sum(s.ooo)::int as ooo, sum(s.bounces)::int as bounces
+      from domain_daily_stats s
+      where s.domain_id = ${id} and s.day > ${today}::date - 28 and s.day <= ${today}::date group by 1`,
+    sql<CauseRow[]>`
+      select coalesce(e.bounce_cause, 'other') as cause,
+        (count(*) filter (where e.occurred_at >= ${today}::date - 6))::int as last7, count(*)::int as last28
+      from email_events e
+      where e.kind = 'bounce' and e.domain_id = ${id} and e.occurred_at >= ${today}::date - 27 group by 1 order by 1`,
+    sql<PeerRow[]>`
+      with me as (select client_id, tags from domains where id = ${id}), others as (
+        select p.id, p.client_id = me.client_id as same_client, p.client_id = me.client_id and p.tags && me.tags as same_tag
+        from domains p cross join me where p.id <> ${id} and p.status in ('active', 'warming'))
+      select g.grp, ((${today}::date - s.day) / 7)::int as week, (count(distinct s.domain_id) filter (where s.sent > 0))::int as domains,
+        sum(s.sent)::int as sent, sum(s.human_replies)::int as human_replies, sum(s.bounces)::int as bounces
+      from domain_daily_stats s join others o on o.id = s.domain_id
+      cross join lateral (values ('all'), ('client'), ('tag')) g(grp)
+      where s.day > ${today}::date - 28 and s.day <= ${today}::date
+        and (g.grp = 'all' or (g.grp = 'client' and o.same_client) or (g.grp = 'tag' and o.same_tag))
+      group by 1, 2`,
+    sql<DiagnosisInput["changes"]>`
+      select from_status as "from", to_status as "to", (${today}::date - at::date)::int as days_ago
+      from domain_status_history where domain_id = ${id} and at >= ${today}::date - 60 order by at desc, id desc limit 8`,
+  ]);
+  return {
+    fact: facts.find((f) => f.domainId === id) ?? null,
+    own: { tld: own.tld, ageDays: own.ageDays, daysInSmartlead: own.daysInSmartlead },
+    weeks: [...weeks], causes: [...causes], peers: [...peers], changes: [...changes],
+  };
+}
 
 export async function getDomainDetail(id: string): Promise<DomainDetail | null> {
   const [domain] = await sql<DomainDetail["domain"][]>`
@@ -396,7 +442,7 @@ export async function getDomainDetail(id: string): Promise<DomainDetail | null> 
     where d.id = ${id}`;
   if (!domain) return null;
 
-  const [inboxes, daily, history, lineageRows, alerts] = await Promise.all([
+  const [inboxes, daily, history, lineageRows, alerts, [diagnosis]] = await Promise.all([
     sql<InboxRow[]>`
       select id, email, sender_name, status, warmup_enabled, warmup_per_day, warmup_rampup, daily_limit,
         warmup_reputation::float8 as warmup_reputation, smartlead_account_id, last_synced_at
@@ -423,6 +469,9 @@ export async function getDomainDetail(id: string): Promise<DomainDetail | null> 
       select a.id, r.name as rule_name, r.metric, a.value::float8 as value, r.severity, a.opened_at
       from alerts a join health_rules r on r.id = a.rule_id
       where a.domain_id = ${id} and a.status = 'open' order by a.opened_at desc`,
+    sql<StoredDiagnosis[]>`
+      select id, created_at, created_by, model, result, input_tokens, output_tokens, feedback
+      from domain_diagnoses where domain_id = ${id} order by id desc limit 1`,
   ]);
 
   const pick = (side: "replaced" | "replacedBy") => {
@@ -430,7 +479,7 @@ export async function getDomainDetail(id: string): Promise<DomainDetail | null> 
     return r ? { domainId: r.domainId, name: r.name, at: r.at, reason: r.reason, note: r.note } : null;
   };
 
-  return { domain, inboxes, daily, history, lineage: { replaced: pick("replaced"), replacedBy: pick("replacedBy") }, alerts };
+  return { domain, inboxes, daily, history, lineage: { replaced: pick("replaced"), replacedBy: pick("replacedBy") }, alerts, diagnosis: diagnosis ?? null };
 }
 
 // Free domains for the replace dialog, preferring the given TLDs. Nothing is

@@ -946,6 +946,20 @@ export async function setClientPromise(input: z.input<typeof clientPromiseInput>
   }
 }
 
+const diagnosisMark = z.object({ id: z.number().int().positive(), feedback: z.enum(["right", "wrong"]).nullable() });
+
+/** The person's own call on a diagnosis, which is how we find out whether the AI can be trusted. */
+export async function markDiagnosis(input: z.input<typeof diagnosisMark>): Promise<ActionResult<{ message?: string }>> {
+  try {
+    const actor = await requireActor();
+    const { id, feedback } = diagnosisMark.parse(input);
+    await sql`update domain_diagnoses set feedback = ${feedback}, feedback_by = ${actor}, feedback_at = now() where id = ${id}`;
+    return { ok: true, data: {} };
+  } catch (e) {
+    return fail(e);
+  }
+}
+
 const fixRow = z.object({ name: z.string().min(1).max(255), kind: z.enum(FIX_KINDS as [FixKind, ...FixKind[]]) });
 const snoozeInput = z.object({ rows: z.array(fixRow).min(1).max(2000), days: z.number().int().min(1).max(30) });
 
