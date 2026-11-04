@@ -18,7 +18,7 @@ import { ClientCell, Empty, Rep, StatusDot, TagList } from "@/components/ui";
 import { InboxSettingsDialog } from "./InboxSettingsDialog";
 import { MoveToTagDialog } from "./MoveToTagDialog";
 import { PlansCard } from "./PlansCard";
-import { ago, int } from "@/lib/format";
+import { ageLabel, ago, int } from "@/lib/format";
 import type { ClientRow, InboxListRow, OrderState, PlanRow } from "@/lib/queries";
 import { DOMAIN_STATUSES, type DomainStatus } from "@/lib/status";
 
@@ -357,8 +357,6 @@ function dnsOf(i: InboxListRow): Dns {
   return { state: missing.length ? "missing" : "ok", missing, checks };
 }
 const warmupOf = (i: InboxListRow) => (i.warmupBlockedReason || /BLOCK/i.test(i.warmupStatus ?? "") ? "blocked" : i.warmupEnabled !== true || /INACTIVE|PAUSE/i.test(i.warmupStatus ?? "") ? "paused" : "active");
-const ageLabel = (days: number | null) => (days == null ? null : days < 60 ? `${days}d` : days < 730 ? `${Math.round(days / 30)}mo` : `${(days / 365).toFixed(1)}y`);
-
 /** A healthy value: quiet, so problems in the same column stand out. */
 function Ok({ children, title }: { children: ReactNode; title?: string }) {
   return <span className="ok-cell" title={title}>{children}</span>;

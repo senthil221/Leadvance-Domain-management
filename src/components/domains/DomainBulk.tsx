@@ -1,15 +1,42 @@
 "use client";
 
 import { Dialog } from "radix-ui";
-import { ClipboardPaste, SlidersHorizontal, X } from "lucide-react";
+import { ClipboardPaste, Flame, Send, SlidersHorizontal, X } from "lucide-react";
 import { useState, useTransition } from "react";
 import { toast } from "sonner";
-import { type DomainConfig, loadDomainConfig } from "@/app/actions";
+import { type DomainConfig, loadDomainConfig, setWarming } from "@/app/actions";
 import { InboxSettingsDialog } from "@/components/inboxes/InboxSettingsDialog";
 import { int } from "@/lib/format";
 import { matchPasted } from "@/lib/paste-select";
 
 const plural = (n: number, one: string, many = `${one}s`) => `${int(n)} ${n === 1 ? one : many}`;
+
+/** Mark the selected active domains as still warming up, or the warming ones as active. App only: Smartlead isn't changed. */
+export function WarmingButtons({ rows, onDone }: { rows: readonly { id: string; status: string }[]; onDone?: () => void }) {
+  const [pending, start] = useTransition();
+  const of = (status: string) => rows.filter((r) => r.status === status).map((r) => r.id);
+  const active = of("active"), warming = of("warming");
+  const run = (ids: string[], to: boolean) => start(async () => {
+    const r = await setWarming({ ids, warming: to });
+    if (!r.ok) { toast.error(r.error); return; }
+    toast.success(`${plural(r.data.changed, "domain")} marked as ${to ? "warming" : "active"}`);
+    onDone?.();
+  });
+  return (
+    <>
+      {active.length ? (
+        <button type="button" className="btn btn-sm" disabled={pending} title="Still warming up: they leave Active and Idle and count as warming. Nothing changes in Smartlead" onClick={() => run(active, true)}>
+          <Flame size={14} /> Mark warming ({int(active.length)})
+        </button>
+      ) : null}
+      {warming.length ? (
+        <button type="button" className="btn btn-sm" disabled={pending} title="Done warming: they count as active again. Nothing changes in Smartlead" onClick={() => run(warming, false)}>
+          <Send size={14} /> Mark active ({int(warming.length)})
+        </button>
+      ) : null}
+    </>
+  );
+}
 
 /**
  * Paste to select: domains or email addresses, any separator. Shows what

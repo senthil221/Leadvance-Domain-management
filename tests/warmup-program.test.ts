@@ -2,7 +2,7 @@ import { PGlite } from "@electric-sql/pglite";
 import { PGLiteSocketServer } from "@electric-sql/pglite-socket";
 import postgres from "postgres";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { enrolNewDomains, loadWarmupProgram, newDomainIds, startWarmup } from "../src/jobs/warmup-program";
+import { enrolNewDomains, loadWarmupProgram, markWarming, newDomainIds, startWarmup } from "../src/jobs/warmup-program";
 import { parseWarmupProgram, warmupProgress } from "../src/lib/warmup-program";
 import { loadMigrations } from "../scripts/migrations";
 
@@ -99,5 +99,41 @@ describe("enrolNewDomains", () => {
     const [row] = await sql`select warmup_days, tags from domains where id = ${late}`;
     expect(row).toMatchObject({ warmup_days: 14, tags: ["New"] });
     expect(await newDomainIds(sql, 1)).toEqual([]);
+  });
+});
+
+describe("marking domains as warming by hand", () => {
+  const row = async (id: string) => (await sql`select status, warmup_started_at, warmup_done_at, warmup_days from domains where id = ${id}`)[0];
+  const add = async (name: string, status: string) => (await sql`insert into domains (name, status) values (${name}, ${status}::domain_status) returning id`)[0].id as string;
+
+  it("moves only active domains, counts the days from joining Smartlead, and goes back to active", async () => {
+    const live = await add("markwarm-live.com", "active");
+    const retired = await add("markwarm-retired.com", "burned");
+    const joined = new Date("2026-10-20T00:00:00Z");
+    await sql`insert into inboxes (domain_id, email, status, smartlead_created_at) values (${live}, ${"a@markwarm-live.com"}, 'connected', ${joined})`;
+
+    expect(await markWarming(sql, [live, retired], true, "me")).toBe(1);
+    const warm = await row(live);
+    expect(warm.status).toBe("warming");
+    expect(new Date(warm.warmup_started_at as string).getTime()).toBe(joined.getTime());
+    expect(warm.warmup_done_at).toBeNull();
+    expect(warm.warmup_days).toBe((await loadWarmupProgram(sql)).days);
+    expect((await row(retired)).status).toBe("burned");
+
+    expect(await markWarming(sql, [live, retired], false, "me")).toBe(1);
+    const back = await row(live);
+    expect(back.status).toBe("active");
+    expect(back.warmup_done_at).not.toBeNull();
+    expect((await sql`select reason, actor from domain_status_history where domain_id = ${live} order by id desc limit 1`)[0]).toMatchObject({ reason: "marked as active", actor: "me" });
+  });
+
+  it("leaves a warm-up that is already running on its own days", async () => {
+    const running = await add("markwarm-running.com", "active");
+    const started = new Date("2026-10-25T00:00:00Z");
+    await sql`update domains set warmup_started_at = ${started}, warmup_days = 21 where id = ${running}`;
+    await markWarming(sql, [running], true, "me");
+    const d = await row(running);
+    expect(new Date(d.warmup_started_at as string).getTime()).toBe(started.getTime());
+    expect(d.warmup_days).toBe(21);
   });
 });

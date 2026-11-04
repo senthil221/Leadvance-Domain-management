@@ -10,11 +10,11 @@ import { ColumnsMenu, useColumns, type ColumnDef } from "@/components/Columns";
 import { ChangeStatusDialog } from "@/components/domains/ChangeStatusDialog";
 import { ReplaceDialog } from "@/components/domains/ReplaceDialog";
 import { SetupDialog } from "@/components/domains/SetupDialog";
-import { ConfigureDomains, PasteSelect } from "@/components/domains/DomainBulk";
+import { ConfigureDomains, PasteSelect, WarmingButtons } from "@/components/domains/DomainBulk";
 import { MarkReplacedDialog } from "./MarkReplacedDialog";
 import { useCompact } from "@/components/ThemeToggle";
 import { Badge, ClientCell, Empty, TagList } from "@/components/ui";
-import { daysSince, int, shortDate } from "@/lib/format";
+import { ageLabel, daysSince, int, shortDate } from "@/lib/format";
 import type { ClientRow, DomainRow } from "@/lib/queries";
 import { LIFE, LIFE_ORDER, LIFE_TABS, htOf, lifeOf, nsOf, type Life } from "@/lib/lifecycle";
 import { SlBadge } from "@/components/domains/SlStatus";
@@ -28,11 +28,11 @@ const COLUMNS: ColumnDef[] = [
   { key: "life", label: "Lifecycle" }, { key: "sl", label: "Smartlead" }, { key: "client", label: "Client" }, { key: "registrar", label: "Registrar" },
   { key: "ns", label: "Nameservers" }, { key: "ht", label: "Hypertide" }, { key: "icemail", label: "Icemail" },
   { key: "inboxes", label: "Inboxes" },
-  { key: "capacity", label: "Per day" }, { key: "age", label: "Active for" }, { key: "bought", label: "Bought", hidden: true },
+  { key: "capacity", label: "Per day" }, { key: "age", label: "Active for" }, { key: "domainAge", label: "Domain age" }, { key: "bought", label: "Bought", hidden: true },
   { key: "renews", label: "Renews" },
 ];
 
-type SortKey = "name" | "life" | "sl" | "client" | "registrar" | "ns" | "ht" | "icemailMonthly" | "inboxCount" | "capacity" | "purchasedAt" | "expiresAt" | "age";
+type SortKey = "name" | "life" | "sl" | "client" | "registrar" | "ns" | "ht" | "icemailMonthly" | "inboxCount" | "capacity" | "purchasedAt" | "expiresAt" | "age" | "domainAge";
 const sortValue = (d: DomainRow, k: SortKey): string | number | null => {
   switch (k) {
     case "life": return LIFE_ORDER.indexOf(lifeOf(d));
@@ -44,6 +44,7 @@ const sortValue = (d: DomainRow, k: SortKey): string | number | null => {
     case "icemailMonthly": return d.icemailMailboxes ? d.icemailMonthly ?? 0 : null;
     case "purchasedAt": case "expiresAt": return d[k] ? new Date(d[k]!).getTime() : null;
     case "age": return d.activeSince ? new Date(d.activeSince).getTime() * -1 : null;
+    case "domainAge": return d.bornAt ? new Date(d.bornAt).getTime() * -1 : null;
     default: return d[k] as string | number | null;
   }
 };
@@ -199,7 +200,7 @@ export function InventoryView({ domains, clients }: { domains: DomainRow[]; clie
           <div className="view-tabs" role="tablist" aria-label="Lifecycle">
             {([...LIFE_TABS, "all"] as const).map((k) => (
               <button key={k} type="button" role="tab" aria-selected={view === k} className={view === k ? "is-on" : undefined} onClick={() => { setView(k); scrollRef.current?.scrollTo({ top: 0 }); }}>
-                {k === "all" ? "All" : LIFE[k].label} <span>{int(counts[k] ?? 0)}</span>
+                {k === "all" ? "All" : k === "setup" ? "Warming & setup" : LIFE[k].label} <span>{int(counts[k] ?? 0)}</span>
               </button>
             ))}
           </div>
@@ -272,6 +273,7 @@ export function InventoryView({ domains, clients }: { domains: DomainRow[]; clie
                   {on("inboxes") ? <Th k="inboxCount" num>Inboxes</Th> : null}
                   {on("capacity") ? <Th k="capacity" num>Per day</Th> : null}
                   {on("age") ? <Th k="age" num>Active</Th> : null}
+                  {on("domainAge") ? <Th k="domainAge" num>Domain age</Th> : null}
                   {on("bought") ? <Th k="purchasedAt" num>Bought</Th> : null}
                   {on("renews") ? <Th k="expiresAt" num>{view === "expired" ? "Expired on" : "Renews"}</Th> : null}
                 </tr>
@@ -298,7 +300,7 @@ export function InventoryView({ domains, clients }: { domains: DomainRow[]; clie
                         <span className="flex items-center gap-1.5">
                           <span className={`status-dot tone-${life.tone}`}
                             title={d.coolingUntil ? `Last used ${shortDate(d.lastUsedOn)}; free to reuse from ${shortDate(d.coolingUntil)}` : d.status === "in_storage" && d.lastUsedOn ? `Used before, last on ${shortDate(d.lastUsedOn)}` : undefined}>
-                            {life.label}{d.coolingUntil ? <span className="text-muted"> · until {shortDate(d.coolingUntil)}</span> : null}
+                            {d.status === "warming" ? "Warming" : life.label}{d.coolingUntil ? <span className="text-muted"> · until {shortDate(d.coolingUntil)}</span> : null}
                           </span>
                           {d.replacedById ? (
                             <DomainLink id={d.replacedById} className="flex items-center gap-1 truncate text-muted hover:text-ink" title={`Replaced ${shortDate(d.replacedAt)}`}>
@@ -355,7 +357,10 @@ export function InventoryView({ domains, clients }: { domains: DomainRow[]; clie
                       <td className="is-num">{d.capacity ? int(d.capacity) : <span className="zero">0</span>}</td>
                       ) : null}
                       {on("age") ? (
-                      <td className="is-num text-muted">{d.activeSince && d.status !== "in_storage" ? `${daysSince(d.activeSince)}d` : <span className="zero">—</span>}</td>
+                      <td className="is-num text-muted">{d.activeSince && d.status !== "in_storage" && d.status !== "warming" ? `${daysSince(d.activeSince)}d` : <span className="zero">—</span>}</td>
+                      ) : null}
+                      {on("domainAge") ? (
+                      <td className="is-num text-muted" title={d.bornAt ? `Bought ${shortDate(d.bornAt)}` : "Purchase date not known"}>{d.bornAt ? ageLabel(daysSince(d.bornAt)) : <span className="zero">—</span>}</td>
                       ) : null}
                       {on("bought") ? (
                       <td className="is-num text-muted">{d.purchasedAt ? shortDate(d.purchasedAt) : <span className="zero">—</span>}</td>
@@ -388,6 +393,7 @@ export function InventoryView({ domains, clients }: { domains: DomainRow[]; clie
         <div className="bulk-bar" role="toolbar" aria-label="Selected domains">
           <span className="bulk-count">{selected.size} selected</span>
           <ConfigureDomains domainIds={[...selected]} />
+          <WarmingButtons rows={selectedRows} onDone={() => setSelected(new Set())} />
           <button type="button" className="btn btn-sm" onClick={() => setSetupOpen(true)}><Tag size={14} /> Set up</button>
           <button type="button" className="btn btn-sm" disabled={!selectedRows.some(replaceable)} title="Swap the selected active or warming domains for free ones" onClick={() => setReplaceOpen(true)}><ArrowLeftRight size={14} /> Replace</button>
           <button type="button" className="btn btn-sm" disabled={!selectedRows.some((d) => lifeOf(d) !== "replaced")} onClick={() => setMoveTo("replaced")}><Archive size={14} /> Mark as replaced</button>

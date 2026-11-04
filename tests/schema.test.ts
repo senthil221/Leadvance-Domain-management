@@ -58,6 +58,17 @@ describe("transition_domain", () => {
     expect(d.burned_at).not.toBeNull();
   });
 
+  it("lets an active domain go back to warming and restarts its active days when it returns", async () => {
+    const id = await addDomain("harborlinehq.com", "active");
+    const stamp = "2020-01-01T00:00:00Z";
+    await db.query("update domains set active_since = $2 where id = $1", [id, stamp]);
+    await db.query("select transition_domain($1, 'warming')", [id]);
+    expect(await status(id)).toBe("warming");
+    await db.query("select transition_domain($1, 'active')", [id]);
+    const d = (await db.query<{ active_since: Date }>("select active_since from domains where id = $1", [id])).rows[0];
+    expect(d.active_since.getTime()).toBeGreaterThan(new Date(stamp).getTime());
+  });
+
   it("rejects a move that skips steps", async () => {
     const id = await addDomain("clearrelaypro.com");
     await expect(db.query("select transition_domain($1, 'active')", [id])).rejects.toThrow(/cannot move/);

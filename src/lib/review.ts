@@ -6,7 +6,7 @@ import { slText } from "./smartlead-state";
 // warmup reputation and days without any reply count against the domain;
 // addresses that don't exist count against the list.
 
-export type Verdict = "fix" | "rest" | "grace" | "drop" | "dead" | "ended" | "watch" | "idle" | "low" | "ok" | "gone";
+export type Verdict = "fix" | "rest" | "grace" | "drop" | "dead" | "ended" | "watch" | "idle" | "warming" | "low" | "ok" | "gone";
 
 /**
  * Where a domain really stands today (the domain_standing view). Active and
@@ -36,11 +36,12 @@ export const VERDICT_META: Record<Verdict, { label: string; tone: "danger" | "wa
   ended: { label: "Ended", tone: "faint", hint: "Not active any more: expired, retired, or its order has ended, though some inboxes still show connected" },
   watch: { label: "Watch", tone: "warning", hint: "One strike so far: still worth sending, at lower volume" },
   idle: { label: "Idle", tone: "info", hint: "Active with inboxes connected, but nothing was sent in this range" },
+  warming: { label: "Warming", tone: "info", hint: "Marked as still warming up, so it isn't expected to send yet" },
   low: { label: "Too little sent", tone: "faint", hint: "Not enough sent in this range to judge" },
   ok: { label: "OK", tone: "success", hint: "Nothing to act on" },
   gone: { label: "Deleted in Smartlead", tone: "faint", hint: "Every inbox was deleted in Smartlead: its numbers are history, nothing to fix or reconnect" },
 };
-export const VERDICT_ORDER: Verdict[] = ["fix", "rest", "grace", "drop", "dead", "ended", "watch", "idle", "low", "ok", "gone"];
+export const VERDICT_ORDER: Verdict[] = ["fix", "rest", "grace", "drop", "dead", "ended", "watch", "idle", "warming", "low", "ok", "gone"];
 
 /** The thresholds. A domain needs MIN_SENT in the range before it is judged on rates. */
 export const RULES = {
@@ -210,6 +211,7 @@ export function judge(d: ReviewDomain): Judged {
   if (allGone) return ended ? out("drop", said(["ended", "disconnected"])) : out("dead", said(["unlisted", "disconnected"]));
   if (ownSetup) return out("fix", `${said(["tenant", "dns", "disconnected"])}${against ? `; ${against}` : ""}`);
   if (d.status === "active" && d.sent === 0) return out("idle", ["Nothing sent", said(["disconnected", "lowrep"])].filter(Boolean).join("; "));
+  if (d.status === "warming" && d.sent === 0) return out("warming", ["Warming up, not sending yet", said(["disconnected", "lowrep"])].filter(Boolean).join("; "));
   if (silent) return out("rest", against);
   if (judged && d.human === 0 && (heavySpam || (c.blocklist ?? 0) >= RULES.restBlocklist)) return out("rest", chips.some((x) => x.key === "quiet") ? against : `${against}, no human replies`);
   if (strikes >= 2 && !replying) return out("rest", `${against}; ${humans}`);
@@ -240,12 +242,12 @@ const cell = (v: string | number | null) => {
 /** Tab-separated rows with a header, ready to paste into Google Sheets: one column per fact. */
 export function sheetRows(list: Judged[]): string {
   const head = ["Domain", "Call", "Reason", "Signals", "ESP", "TLD", "Smartlead tags", "Order", "Client", "Status", "Sent", "Human replies", "Spam rejections",
-    "Bounce rate", "Warmup reputation", "Days since any reply", "Inboxes connected", "Inboxes disconnected", "Replies incl. OOO", "Smartlead now", "Provider", "Domain age (days)"];
+    "Bounce rate", "Warmup reputation", "Days since any reply", "Inboxes connected", "Inboxes disconnected", "Replies incl. OOO", "Smartlead now", "Provider", "Domain age (days)", "In Smartlead (days)"];
   const rows = list.map((d) => [
     d.name, VERDICT_META[d.verdict].label, d.why, d.chips.map((c) => c.text).join(", "), espName(d.esp), d.tld ? `.${d.tld}` : "", d.slTags.join(", "), htText(d), d.clientName, d.status,
     d.sent, d.human, d.spam, d.sent ? `${((100 * d.bounces) / d.sent).toFixed(2)}%` : "", d.rep,
     d.quietDays == null ? "" : `${d.quietDays}${d.neverReplied ? "+" : ""}`, d.inboxes, d.disconnected, d.replies,
-    slText({ slConnected: d.inboxes, slDisconnected: d.disconnected, slRemoved: d.removed }), d.provider, d.ageDays,
+    slText({ slConnected: d.inboxes, slDisconnected: d.disconnected, slRemoved: d.removed }), d.provider, d.ageDays, d.connectedDays,
   ].map(cell).join("\t"));
   return [head.join("\t"), ...rows].join("\n");
 }
@@ -257,7 +259,7 @@ function summarize(domains: Judged[], keys: (d: Judged) => { id: string; name: s
     for (const k of keys(d)) {
       let r = m.get(k.id);
       if (!r) {
-        r = { ...k, domains: 0, counts: { fix: 0, rest: 0, grace: 0, drop: 0, dead: 0, ended: 0, watch: 0, idle: 0, low: 0, ok: 0, gone: 0 }, sent: 0, human: 0, bounces: 0, spam: 0 };
+        r = { ...k, domains: 0, counts: { fix: 0, rest: 0, grace: 0, drop: 0, dead: 0, ended: 0, watch: 0, idle: 0, warming: 0, low: 0, ok: 0, gone: 0 }, sent: 0, human: 0, bounces: 0, spam: 0 };
         m.set(k.id, r);
       }
       r.domains++; r.counts[d.verdict]++;
@@ -325,6 +327,7 @@ export function advise(d: Judged): Advice[] {
   if (d.rep != null && d.rep < RULES.lowRep) add("warning", `Warmup reputation ${d.rep.toFixed(0)}: keep warmup on and send less until it is back over ${RULES.lowRep}`);
   if (d.chips.some((x) => x.key === "silent")) add("danger", `${n(d.sent)} sent and not one reply: it's likely landing in spam; rest or replace it`);
   else if (d.chips.some((x) => x.key === "quiet")) add("warning", `No reply for ${n(d.quietDays ?? 0)} days: check inbox placement and lower the volume`);
+  if (d.verdict === "warming") add("info", "Warming up: mark it active once it joins a campaign");
   if (d.verdict === "idle") add("info", "Connected but sent nothing: add it to a campaign or check its Smartlead tag");
   if (d.verdict === "low" && !out.length) add("faint", `Only ${n(d.sent)} sent: too little to judge yet`);
   if (!out.length && d.sent) add("success", "Healthy: nothing to change");

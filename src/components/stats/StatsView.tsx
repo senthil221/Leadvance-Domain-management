@@ -8,7 +8,7 @@ import { toast } from "sonner";
 import { loadReview, loadStats } from "@/app/actions";
 import { ColumnsMenu, useColumns, type ColumnDef } from "@/components/Columns";
 import { SortTh } from "@/components/SortTh";
-import { ConfigureDomains, PasteSelect } from "@/components/domains/DomainBulk";
+import { ConfigureDomains, PasteSelect, WarmingButtons } from "@/components/domains/DomainBulk";
 import { AdviceCell, DomainInsight } from "./DomainInsight";
 import { Badge, ClientCell, Empty, Metric, Rep, StatusDot, TagList } from "@/components/ui";
 import { clientDays, clientDaySheet, rr, type ClientDays, type DayFigures } from "@/lib/client-days";
@@ -665,6 +665,7 @@ export function StatsView({ initial, initialReview, clients }: { initial: StatsD
         <div className="bulk-bar" role="toolbar" aria-label="Selected domains">
           <span className="bulk-count">{selected.size} selected</span>
           <ConfigureDomains domainIds={[...selected]} />
+          <WarmingButtons rows={data.domains.filter((d) => selected.has(d.id))} onDone={() => setSelected(new Set())} />
           <span className="sep" />
           <button type="button" className="btn btn-sm" onClick={() => setOpenRows(new Set(selectedRows.map((r) => r.id)))}><ChevronRight size={14} /> Show reasons</button>
           <button type="button" className="btn btn-sm" onClick={() => {

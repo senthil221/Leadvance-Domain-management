@@ -78,6 +78,20 @@ export async function changeStatus(input: z.input<typeof changeStatusInput>): Pr
   }
 }
 
+/** Marks active domains as still warming up, or warming ones as active. Nothing changes in Smartlead. */
+export async function setWarming(input: { ids: string[]; warming: boolean }): Promise<ActionResult<{ changed: number }>> {
+  try {
+    const actor = await requireActor();
+    const v = z.object({ ids, warming: z.boolean() }).parse(input);
+    const { markWarming } = await import("@/jobs/warmup-program");
+    const changed = await markWarming(jobSql, v.ids, v.warming, actor);
+    refresh();
+    return { ok: true, data: { changed } };
+  } catch (e) {
+    return fail(e);
+  }
+}
+
 /**
  * Records domains as replaced (burned) without running a replacement, for old
  * data, or moves them to recovery (resting).

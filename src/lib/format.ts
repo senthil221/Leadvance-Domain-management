@@ -46,3 +46,6 @@ export function summarize(detail: Record<string, unknown> | null | undefined) {
     .map(([k, v]) => `${v} ${k.replace(/([A-Z])/g, " $1").toLowerCase()}`);
   return parts.length ? parts.join(", ") : null;
 }
+
+/** An age in days as people say it: 45d, 8mo, 3.1y. */
+export const ageLabel = (days: number | null) => (days == null ? null : days < 60 ? `${days}d` : days < 730 ? `${Math.round(days / 30)}mo` : `${(days / 365).toFixed(1)}y`);

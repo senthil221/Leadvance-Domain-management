@@ -27,7 +27,7 @@ export const NEXT_STATUSES: Record<DomainStatus, DomainStatus[]> = {
   in_storage: ["provisioning"],
   provisioning: ["warming", "in_storage"],
   warming: ["active", "draining"],
-  active: ["draining"],
+  active: ["warming", "draining"],
   draining: ["burned", "active"],
   burned: ["resting"],
   resting: ["in_storage"],

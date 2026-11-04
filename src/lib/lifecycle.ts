@@ -18,8 +18,8 @@ export const LIFE: Record<Life, { label: string; tone: Tone }> = {
   expired: { label: "Expired", tone: "danger" },
 };
 export const LIFE_ORDER: Life[] = ["active", "setup", "free", "cooling", "replaced", "recovery", "expired"];
-/** The Inventory tabs; setting-up domains show under All. */
-export const LIFE_TABS: Life[] = ["active", "free", "cooling", "replaced", "recovery", "expired"];
+/** The Inventory tabs. */
+export const LIFE_TABS: Life[] = ["active", "setup", "free", "cooling", "replaced", "recovery", "expired"];
 
 export const inRecoveryPool = (payment: string | null | undefined) => /recovery/i.test(payment ?? "");
 

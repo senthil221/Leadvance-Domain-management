@@ -32,6 +32,27 @@ export async function newDomainIds(sql: Sql, maxAgeDays: number) {
 }
 
 /**
+ * Marks active domains as still warming up, or warming ones as active, without
+ * touching Smartlead. The days on Smartlead → Warming up count from the first
+ * inbox joining Smartlead, or carry on if the domain's warm-up is already running.
+ */
+export async function markWarming(sql: Sql, ids: string[], warming: boolean, actor: string) {
+  const { days } = await loadWarmupProgram(sql);
+  const rows = await sql.begin(async (tx) => {
+    if (!warming) {
+      await tx`update domains set warmup_done_at = now()
+        where id = any(${ids}::uuid[]) and status = 'warming' and warmup_started_at is not null and warmup_done_at is null`;
+      return tx`select (transition_domain(id, 'active', 'marked as active', ${actor})).id from domains where id = any(${ids}::uuid[]) and status = 'warming'`;
+    }
+    await tx`update domains d set warmup_days = ${days}, warmup_done_at = null, warmup_moved_to = null,
+        warmup_started_at = coalesce((select min(i.smartlead_created_at) from inboxes i where i.domain_id = d.id and i.status <> 'removed'), now())
+      where d.id = any(${ids}::uuid[]) and d.status = 'active' and (d.warmup_started_at is null or d.warmup_done_at is not null)`;
+    return tx`select (transition_domain(id, 'warming', 'marked as still warming up', ${actor})).id from domains where id = any(${ids}::uuid[]) and status = 'active'`;
+  });
+  return rows.length;
+}
+
+/**
  * Starts the warm-up of these domains: the days start counting, warmup is
  * switched on with the programme's values, and the domain and its inboxes get
  * the New tag (in Smartlead too when a token is set and dry run is off).

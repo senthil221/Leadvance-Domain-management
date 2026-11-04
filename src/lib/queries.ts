@@ -189,6 +189,8 @@ export type DomainRow = {
   warmupReputation: number | null;
   activeSince: Date | null;
   purchasedAt: Date | null;
+  /** When the domain was bought, or registered if we only know that: what its age counts from. */
+  bornAt: Date | null;
   expiresAt: Date | null;
   openAlerts: number;
   spark: number[];
@@ -237,7 +239,7 @@ export async function listDomains() {
       h.sent, h.human_replies, h.replies, h.bounces,
       h.bounce_rate::float8 as bounce_rate, h.human_reply_rate::float8 as human_reply_rate,
       h.warmup_reputation::float8 as warmup_reputation,
-      d.active_since, d.purchased_at, d.expires_at,
+      d.active_since, d.purchased_at, coalesce(d.purchased_at, d.registered_at)::timestamptz as born_at, d.expires_at,
       (select count(*)::int from alerts a where a.domain_id = d.id and a.status = 'open') as open_alerts,
       s7.sent as sl7_sent, s7.replies as sl7_replies, s7.bounces as sl7_bounces,
       array(

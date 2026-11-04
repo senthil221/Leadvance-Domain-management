@@ -65,7 +65,7 @@ describe("weekly review calls", () => {
     expect(j.why).toBe("Every inbox (14 inboxes) was deleted in Smartlead");
     // Some inboxes still there: judged as usual.
     expect(judge(domain({ inboxes: 0, disconnected: 3, removed: 11 })).verdict).not.toBe("gone");
-    expect(sheetRows([judge(domain({ inboxes: 0, disconnected: 0, removed: 14 }))]).split("\n")[1].split("\t").at(-3)).toBe("Deleted in Smartlead");
+    expect(sheetRows([judge(domain({ inboxes: 0, disconnected: 0, removed: 14 }))]).split("\n")[1].split("\t").at(-4)).toBe("Deleted in Smartlead");
   });
 
   it("rests a domain with spam rejections and no human replies", () => {
@@ -85,7 +85,8 @@ describe("weekly review calls", () => {
     expect(judge(domain({ human: 0, causes: { sender: 15, spam: 40 } })).verdict).toBe("fix");
     expect(judge(domain({ sent: 0, disconnected: 4 })).why).toBe("Nothing sent; 4 of 14 inboxes disconnected");
     expect(judge(domain({ disconnected: 2, causes: { missing: 9 } })).verdict).toBe("fix");
-    expect(judge(domain({ status: "warming", sent: 0 })).verdict).toBe("ok");
+    expect(judge(domain({ status: "warming", sent: 0 })).verdict).toBe("warming");
+    expect(judge(domain({ status: "warming", sent: 800 })).verdict).toBe("ok");
   });
 
   it("doesn't judge rates on a handful of emails, and doesn't blame the domain for dead addresses", () => {

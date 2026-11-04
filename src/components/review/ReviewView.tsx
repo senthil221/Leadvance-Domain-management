@@ -7,7 +7,7 @@ import { useMemo, useState, useTransition } from "react";
 import { toast } from "sonner";
 import { loadReview, markDomains, tagDomains } from "@/app/actions";
 import { Findings } from "@/components/compare/Findings";
-import { ConfigureDomains, PasteSelect } from "@/components/domains/DomainBulk";
+import { ConfigureDomains, PasteSelect, WarmingButtons } from "@/components/domains/DomainBulk";
 import { RangePicker } from "@/components/RangePicker";
 import { SortTh } from "@/components/SortTh";
 import { ClientCell, Empty, Rep, StatusDot, TagList } from "@/components/ui";
@@ -41,7 +41,7 @@ const sortValue = (r: Judged, k: SortKey): string | number | null => {
     case "client": return r.clientName?.toLowerCase() ?? null;
     case "esp": return espName(r.esp);
     case "provider": return r.provider;
-    case "age": return r.ageDays;
+    case "age": return r.connectedDays;
     case "name": return r.name;
     case "quiet": return r.quietDays;
     case "rep": return r.rep;
@@ -413,7 +413,7 @@ export function ReviewView({ initial, clients }: { initial: ReviewData; clients:
                 <SortTh k="signals" sort={sort} onSort={sortBy} title="Strikes first: spam, blocklisted, low reputation, no reply, no response">Why</SortTh>
                 <SortTh k="provider" sort={sort} onSort={sortBy} title="Where the inboxes come from: Hypertide for Outlook, Icemail for Google">Provider</SortTh>
                 <SortTh k="esp" sort={sort} onSort={sortBy}>ESP</SortTh>
-                <SortTh k="age" sort={sort} onSort={sortBy} num title="Days since the domain was bought">Age</SortTh>
+                <SortTh k="age" sort={sort} onSort={sortBy} num title="Days since its first inbox joined Smartlead">Age</SortTh>
                 <th title="Connected, disconnected or deleted in Smartlead now, as of the last sync">Smartlead now</th>
                 <SortTh k="sent" sort={sort} onSort={sortBy} num>Sent</SortTh>
                 <SortTh k="replies" sort={sort} onSort={sortBy} num title="Every reply, out of office included">Replies</SortTh>
@@ -450,7 +450,7 @@ export function ReviewView({ initial, clients }: { initial: ReviewData; clients:
                     </td>
                     <td>{r.provider ? <span className={`badge${r.provider === "Icemail" ? " tone-violet" : ""}`}>{r.provider}</span> : <span className="zero">—</span>}</td>
                     <td><EspBadge esp={r.esp} /></td>
-                    <td className="is-num" title={r.connectedDays != null ? `${int(r.connectedDays)} days in Smartlead` : undefined}>{r.ageDays != null ? `${int(r.ageDays)}d` : <span className="zero">—</span>}</td>
+                    <td className="is-num" title={r.ageDays != null ? `Domain bought ${int(r.ageDays)} days ago` : undefined}>{r.connectedDays != null ? `${int(r.connectedDays)}d` : <span className="zero">—</span>}</td>
                     <td><SlBadge c={{ slConnected: r.inboxes, slDisconnected: r.disconnected, slRemoved: r.removed }} /></td>
                     <td className="is-num">{r.sent ? int(r.sent) : <span className="zero">0</span>}</td>
                     <td className="is-num">{r.replies ? int(r.replies) : <span className={r.sent >= RULES.silentSent ? "metric is-bad" : "zero"}>0</span>}</td>
@@ -569,6 +569,7 @@ export function ReviewView({ initial, clients }: { initial: ReviewData; clients:
         <div className="bulk-bar" role="toolbar" aria-label="Selected domains">
           <span className="bulk-count">{selectedRows.length} selected</span>
           <ConfigureDomains domainIds={selectedRows.map((d) => d.id)} onDone={() => void reload()} />
+          <WarmingButtons rows={selectedRows} onDone={() => { setSelected(new Set()); void reload(); }} />
           <span className="sep" />
           <input className="rv-tag-input" list="rv-tags" value={tag} onChange={(e) => setTag(e.target.value)} placeholder="Tag name" aria-label="Tag name"
             onKeyDown={(e) => { if (e.key === "Enter" && tag.trim()) applyTag(true); }} />
