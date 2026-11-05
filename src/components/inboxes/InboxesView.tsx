@@ -16,6 +16,7 @@ import { warmupProgress } from "@/lib/warmup-program";
 import { ReplaceDialog } from "@/components/domains/ReplaceDialog";
 import { ClientCell, Empty, Rep, StatusDot, TagList } from "@/components/ui";
 import { InboxSettingsDialog } from "./InboxSettingsDialog";
+import { WarmingButtons } from "@/components/domains/DomainBulk";
 import { MoveToTagDialog } from "./MoveToTagDialog";
 import { PlansCard } from "./PlansCard";
 import { ageLabel, ago, int } from "@/lib/format";
@@ -556,6 +557,7 @@ export function InboxesView({ inboxes, clients, plans, smartleadConnected, dryRu
 
   const selectedRows = useMemo(() => inboxes.filter((i) => selected.has(i.id)), [inboxes, selected]);
   const selectedDomains = useMemo(() => [...new Set(selectedRows.map((i) => i.domainId))], [selectedRows]);
+  const selectedStatuses = useMemo(() => selectedDomains.map((id) => ({ id, status: selectedRows.find((x) => x.domainId === id)!.domainStatus })), [selectedDomains, selectedRows]);
   const replaceTargets = useMemo(() => selectedDomains.flatMap((id) => {
     const i = selectedRows.find((x) => x.domainId === id)!;
     return i.domainStatus === "active" || i.domainStatus === "warming" ? [{ id, name: i.domain, tld: i.domainTld, clientName: i.clientName, clientHue: i.clientHue }] : [];
@@ -1116,6 +1118,7 @@ export function InboxesView({ inboxes, clients, plans, smartleadConnected, dryRu
           <span className="bulk-count">{selected.size} inbox{selected.size === 1 ? "" : "es"} · {selectedDomains.length} domain{selectedDomains.length === 1 ? "" : "s"}</span>
           <button type="button" className="btn btn-primary btn-sm" disabled={!smartleadConnected} onClick={() => setEditOpen(true)}><Settings2 size={14} /> Configure settings</button>
           <button type="button" className="btn btn-sm" disabled={!smartleadConnected} title="Move the selected domains to a Smartlead tag" onClick={() => setMoveOpen(true)}><TagsIcon size={14} /> Move to tag</button>
+          <WarmingButtons rows={selectedStatuses} onDone={() => setSelected(new Set())} />
           <button type="button" className="btn btn-sm" disabled={!replaceTargets.length} title="Swap the selected domains for free ones" onClick={() => setReplaceOpen(true)}><ArrowLeftRight size={14} /> Replace{replaceTargets.length ? ` (${replaceTargets.length})` : ""}</button>
           <button type="button" className="btn btn-sm" onClick={() => document.getElementById("plans-title")?.scrollIntoView({ behavior: "smooth" })}><Shuffle size={14} /> Daily plan</button>
           <DropdownMenu.Root>

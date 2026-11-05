@@ -1707,3 +1707,36 @@ a.kpi:hover { border-color: var(--accent-line, var(--line-strong)); }
 .sl-badge.tone-faint { color: var(--faint); }
 .sl-badge.tone-faint > i { background: transparent; box-shadow: inset 0 0 0 1.5px var(--line-strong); }
 .sl-synced { color: var(--faint); font-size: 12px; white-space: nowrap; }
+
+/* Totals line up with the rows above them */
+.data-table tfoot td { position: sticky; bottom: 0; height: 36px; padding: 0 12px; border-top: 1px solid var(--line-strong); background: var(--surface-2); color: var(--ink); font-weight: 500; white-space: nowrap; }
+
+/* Columns of a set width that never move: one height, one baseline, long values cut with the full text on hover */
+.data-table.is-fixed { table-layout: fixed; }
+.data-table.is-fixed thead th, .data-table.is-fixed tfoot td { padding-left: 10px; padding-right: 10px; }
+.data-table.is-fixed tbody td { padding: 0 10px; overflow: hidden; text-overflow: ellipsis; line-height: 20px; }
+.data-table.is-fixed .col-check { padding: 0 0 0 12px; }
+.data-table.is-fixed th.is-num .sort-head { position: relative; }
+.data-table.is-fixed th.is-num .sort-head svg { position: absolute; right: 100%; margin-right: 2px; }
+.data-table.is-fixed .status-dot, .data-table.is-fixed .ns-cell, .data-table.is-fixed .sl-badge, .data-table.is-fixed .client-cell { height: 20px; max-width: 100%; min-width: 0; vertical-align: top; font-size: 13px; }
+.data-table.is-fixed .ns-host, .data-table.is-fixed .sl-badge > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.data-table.is-fixed .ns-status { flex: none; font-size: 12px; }
+.inv-line { display: inline-flex; align-items: center; gap: 6px; height: 20px; max-width: 100%; min-width: 0; vertical-align: top; }
+.inv-line > * { flex: none; }
+.inv-line > .inv-cut, .inv-line > a { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.inv-name { display: flex; align-items: center; gap: 8px; height: 20px; min-width: 0; }
+.inv-name > a { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.inv-tags { display: inline-flex; align-items: center; gap: 4px; flex: 1 9999 0; min-width: 0; overflow: hidden; }
+.inv-tags > * { flex: none; }
+
+/* The checkbox and domain stay put when a narrow screen scrolls sideways */
+.data-table.is-fixed.is-main th.col-check, .data-table.is-fixed.is-main td.col-check { position: sticky; left: 0; }
+.data-table.is-fixed.is-main th.col-first, .data-table.is-fixed.is-main td.col-first { position: sticky; left: 40px; }
+.data-table.is-fixed.is-main th.col-check, .data-table.is-fixed.is-main th.col-first { z-index: 3; }
+.data-table.is-fixed.is-main td.col-check, .data-table.is-fixed.is-main td.col-first { z-index: 1; background: var(--surface); }
+.data-table.is-fixed.is-main tbody tr:hover > td.col-check, .data-table.is-fixed.is-main tbody tr:hover > td.col-first { background: var(--row-hover); }
+.data-table.is-fixed.is-main tbody tr[data-selected="true"] > td.col-check, .data-table.is-fixed.is-main tbody tr[data-selected="true"] > td.col-first { background: var(--row-selected); }
+
+/* Every control on the domains toolbar is the same height */
+.inv-bar { display: flex; flex-direction: column; gap: 8px; }
+.inv-bar .btn, .inv-bar .select, .inv-bar .search-input .input { height: 30px; }

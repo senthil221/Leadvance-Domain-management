@@ -14,7 +14,7 @@ import { ConfigureDomains, PasteSelect, WarmingButtons } from "@/components/doma
 import { MarkReplacedDialog } from "./MarkReplacedDialog";
 import { useCompact } from "@/components/ThemeToggle";
 import { Badge, ClientCell, Empty, TagList } from "@/components/ui";
-import { ageLabel, daysSince, int, shortDate } from "@/lib/format";
+import { daysSince, fixedDate, int, shortDate } from "@/lib/format";
 import type { ClientRow, DomainRow } from "@/lib/queries";
 import { LIFE, LIFE_ORDER, LIFE_TABS, htOf, lifeOf, nsOf, type Life } from "@/lib/lifecycle";
 import { SlBadge } from "@/components/domains/SlStatus";
@@ -31,6 +31,14 @@ const COLUMNS: ColumnDef[] = [
   { key: "capacity", label: "Per day" }, { key: "age", label: "Active for" }, { key: "domainAge", label: "Domain age" }, { key: "bought", label: "Bought", hidden: true },
   { key: "renews", label: "Renews" },
 ];
+
+// Every column has a set width: the table only draws the rows on screen, so left
+// to size itself the columns would jump as you scroll or change tab. Domain takes the rest.
+const CHECK_WIDTH = 40, DOMAIN_MIN = 200;
+const WIDTH: Record<string, number> = {
+  life: 108, sl: 124, client: 116, registrar: 152, ns: 132, ht: 84, icemail: 104,
+  inboxes: 68, capacity: 64, age: 60, domainAge: 60, bought: 104, renews: 104,
+};
 
 type SortKey = "name" | "life" | "sl" | "client" | "registrar" | "ns" | "ht" | "icemailMonthly" | "inboxCount" | "capacity" | "purchasedAt" | "expiresAt" | "age" | "domainAge";
 const sortValue = (d: DomainRow, k: SortKey): string | number | null => {
@@ -87,7 +95,10 @@ export function InventoryView({ domains, clients }: { domains: DomainRow[]; clie
   const [moveTo, setMoveTo] = useState<"replaced" | "recovery" | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const cols = useColumns("inventory", COLUMNS);
-  const on = cols.on;
+  // A provider nobody on this server uses is only an empty column.
+  const hasHt = useMemo(() => domains.some((d) => htOf(d)), [domains]);
+  const hasIcemail = useMemo(() => domains.some((d) => d.icemailMailboxes || d.icemailIssue), [domains]);
+  const on = (k: string) => cols.on(k) && (k !== "ht" || hasHt) && (k !== "icemail" || hasIcemail);
 
   useEffect(() => {
     const p = new URLSearchParams(window.location.search);
@@ -165,8 +176,8 @@ export function InventoryView({ domains, clients }: { domains: DomainRow[]; clie
   const padBottom = items.length ? virtual.getTotalSize() - items[items.length - 1].end : 0;
 
   const sortBy = (key: SortKey) => setSort((s) => (s.key === key ? { key, dir: (s.dir * -1) as 1 | -1 } : { key, dir: ["inboxCount", "capacity"].includes(key) ? -1 : 1 }));
-  const Th = ({ k, children, num }: { k: SortKey; children: React.ReactNode; num?: boolean }) => (
-    <th className={num ? "is-num" : undefined} aria-sort={sort.key === k ? (sort.dir === 1 ? "ascending" : "descending") : undefined}>
+  const Th = ({ k, children, num, first, title }: { k: SortKey; children: React.ReactNode; num?: boolean; first?: boolean; title?: string }) => (
+    <th className={num ? "is-num" : first ? "col-first" : undefined} title={title} aria-sort={sort.key === k ? (sort.dir === 1 ? "ascending" : "descending") : undefined}>
       <button type="button" className="sort-head" onClick={() => sortBy(k)}>
         {children}
         {sort.key === k ? (sort.dir === 1 ? <ArrowUp size={12} /> : <ArrowDown size={12} />) : null}
@@ -191,11 +202,15 @@ export function InventoryView({ domains, clients }: { domains: DomainRow[]; clie
 
   const filtered = q || clientId || tag || registrar || tld || sl;
   const capacity = rows.reduce((a, r) => a + r.capacity, 0);
-  const COLS = 2 + cols.count;
+  // Long values only appear on some tabs: "Replaced → newdomain.com", "Cooling down · until Dec 3".
+  const lifeWidth = view === "replaced" || view === "cooling" || view === "all" ? 166 : WIDTH.life;
+  const shown = COLUMNS.filter((c) => on(c.key)).map((c) => ({ key: c.key, width: c.key === "life" ? lifeWidth : WIDTH[c.key] }));
+  const COLS = 2 + shown.length;
 
   return (
     <>
       <div className="flex flex-col gap-3">
+        <div className="inv-bar">
         <div className="table-bar">
           <div className="view-tabs" role="tablist" aria-label="Lifecycle">
             {([...LIFE_TABS, "all"] as const).map((k) => (
@@ -204,18 +219,29 @@ export function InventoryView({ domains, clients }: { domains: DomainRow[]; clie
               </button>
             ))}
           </div>
-          <select className="select" style={{ width: 150 }} value={clientId} onChange={(e) => setClientId(e.target.value)} aria-label="Filter by client">
+          <span className="spacer-auto" />
+          <label className="search-input">
+            <Search size={14} strokeWidth={1.5} />
+            <input className="input" value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search" aria-label="Search inventory" />
+          </label>
+          <PasteSelect rows={domains} selected={selected} where="in your domains"
+            onSelect={(s) => { setSelected(s); if ([...s].some((id) => !rows.some((r) => r.id === id))) { setView("all"); setQ(""); } }} />
+          <button type="button" className="btn btn-sm" onClick={exportCsv}><Download size={14} /> Export</button>
+          <ColumnsMenu cols={cols} />
+        </div>
+        <div className="table-bar">
+          <select className="select rv-filter" data-on={clientId ? true : undefined} value={clientId} onChange={(e) => setClientId(e.target.value)} aria-label="Filter by client">
             <option value="">All clients</option>
             {clients.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
           </select>
           {allTags.length ? (
-            <select className="select" style={{ width: 130 }} value={tag} onChange={(e) => setTag(e.target.value)} aria-label="Filter by tag">
+            <select className="select rv-filter" data-on={tag ? true : undefined} value={tag} onChange={(e) => setTag(e.target.value)} aria-label="Filter by tag">
               <option value="">All tags</option>
               {allTags.map((t) => <option key={t} value={t}>{t}</option>)}
             </select>
           ) : null}
           {registrars.length > 1 || registrars.some((r) => r.accounts.length > 1) ? (
-            <select className="select" style={{ width: 210 }} value={registrar} onChange={(e) => setRegistrar(e.target.value)} aria-label="Filter by registrar account">
+            <select className="select rv-filter" data-on={registrar ? true : undefined} value={registrar} onChange={(e) => setRegistrar(e.target.value)} aria-label="Filter by registrar account">
               <option value="">All registrar accounts</option>
               {registrars.map((r) => r.accounts.length > 1 ? (
                 <optgroup key={r.name} label={r.name}>
@@ -230,31 +256,29 @@ export function InventoryView({ domains, clients }: { domains: DomainRow[]; clie
             </select>
           ) : null}
           {tlds.length > 1 ? (
-            <select className="select" style={{ width: 120 }} value={tld} onChange={(e) => setTld(e.target.value)} aria-label="Filter by TLD">
+            <select className="select rv-filter" data-on={tld ? true : undefined} value={tld} onChange={(e) => setTld(e.target.value)} aria-label="Filter by TLD">
               <option value="">All TLDs</option>
               {tlds.map(([t, n]) => <option key={t} value={t}>.{t} ({int(n)})</option>)}
             </select>
           ) : null}
-          <select className="select" style={{ width: 190 }} value={sl} onChange={(e) => setSl(e.target.value as SlState | "")} aria-label="Filter by Smartlead status"
+          <select className="select rv-filter" data-on={sl ? true : undefined} value={sl} onChange={(e) => setSl(e.target.value as SlState | "")} aria-label="Filter by Smartlead status"
             title="Connected, disconnected or deleted in Smartlead now, as of the last Smartlead sync">
             <option value="">Any Smartlead status</option>
             {SL_ORDER.map((k) => <option key={k} value={k}>{SL_META[k].label} ({int(slCounts.get(k) ?? 0)})</option>)}
           </select>
           {filtered ? <button type="button" className="btn btn-ghost btn-sm" onClick={() => { setQ(""); setClientId(""); setTag(""); setRegistrar(""); setTld(""); setSl(""); }}>Clear</button> : null}
-          <span className="spacer-auto" />
-          <label className="search-input">
-            <Search size={14} strokeWidth={1.5} />
-            <input className="input" value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search" aria-label="Search inventory" />
-          </label>
-          <PasteSelect rows={domains} selected={selected} where="in your domains"
-            onSelect={(s) => { setSelected(s); if ([...s].some((id) => !rows.some((r) => r.id === id))) { setView("all"); setQ(""); } }} />
-          <button type="button" className="btn btn-sm" onClick={exportCsv}><Download size={14} /> Export</button>
-          <ColumnsMenu cols={cols} />
+        </div>
         </div>
 
         <div className="table-wrap">
           <div ref={scrollRef} className="table-scroll" style={{ maxHeight: "calc(100dvh - 240px)", minHeight: 280 }}>
-            <table className="data-table is-main" aria-rowcount={rows.length}>
+            <table className="data-table is-main is-fixed" aria-rowcount={rows.length}
+              style={{ minWidth: CHECK_WIDTH + DOMAIN_MIN + shown.reduce((a, c) => a + c.width, 0) }}>
+              <colgroup>
+                <col style={{ width: CHECK_WIDTH }} />
+                <col />
+                {shown.map((c) => <col key={c.key} style={{ width: c.width }} />)}
+              </colgroup>
               <thead>
                 <tr>
                   <th className="col-check">
@@ -262,7 +286,7 @@ export function InventoryView({ domains, clients }: { domains: DomainRow[]; clie
                       ref={(el) => { if (el) el.indeterminate = !allShown && someShown; }}
                       onChange={() => setSelected((s) => { const n = new Set(s); rows.forEach((r) => (allShown ? n.delete(r.id) : n.add(r.id))); return n; })} />
                   </th>
-                  <Th k="name">Domain</Th>
+                  <Th k="name" first>Domain</Th>
                   {on("life") ? <Th k="life">Lifecycle</Th> : null}
                   {on("sl") ? <Th k="sl">Smartlead</Th> : null}
                   {on("client") ? <Th k="client">Client</Th> : null}
@@ -272,8 +296,8 @@ export function InventoryView({ domains, clients }: { domains: DomainRow[]; clie
                   {on("icemail") ? <Th k="icemailMonthly">Icemail</Th> : null}
                   {on("inboxes") ? <Th k="inboxCount" num>Inboxes</Th> : null}
                   {on("capacity") ? <Th k="capacity" num>Per day</Th> : null}
-                  {on("age") ? <Th k="age" num>Active</Th> : null}
-                  {on("domainAge") ? <Th k="domainAge" num>Domain age</Th> : null}
+                  {on("age") ? <Th k="age" num title="Days since the domain went active">Active</Th> : null}
+                  {on("domainAge") ? <Th k="domainAge" num title="Days since the domain was bought">Age</Th> : null}
                   {on("bought") ? <Th k="purchasedAt" num>Bought</Th> : null}
                   {on("renews") ? <Th k="expiresAt" num>{view === "expired" ? "Expired on" : "Renews"}</Th> : null}
                 </tr>
@@ -290,20 +314,20 @@ export function InventoryView({ domains, clients }: { domains: DomainRow[]; clie
                     <tr key={d.id} data-index={vi.index} data-selected={isSel} className="is-clickable" onClick={() => toggle(d.id)}>
                       <td className="col-check"><input type="checkbox" className="checkbox" checked={isSel} onChange={() => {}} aria-label={`Select ${d.name}`} tabIndex={-1} /></td>
                       <td className="col-first">
-                        <span className="flex items-center gap-2">
-                          <DomainLink id={d.id} className="strong hover:underline">{d.name}</DomainLink>
-                          <TagList tags={d.tags} graceDaysLeft={d.graceDaysLeft} />
+                        <span className="inv-name">
+                          <DomainLink id={d.id} className="strong hover:underline" title={d.name}>{d.name}</DomainLink>
+                          {d.tags.length ? <span className="inv-tags" title={d.tags.join(", ")}><TagList tags={d.tags} graceDaysLeft={d.graceDaysLeft} /></span> : null}
                         </span>
                       </td>
                       {on("life") ? (
                       <td>
-                        <span className="flex items-center gap-1.5">
+                        <span className="inv-line">
                           <span className={`status-dot tone-${life.tone}`}
                             title={d.coolingUntil ? `Last used ${shortDate(d.lastUsedOn)}; free to reuse from ${shortDate(d.coolingUntil)}` : d.status === "in_storage" && d.lastUsedOn ? `Used before, last on ${shortDate(d.lastUsedOn)}` : undefined}>
                             {d.status === "warming" ? "Warming" : life.label}{d.coolingUntil ? <span className="text-muted"> · until {shortDate(d.coolingUntil)}</span> : null}
                           </span>
                           {d.replacedById ? (
-                            <DomainLink id={d.replacedById} className="flex items-center gap-1 truncate text-muted hover:text-ink" title={`Replaced ${shortDate(d.replacedAt)}`}>
+                            <DomainLink id={d.replacedById} className="flex items-center gap-1 truncate text-muted hover:text-ink" title={`Replaced by ${d.replacedByName} on ${shortDate(d.replacedAt)}`}>
                               <ArrowRight size={12} />{d.replacedByName}
                             </DomainLink>
                           ) : null}
@@ -311,18 +335,22 @@ export function InventoryView({ domains, clients }: { domains: DomainRow[]; clie
                       </td>
                       ) : null}
                       {on("sl") ? (
-                      <td><SlBadge c={d} /></td>
+                      <td><SlBadge c={d} short /></td>
                       ) : null}
                       {on("client") ? (
                       <td><ClientCell name={d.clientName} hue={d.clientHue} /></td>
                       ) : null}
                       {on("registrar") ? (
-                      <td>
+                      <td title={d.registrar ? [d.registrar, d.registrarAccount].filter(Boolean).join(" · ") : undefined}>
+                        <span className="inv-line">
+                        <span className="inv-cut">
                         {d.registrar ?? <span className="zero">—</span>}
                         {d.registrarAccount ? <span className="text-muted"> · {d.registrarAccount}</span> : null}
+                        </span>
                         {d.registrar === "Porkbun" && d.apiAccess === false ? (
-                          <span className="badge tone-warning ml-1.5" title="API access is off for this domain at Porkbun, so the app can read but not change its nameservers. Turn it on in Porkbun → Domain → Details → API Access.">API off</span>
+                          <span className="badge tone-warning" title="API access is off for this domain at Porkbun, so the app can read but not change its nameservers. Turn it on in Porkbun → Domain → Details → API Access.">API off</span>
                         ) : null}
+                        </span>
                       </td>
                       ) : null}
                       {on("ns") ? (
@@ -343,8 +371,8 @@ export function InventoryView({ domains, clients }: { domains: DomainRow[]; clie
                       {on("icemail") ? (
                       <td>
                         {d.icemailMailboxes ? (
-                          <span className="flex items-center gap-2" title={d.icemailNextBill ? `Next bill ${shortDate(d.icemailNextBill)}` : undefined}>
-                            <span className="text-muted">{int(d.icemailMailboxes)} · {usd(d.icemailMonthly ?? 0)}/mo</span>
+                          <span className="inv-line" title={d.icemailNextBill ? `Next bill ${shortDate(d.icemailNextBill)}` : undefined}>
+                            <span className="inv-cut text-muted">{int(d.icemailMailboxes)} · {usd(d.icemailMonthly ?? 0)}/mo</span>
                             {d.icemailIssue ? <Badge tone="danger">{d.icemailIssue}</Badge> : null}
                           </span>
                         ) : d.icemailIssue ? <Badge tone="danger">{d.icemailIssue}</Badge> : <span className="zero">—</span>}
@@ -360,13 +388,13 @@ export function InventoryView({ domains, clients }: { domains: DomainRow[]; clie
                       <td className="is-num text-muted">{d.activeSince && d.status !== "in_storage" && d.status !== "warming" ? `${daysSince(d.activeSince)}d` : <span className="zero">—</span>}</td>
                       ) : null}
                       {on("domainAge") ? (
-                      <td className="is-num text-muted" title={d.bornAt ? `Bought ${shortDate(d.bornAt)}` : "Purchase date not known"}>{d.bornAt ? ageLabel(daysSince(d.bornAt)) : <span className="zero">—</span>}</td>
+                      <td className="is-num text-muted" title={d.bornAt ? `Bought ${shortDate(d.bornAt)}` : "Purchase date not known"}>{d.bornAt ? `${int(daysSince(d.bornAt))}d` : <span className="zero">—</span>}</td>
                       ) : null}
                       {on("bought") ? (
-                      <td className="is-num text-muted">{d.purchasedAt ? shortDate(d.purchasedAt) : <span className="zero">—</span>}</td>
+                      <td className="is-num text-muted">{d.purchasedAt ? fixedDate(d.purchasedAt) : <span className="zero">—</span>}</td>
                       ) : null}
                       {on("renews") ? (
-                      <td className="is-num text-muted" title={d.expired && d.registrarStatus ? `The registrar says: ${d.registrarStatus}` : undefined}>{d.expiresAt ? shortDate(d.expiresAt) : <span className="zero">—</span>}{d.expired && /redemption/i.test(d.registrarStatus ?? "") ? <> <Badge tone="warning">redemption</Badge></> : null}</td>
+                      <td className={`is-num ${d.expired && /redemption/i.test(d.registrarStatus ?? "") ? "text-warning-ink" : "text-muted"}`} title={d.expired && d.registrarStatus ? `The registrar says: ${d.registrarStatus}` : undefined}>{d.expiresAt ? fixedDate(d.expiresAt) : <span className="zero">—</span>}</td>
                       ) : null}
                     </tr>
                   );

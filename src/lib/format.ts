@@ -49,3 +49,9 @@ export function summarize(detail: Record<string, unknown> | null | undefined) {
 
 /** An age in days as people say it: 45d, 8mo, 3.1y. */
 export const ageLabel = (days: number | null) => (days == null ? null : days < 60 ? `${days}d` : days < 730 ? `${Math.round(days / 30)}mo` : `${(days / 365).toFixed(1)}y`);
+
+/** A date that keeps its width down a column: Mar 05, 2027. */
+export function fixedDate(d: Date | string | null | undefined) {
+  if (!d) return "—";
+  return new Date(d).toLocaleDateString("en-US", { month: "short", day: "2-digit", year: "numeric", timeZone: "UTC" });
+}

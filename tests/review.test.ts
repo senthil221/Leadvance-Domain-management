@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { bounceCauseOf, bounceReason } from "../src/lib/bounces";
 import { matchPreset, monday, presetRange, previousLabel, previousRange } from "../src/lib/range";
 import { badLists, byClient, bySmartleadTag, judge, sheetRows, type ReviewDomain } from "../src/lib/review";
-import { slState, slText } from "../src/lib/smartlead-state";
+import { slShort, slState, slText } from "../src/lib/smartlead-state";
 
 const domain = (over: Partial<ReviewDomain> = {}): ReviewDomain => ({
   id: "d1", name: "welvion.com", status: "active", clientId: null, clientName: "Qualifi", clientHue: null, tags: [],
@@ -208,5 +208,6 @@ describe("Smartlead status now", () => {
     expect(slText(c(3, 2, 0))).toBe("2 of 5 disconnected");
     expect(slText(c(0, 4, 1))).toBe("Disconnected · 4");
     expect(slText(c(0, 0, 6))).toBe("Deleted in Smartlead");
+    expect([c(5, 0, 2), c(3, 2, 0), c(0, 4, 1), c(0, 0, 6), c(0, 0, 0)].map(slShort)).toEqual(["Live · 5", "2 of 5 off", "Disconnected · 4", "Deleted", "—"]);
   });
 });

@@ -5,11 +5,12 @@ import { Suspense } from "react";
 import { CalendarClock, Plus, TriangleAlert } from "lucide-react";
 import { AutoRefresh } from "@/components/AutoRefresh";
 import { AddDomainsDialog } from "@/components/inventory/AddDomainsDialog";
+import { BreakdownTabs } from "@/components/inventory/BreakdownTabs";
 import { InventoryView } from "@/components/inventory/InventoryView";
 import { lifeOf } from "@/lib/lifecycle";
 import { Badge, ClientCell, Dot, Empty, PageHead, Skeleton, StatusDot, TableSkeleton } from "@/components/ui";
 import { getCurrentUser } from "@/lib/auth";
-import { ago, int, shortDate } from "@/lib/format";
+import { ago, fixedDate, int } from "@/lib/format";
 import { getHypertideSummary, getInventory, listClients, listDomains, listVendors, type Breakdown } from "@/lib/queries";
 
 export const metadata: Metadata = { title: "Inventory" };
@@ -40,7 +41,7 @@ async function AddButton() {
 async function InventoryContent() {
   await getCurrentUser();
   const [{ accounts, tlds, renewals, totals }, domains, clients, ht] = await Promise.all([getInventory(), listDomains(), listClients(), getHypertideSummary()]);
-  const money = (c: number) => `${(c / 100).toLocaleString("en-US", { maximumFractionDigits: 0 })}`;
+  const money = (c: number) => `$${(c / 100).toLocaleString("en-US", { maximumFractionDigits: 0 })}`;
   const life = { active: 0, setup: 0, free: 0, cooling: 0, replaced: 0, recovery: 0, expired: 0 };
   for (const d of domains) life[lifeOf(d)]++;
   const activeCapacity = domains.filter((d) => lifeOf(d) === "active").reduce((a, d) => a + d.capacity, 0);
@@ -51,18 +52,23 @@ async function InventoryContent() {
 
   return (
     <>
-      <section className="stats is-5" aria-label="Inventory numbers">
+      <section className="stats is-6" aria-label="Inventory numbers">
         <Link href="/inventory" className="stat">
           <span className="stat-label"><Dot tone="success" />Active</span>
           <span className="stat-value">{int(life.active)}</span>
-          <span className="stat-foot">{int(activeInboxes)} inboxes · {int(activeCapacity)} emails / day{life.setup ? ` · ${life.setup} more setting up` : ""}</span>
+          <span className="stat-foot">{int(activeInboxes)} inboxes · {int(activeCapacity)} a day</span>
+        </Link>
+        <Link href="/inventory?view=setup" className="stat">
+          <span className="stat-label"><Dot tone="info" />Warming &amp; setup</span>
+          <span className="stat-value">{int(life.setup)}</span>
+          <span className="stat-foot">not in campaigns yet</span>
         </Link>
         <Link href="/inventory?view=free" className="stat">
           <span className="stat-label"><Dot tone="faint" />Free</span>
           <span className="stat-value">{int(life.free)}</span>
           <span className="stat-foot">
-            {weeksLeft == null ? "no replacements in 4 weeks" : `≈ ${Math.floor(weeksLeft)} weeks at ${weekly.toFixed(1)} a week`}
-            {life.cooling ? ` · ${int(life.cooling)} more cooling down` : ""}
+            {weeksLeft == null ? "no replacements lately" : `≈ ${Math.floor(weeksLeft)} weeks' worth`}
+            {life.cooling ? ` · ${int(life.cooling)} cooling` : ""}
           </span>
         </Link>
         <Link href="/inventory?view=replaced" className="stat">
@@ -73,13 +79,13 @@ async function InventoryContent() {
         <Link href="/inventory?view=recovery" className="stat">
           <span className="stat-label"><Dot tone="violet" />Recovery</span>
           <span className="stat-value">{int(life.recovery)}</span>
-          <span className="stat-foot">{ht.recovery ? `${ht.recovery} in Hypertide's recovery pool` : "resting, not in use"}</span>
+          <span className="stat-foot">{ht.recovery ? `${ht.recovery} in Hypertide's pool` : "resting, not in use"}</span>
         </Link>
         <div className="stat">
-          <span className="stat-label">Owned · yearly cost</span>
+          <span className="stat-label">Owned</span>
           <span className="stat-value">{int(totals.owned)}</span>
           <span className="stat-foot">
-            {totals.annualCents ? `${money(totals.annualCents)} a year, excluding replaced` : `across ${accounts.length} registrar account${accounts.length === 1 ? "" : "s"}`}
+            {totals.annualCents ? <span title="Yearly cost, excluding replaced domains">{money(totals.annualCents)} a year</span> : `in ${accounts.length} account${accounts.length === 1 ? "" : "s"}`}
             {totals.expired ? <> · <Link href="/inventory?view=expired#domains" className="hover:underline">{int(totals.expired)} expired</Link></> : null}
           </span>
         </div>
@@ -112,11 +118,9 @@ async function InventoryContent() {
         </div>
       ) : null}
 
-      <div className="grid gap-5 xl:grid-cols-2">
-        <BreakdownCard id="accounts" title="By registrar account" rows={accounts} cooling={totals.reuseAfterDays}
-          hint="Every login in Settings → Connections. No registrar account: domains Hypertide or Smartlead know about that no connected account holds." />
-        <BreakdownCard id="tlds" title="By TLD" rows={tlds} cooling={totals.reuseAfterDays} />
-      </div>
+      <BreakdownTabs accountCount={accounts.length} tldCount={tlds.length}
+        accounts={<BreakdownTable tld={false} rows={accounts} cooling={totals.reuseAfterDays} />}
+        tlds={<BreakdownTable tld rows={tlds} cooling={totals.reuseAfterDays} />} />
 
       {domains.some((d) => d.nsRequestStatus === "pending" || d.nsRequestStatus === "running") ? <AutoRefresh seconds={5} /> : null}
       <div id="domains" style={{ scrollMarginTop: 12 }}>
@@ -145,10 +149,10 @@ async function InventoryContent() {
                 {renewals.map((r) => (
                   <tr key={r.id}>
                     <td><DomainLink id={r.id} className="strong hover:underline">{r.name}</DomainLink></td>
-                    <td><StatusDot status={r.status} /></td>
+                    <td><span className="inv-line"><StatusDot status={r.status} />{r.status === "burned" || r.status === "resting" ? <Badge tone="warning">let lapse?</Badge> : null}</span></td>
                     <td><ClientCell name={r.clientName} hue={r.clientHue} /></td>
                     <td>{r.registrar ?? <span className="zero">—</span>}</td>
-                    <td className="is-num">{shortDate(r.expiresAt)}{r.status === "burned" || r.status === "resting" ? <> <Badge tone="warning">let lapse?</Badge></> : null}</td>
+                    <td className="is-num">{fixedDate(r.expiresAt)}</td>
                     <td className="is-num">{r.costCents != null ? `$${(r.costCents / 100).toFixed(2)}` : <span className="zero">—</span>}</td>
                   </tr>
                 ))}
@@ -163,11 +167,10 @@ async function InventoryContent() {
 
 // One row per registrar account or TLD: what is sending, free to use, cooling
 // down after recent use, replaced, and renewing within 30 days.
-function BreakdownCard({ id, title, rows, cooling, hint }: { id: string; title: string; rows: Breakdown[]; cooling: number; hint?: string }) {
+function BreakdownTable({ tld, rows, cooling }: { tld: boolean; rows: Breakdown[]; cooling: number }) {
   const n = (v: number) => (v ? int(v) : <span className="zero">0</span>);
   const sum = (k: keyof Breakdown) => rows.reduce((a, r) => a + (r[k] as number), 0);
   const showCost = rows.some((r) => r.annualCents > 0);
-  const tld = id === "tlds";
   // The list below, filtered to this row and, for a number, its lifecycle tab.
   const href = (r: Breakdown, view = "all") => {
     const p = new URLSearchParams({ view });
@@ -178,13 +181,12 @@ function BreakdownCard({ id, title, rows, cooling, hint }: { id: string; title: 
   const cell = (r: Breakdown, v: number, view: string) =>
     v ? <Link href={href(r, view)} className="hover:underline">{int(v)}</Link> : <span className="zero">0</span>;
   return (
-    <section className="card" aria-labelledby={`${id}-title`}>
-      <div className="card-head">
-        <h2 id={`${id}-title`} className="card-title">{title}</h2>
-        <span className="card-sub" title={hint}>{rows.length} {tld ? "TLDs" : "accounts"} · click a row or number to list those domains</span>
-      </div>
-      <div className="table-scroll" style={{ maxHeight: 300 }}>
-        <table className="data-table">
+      <div className="table-scroll" style={{ maxHeight: 260 }}>
+        <table className="data-table is-fixed" style={{ minWidth: 200 + (showCost ? 9 : 8) * 84 }}>
+          <colgroup>
+            <col />
+            {Array.from({ length: showCost ? 9 : 8 }, (_, i) => <col key={i} style={{ width: 84 }} />)}
+          </colgroup>
           <thead>
             <tr>
               <th>{tld ? "TLD" : "Account"}</th>
@@ -202,7 +204,7 @@ function BreakdownCard({ id, title, rows, cooling, hint }: { id: string; title: 
           <tbody>
             {rows.map((r) => (
               <tr key={r.key}>
-                <td className="strong" title={r.usedBefore ? `${int(r.usedBefore)} of the domains in storage were used before` : undefined}>
+                <td className="strong" title={[r.sub ? `${r.label} · ${r.sub}` : r.label, r.usedBefore ? `${int(r.usedBefore)} of the domains in storage were used before` : ""].filter(Boolean).join(". ")}>
                   <Link href={href(r)} className="hover:underline">
                     {r.label}{r.sub ? <span className="text-muted" style={{ fontWeight: 400 }}> · {r.sub}</span> : null}
                   </Link>
@@ -237,6 +239,5 @@ function BreakdownCard({ id, title, rows, cooling, hint }: { id: string; title: 
           ) : null}
         </table>
       </div>
-    </section>
   );
 }

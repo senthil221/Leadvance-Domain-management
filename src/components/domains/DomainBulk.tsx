@@ -19,19 +19,19 @@ export function WarmingButtons({ rows, onDone }: { rows: readonly { id: string; 
   const run = (ids: string[], to: boolean) => start(async () => {
     const r = await setWarming({ ids, warming: to });
     if (!r.ok) { toast.error(r.error); return; }
-    toast.success(`${plural(r.data.changed, "domain")} marked as ${to ? "warming" : "active"}`);
+    toast.success(`${plural(r.data.changed, "domain")} moved to ${to ? "warming up" : "active"}`);
     onDone?.();
   });
   return (
     <>
       {active.length ? (
         <button type="button" className="btn btn-sm" disabled={pending} title="Still warming up: they leave Active and Idle and count as warming. Nothing changes in Smartlead" onClick={() => run(active, true)}>
-          <Flame size={14} /> Mark warming ({int(active.length)})
+          <Flame size={14} /> Move to warming up ({int(active.length)})
         </button>
       ) : null}
       {warming.length ? (
         <button type="button" className="btn btn-sm" disabled={pending} title="Done warming: they count as active again. Nothing changes in Smartlead" onClick={() => run(warming, false)}>
-          <Send size={14} /> Mark active ({int(warming.length)})
+          <Send size={14} /> Move to active ({int(warming.length)})
         </button>
       ) : null}
     </>
