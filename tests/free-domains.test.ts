@@ -1,6 +1,7 @@
 import { PGlite } from "@electric-sql/pglite";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { loadMigrations } from "../scripts/migrations";
+import { isDefaultNs, nsOf } from "../src/lib/lifecycle";
 
 let db: PGlite;
 
@@ -70,6 +71,32 @@ describe("free domains", () => {
     await db.query("select transition_domain($1, 'in_storage', 'cancelled', 'test')", [setUp]);
     await add("clean.com");
     expect(await free()).toEqual(["clean.com"]);
+  });
+});
+
+describe("the nameserver cell", () => {
+  const base = { nsRequestStatus: null, nsRequestMessage: null, nsRequestTarget: null };
+
+  it("agrees with the database on default nameservers", async () => {
+    const sets = [["curitiba.ns.porkbun.com"], ["ns1.dyna-ns.net"], ["launch1.spaceship.net"], ["dns1.registrar-servers.com"], ["ns01.domaincontrol.com"],
+      ["ns1.dnsowl.com"], ["ns1.dns-parking.com"], ["ns1.ud-dns.net"], ["ns1.hypertide.io"], ["ada.ns.cloudflare.com"], ["curitiba.ns.porkbun.com", "ns2.hypertide.io"]];
+    for (const ns of sets) {
+      const { rows } = await db.query<{ ok: boolean }>("select ns_is_default($1::text[]) as ok", [ns]);
+      expect([ns.join(), isDefaultNs(ns)]).toEqual([ns.join(), rows[0].ok]);
+    }
+  });
+
+  it("only says not checked when it hasn't been looked up", () => {
+    expect(nsOf({ ...base, nameservers: [], nameserversCheckedAt: null }).status).toBe("Not checked");
+    expect(nsOf({ ...base, nameservers: [], nameserversCheckedAt: new Date() }).status).toBe("None");
+  });
+
+  it("calls a registrar's nameservers default, and doesn't alarm on an unused domain", () => {
+    const ns = ["ns1.ud-dns.net", "ns2.ud-dns.net"];
+    expect(nsOf({ ...base, nameservers: ns, nameserversAnswering: true }).status).toBe("Default");
+    expect(nsOf({ ...base, nameservers: ns, nameserversAnswering: false, status: "in_storage" }).status).toBe("Default");
+    expect(nsOf({ ...base, nameservers: ns, nameserversAnswering: false, status: "active" }).status).toBe("No zone");
+    expect(nsOf({ ...base, nameservers: ["ns1.hypertide.io"], nameserversAnswering: true }).status).toBe("Live");
   });
 });
 

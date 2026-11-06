@@ -32,12 +32,6 @@ const COLUMNS: ColumnDef[] = [
   { key: "renews", label: "Renews" },
 ];
 
-// The Free domains page: nothing about these has happened yet except buying them.
-const FREE_COLUMNS: ColumnDef[] = [
-  { key: "registrar", label: "Registrar" }, { key: "ns", label: "Nameservers" },
-  { key: "domainAge", label: "Domain age" }, { key: "bought", label: "Bought" }, { key: "renews", label: "Renews" },
-];
-
 // Every column has a set width: the table only draws the rows on screen, so left
 // to size itself the columns would jump as you scroll or change tab. Domain takes the rest.
 const CHECK_WIDTH = 40, DOMAIN_MIN = 184;
@@ -67,9 +61,9 @@ const usd = (n: number) => `$${n.toFixed(n % 1 ? 2 : 0)}`;
 
 const replaceable = (d: DomainRow) => d.status === "active" || d.status === "warming";
 
-export function InventoryView({ domains, clients, freeOnly = false }: { domains: DomainRow[]; clients: ClientRow[]; freeOnly?: boolean }) {
+export function InventoryView({ domains, clients }: { domains: DomainRow[]; clients: ClientRow[] }) {
   const params = useSearchParams();
-  const viewOf = (v: string | null): Life | "all" => (freeOnly ? "all" : v && (v === "all" || v in LIFE) ? (v as Life | "all") : "active");
+  const viewOf = (v: string | null): Life | "all" => (v && (v === "all" || v in LIFE) ? (v as Life | "all") : "active");
   const [view, setView] = useState<Life | "all">(() => viewOf(params.get("view")));
   // The number cards above link to ?view=…; follow the address when it changes.
   const urlView = params.get("view");
@@ -100,24 +94,23 @@ export function InventoryView({ domains, clients, freeOnly = false }: { domains:
   const [statusOpen, setStatusOpen] = useState(false);
   const [moveTo, setMoveTo] = useState<"replaced" | "recovery" | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
-  const columnDefs = freeOnly ? FREE_COLUMNS : COLUMNS;
-  const cols = useColumns(freeOnly ? "free-domains" : "inventory", columnDefs);
+  const cols = useColumns("inventory", COLUMNS);
   // A provider nobody on this server uses is only an empty column.
   const hasHt = useMemo(() => domains.some((d) => htOf(d)), [domains]);
   const hasIcemail = useMemo(() => domains.some((d) => d.icemailMailboxes || d.icemailIssue), [domains]);
   // Nothing is sending on these tabs, so a daily capacity column only says 0.
   const idle = view === "replaced" || view === "cooling" || view === "recovery" || view === "expired";
-  const on = (k: string) => columnDefs.some((c) => c.key === k) && cols.on(k) && (k !== "ht" || hasHt) && (k !== "icemail" || hasIcemail) && (k !== "capacity" || !idle);
+  const on = (k: string) => cols.on(k) && (k !== "ht" || hasHt) && (k !== "icemail" || hasIcemail) && (k !== "capacity" || !idle);
 
   useEffect(() => {
     const p = new URLSearchParams(window.location.search);
-    if (view === "active" || freeOnly) p.delete("view"); else p.set("view", view);
+    if (view === "active") p.delete("view"); else p.set("view", view);
     if (registrar) p.set("registrar", registrar); else p.delete("registrar");
     if (tld) p.set("tld", tld); else p.delete("tld");
     if (sl) p.set("sl", sl); else p.delete("sl");
     const s = p.toString();
     window.history.replaceState(null, "", s ? `?${s}` : window.location.pathname);
-  }, [view, registrar, tld, sl, freeOnly]);
+  }, [view, registrar, tld, sl]);
 
   const allTags = useMemo(() => [...new Set(domains.flatMap((d) => d.tags))].sort((a, b) => a.localeCompare(b)), [domains]);
   // Registrars with their accounts and counts, for the filter.
@@ -213,7 +206,7 @@ export function InventoryView({ domains, clients, freeOnly = false }: { domains:
   const capacity = rows.reduce((a, r) => a + r.capacity, 0);
   // Long values only appear on some tabs: "Replaced → newdomain.com", "Cooling down · until Dec 3".
   const lifeWidth = view === "replaced" || view === "cooling" || view === "all" ? 140 : WIDTH.life;
-  const shown = columnDefs.filter((c) => on(c.key)).map((c) => ({ key: c.key, width: c.key === "life" ? lifeWidth : WIDTH[c.key] }));
+  const shown = COLUMNS.filter((c) => on(c.key)).map((c) => ({ key: c.key, width: c.key === "life" ? lifeWidth : WIDTH[c.key] }));
   const COLS = 2 + shown.length;
 
   const registrarFilter = (
@@ -243,7 +236,6 @@ export function InventoryView({ domains, clients, freeOnly = false }: { domains:
       <div className="flex flex-col gap-3">
         <div className="inv-bar">
         <div className="table-bar">
-          {freeOnly ? null : (
           <div className="view-tabs" role="tablist" aria-label="Lifecycle">
             {([...LIFE_TABS, "all"] as const).map((k) => (
               <button key={k} type="button" role="tab" aria-selected={view === k} className={view === k ? "is-on" : undefined} onClick={() => { setView(k); scrollRef.current?.scrollTo({ top: 0 }); }}>
@@ -251,13 +243,6 @@ export function InventoryView({ domains, clients, freeOnly = false }: { domains:
               </button>
             ))}
           </div>
-          )}
-          {freeOnly ? (
-            <>
-              {registrars.length > 1 || registrars.some((r) => r.accounts.length > 1) ? registrarFilter : null}
-              {tlds.length > 1 ? tldFilter : null}
-            </>
-          ) : null}
           <span className="spacer-auto" />
           <label className="search-input">
             <Search size={14} strokeWidth={1.5} />
@@ -268,7 +253,6 @@ export function InventoryView({ domains, clients, freeOnly = false }: { domains:
           <button type="button" className="btn btn-sm" onClick={exportCsv}><Download size={14} /> Export</button>
           <ColumnsMenu cols={cols} />
         </div>
-        {freeOnly ? null : (
         <div className="table-bar">
           <select className="select rv-filter" data-on={clientId ? true : undefined} value={clientId} onChange={(e) => setClientId(e.target.value)} aria-label="Filter by client">
             <option value="">All clients</option>
@@ -289,7 +273,6 @@ export function InventoryView({ domains, clients, freeOnly = false }: { domains:
           </select>
           {filtered ? <button type="button" className="btn btn-ghost btn-sm" onClick={() => { setQ(""); setClientId(""); setTag(""); setRegistrar(""); setTld(""); setSl(""); }}>Clear</button> : null}
         </div>
-        )}
         </div>
 
         <div className="table-wrap">
@@ -425,15 +408,15 @@ export function InventoryView({ domains, clients, freeOnly = false }: { domains:
               </tbody>
             </table>
             {rows.length === 0 ? (
-              <Empty icon={Globe} title={filtered ? "No domains match" : freeOnly ? "No free domains" : "Nothing here"}>
-                {filtered ? "Try a different search or filter." : freeOnly ? "Domains you buy and haven't touched show up here." : "Domains show up here as they move through their life."}
+              <Empty icon={Globe} title={filtered ? "No domains match" : "Nothing here"}>
+                {filtered ? "Try a different search or filter." : "Domains show up here as they move through their life."}
               </Empty>
             ) : null}
           </div>
           <div className="table-footer">
             <span><b>{int(rows.length)}</b> domains</span>
-            {freeOnly ? null : <span><b>{int(rows.reduce((a, r) => a + r.inboxCount, 0))}</b> inboxes</span>}
-            {freeOnly ? null : <span><b>{int(capacity)}</b> campaign emails a day</span>}
+            <span><b>{int(rows.reduce((a, r) => a + r.inboxCount, 0))}</b> inboxes</span>
+            <span><b>{int(capacity)}</b> campaign emails a day</span>
             <span className="table-footer-hint hidden md:inline-flex">Click rows to select, then Set up</span>
           </div>
         </div>
@@ -442,17 +425,13 @@ export function InventoryView({ domains, clients, freeOnly = false }: { domains:
       {selected.size > 0 ? (
         <div className="bulk-bar" role="toolbar" aria-label="Selected domains">
           <span className="bulk-count">{selected.size} selected</span>
-          {freeOnly ? null : <ConfigureDomains domainIds={[...selected]} />}
-          {freeOnly ? null : <WarmingButtons rows={selectedRows} onDone={() => setSelected(new Set())} />}
+          <ConfigureDomains domainIds={[...selected]} />
+          <WarmingButtons rows={selectedRows} onDone={() => setSelected(new Set())} />
           <button type="button" className="btn btn-sm" onClick={() => setSetupOpen(true)}><Tag size={14} /> Set up</button>
-          {freeOnly ? null : (
-            <>
-              <button type="button" className="btn btn-sm" disabled={!selectedRows.some(replaceable)} title="Swap the selected active or warming domains for free ones" onClick={() => setReplaceOpen(true)}><ArrowLeftRight size={14} /> Replace</button>
+          <button type="button" className="btn btn-sm" disabled={!selectedRows.some(replaceable)} title="Swap the selected active or warming domains for free ones" onClick={() => setReplaceOpen(true)}><ArrowLeftRight size={14} /> Replace</button>
               <button type="button" className="btn btn-sm" disabled={!selectedRows.some((d) => lifeOf(d) !== "replaced")} onClick={() => setMoveTo("replaced")}><Archive size={14} /> Mark as replaced</button>
               <button type="button" className="btn btn-sm" disabled={!selectedRows.some((d) => lifeOf(d) !== "recovery")} onClick={() => setMoveTo("recovery")}><LifeBuoy size={14} /> Move to recovery</button>
               <button type="button" className="btn btn-sm" onClick={() => setStatusOpen(true)}><CircleDot size={14} /> Status</button>
-            </>
-          )}
           <button type="button" className="btn btn-sm" onClick={exportCsv}><Download size={14} /> Export</button>
           <span className="sep" />
           <button type="button" className="btn btn-sm" aria-label="Clear selection" onClick={() => setSelected(new Set())}><X size={14} /></button>

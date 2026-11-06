@@ -45,13 +45,18 @@ export function dnsHost(ns: string[]): string | null {
   return parts.slice(-2).join(".");
 }
 
+// The nameservers registrars hand out by default. Mirrors ns_is_default() in the
+// database, which decides what counts as free; tests keep the two in step.
+const DEFAULT_NS = /porkbun|dyna-ns\.net|dynadot|spaceship\.net|ud-dns|unstoppable|registrar-servers\.com|domaincontrol\.com|dnsowl\.com|dns-parking\.com|hostinger/;
+export const isDefaultNs = (ns: string[]) => ns.length > 0 && ns.every((n) => DEFAULT_NS.test(n.toLowerCase()));
+
 /**
  * The nameserver cell: where the domain points (the DNS host), a status in
  * a word or two, the full pair for the tooltip and, when a person has to set
  * it, the pair to copy.
  */
 export type Ns = { host: string | null; status: string; tone: Tone; title?: string; copy?: string[] };
-export function nsOf(d: Pick<DomainRow, "nameservers" | "nsRequestStatus" | "nsRequestMessage" | "nsRequestTarget"> & Partial<Pick<DomainRow, "nameserversAnswering">>): Ns {
+export function nsOf(d: Pick<DomainRow, "nameservers" | "nsRequestStatus" | "nsRequestMessage" | "nsRequestTarget"> & Partial<Pick<DomainRow, "nameserversAnswering" | "nameserversCheckedAt" | "status">>): Ns {
   const ns = d.nameservers ?? [];
   const target = d.nsRequestTarget ?? undefined;
   const host = dnsHost(ns);
@@ -66,11 +71,19 @@ export function nsOf(d: Pick<DomainRow, "nameservers" | "nsRequestStatus" | "nsR
     case "dry_run":
       return { host, status: "Dry run", tone: "faint", title: `Would switch to ${target?.join(", ")}. ${now}`, copy: target };
   }
-  if (!ns.length) return { host: null, status: "Not checked", tone: "faint" };
+  if (!ns.length) {
+    return d.nameserversCheckedAt
+      ? { host: null, status: "None", tone: "faint", title: "Looked up: public DNS, the registry and the registrar show no nameservers for this domain" }
+      : { host: null, status: "Not checked", tone: "faint", title: "Not looked up yet" };
+  }
+  // Unused and as the registrar left it: nothing to serve yet, and that's fine.
+  if (d.status === "in_storage" && isDefaultNs(ns)) {
+    return { host, status: "Default", tone: "faint", title: `The registrar's default nameservers: not set up for sending yet. ${now}` };
+  }
   if (d.nameserversAnswering === false) {
     return { host, status: "No zone", tone: "danger", title: `The domain points to ${ns.join(", ")}, but ${host ?? "that host"} has no DNS zone for it, so the domain doesn't resolve: no website, no email. Point it to its Hypertide pair (Set up) or create the zone at ${host ?? "that host"}.` };
   }
-  if (host === "Porkbun") return { host, status: "Parked", tone: "faint", title: `Porkbun's default nameservers: not set up for sending yet. ${now}` };
+  if (isDefaultNs(ns)) return { host, status: "Default", tone: "faint", title: `The registrar's default nameservers: not set up for sending yet. ${now}` };
   return { host, status: "Live", tone: "success", title: now };
 }
 

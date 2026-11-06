@@ -175,6 +175,22 @@ describe("nameserver lookups", () => {
     expect(d).toEqual({ nameservers: ["ns1.dnsimple.com", "ns2.dnsimple-edge.net"], nameservers_answering: false });
   });
 
+  it("asks the registry when DNS has nothing, so a domain with no zone still shows its nameservers", async () => {
+    const records = vi.fn(async () => ({ spf: true, dkim: true, dmarc: true, mx: true }));
+    const r = await checkNameservers(sql, null, 10, async () => [], async () => ({ ns: ["ns1.ud-dns.net", "ns2.ud-dns.net"], registered: null }), records);
+    expect(records).not.toHaveBeenCalled();
+    expect(r).toMatchObject({ notAnswering: 1, failed: 0 });
+    const [d] = await sql`select nameservers, nameservers_answering, nameservers_checked_at is not null as checked from domains where name = 'send.com'`;
+    expect(d).toEqual({ nameservers: ["ns1.ud-dns.net", "ns2.ud-dns.net"], nameservers_answering: false, checked: true });
+  });
+
+  it("records a look-up that found no nameservers anywhere as checked", async () => {
+    const records = vi.fn(async () => ({ spf: true, dkim: true, dmarc: true, mx: true }));
+    await checkNameservers(sql, null, 10, async () => [], async () => { throw new Error("no RDAP"); }, records);
+    const [d] = await sql`select nameservers, nameservers_checked_at is not null as checked from domains where name = 'send.com'`;
+    expect(d).toEqual({ nameservers: [], checked: true });
+  });
+
   it("records missing DNS records and the registration date for domain age", async () => {
     const lookup = vi.fn(async () => ["ada.ns.cloudflare.com", "bob.ns.cloudflare.com"]);
     const registry = vi.fn(async () => ({ ns: [], registered: "2025-03-04" }));

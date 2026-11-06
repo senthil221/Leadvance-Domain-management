@@ -1743,3 +1743,13 @@ a.kpi:hover { border-color: var(--accent-line, var(--line-strong)); }
 /* Every control on the domains toolbar is the same height */
 .inv-bar { display: flex; flex-direction: column; gap: 8px; }
 .inv-bar .btn, .inv-bar .select, .inv-bar .search-input .input { height: 30px; }
+
+/* Free domains: TLD chips you can pick several of */
+.free-bar { display: flex; flex-direction: column; gap: 8px; }
+.free-bar .btn, .free-bar .select, .free-bar .search-input .input { height: 30px; }
+.tld-chips { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.tld-chip { display: inline-flex; align-items: center; gap: 6px; height: 28px; padding: 0 10px; border: 1px solid var(--line); border-radius: 999px; background: var(--surface); color: var(--ink-soft); font-size: 12.5px; font-weight: 500; cursor: pointer; }
+.tld-chip > span { color: var(--faint); font-variant-numeric: tabular-nums; font-weight: 400; }
+.tld-chip:hover { background: var(--surface-2); }
+.tld-chip[aria-pressed="true"] { border-color: var(--ink); background: var(--ink); color: var(--surface); }
+.tld-chip[aria-pressed="true"] > span { color: inherit; opacity: .7; }

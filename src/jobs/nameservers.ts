@@ -102,10 +102,12 @@ export type Records = { spf: boolean; dkim: boolean; dmarc: boolean; mx: boolean
 /**
  * Nameservers, DNS records and registration date for every domain still in
  * use, oldest check first.
- * - Public DNS answers for healthy domains at any registrar. When it can't
- *   (SERVFAIL: the registry points at nameservers that don't serve the zone),
- *   the registry's own record (RDAP) says where it points, and the domain is
- *   flagged as not answering. The registrar's API is the last resort.
+ * - Public DNS answers for healthy domains at any registrar. When it can't, or
+ *   has nothing (SERVFAIL, or a domain with no zone yet), the registry's own
+ *   record (RDAP) says where it points and the domain is flagged as not
+ *   answering. The registrar's API is the last resort.
+ * - Asked-for lookups (checked date cleared) all run now. Domains with no
+ *   nameservers are looked at again before the rest, as they often appear later.
  * - Answering domains get their SPF, DKIM, DMARC and MX records checked.
  * - Domains whose registrar gave no purchase date get one from RDAP (domain age).
  */
@@ -119,8 +121,10 @@ export async function checkNameservers(
       coalesce((select array_agg(distinct i.provider_type) from inboxes i where i.domain_id = d.id and i.provider_type is not null), '{}') as esps
     from domains d left join vendors v on v.id = d.registrar_id
     where d.status not in ('burned', 'resting')
-    order by d.nameservers_checked_at nulls first, d.name
-    limit ${batch}`;
+    order by case when d.nameservers_checked_at is null then 0
+        when cardinality(d.nameservers) = 0 and d.nameservers_checked_at < now() - interval '6 hours' then 1 else 2 end,
+      d.nameservers_checked_at, d.name
+    limit greatest(${batch}::int, least(1000, (select count(*)::int from domains x where x.nameservers_checked_at is null and x.status not in ('burned', 'resting'))))`;
   // Older callers pass the .env Porkbun on its own.
   const accounts: RegistrarScope = scope && "getNs" in scope ? { porkbun: scope } : (scope ?? {});
   let checked = 0, notAnswering = 0, empty = 0, failed = 0, dnsMissing = 0;
@@ -131,16 +135,25 @@ export async function checkNameservers(
       let ns: string[] | null = null;
       let answering: boolean | null = null;
       let reg: Registry | null = null;
+      let fromDns: string[] | null = null;
       try {
-        ns = await lookup(name);
-        answering = ns.length > 0;
-      } catch {
+        fromDns = await lookup(name);
+      } catch { /* the registry and registrar may still know */ }
+      if (fromDns?.length) {
+        ns = fromDns;
+        answering = true;
+      } else {
+        if (fromDns) answering = false;
         reg = await registry(name).catch(() => null);
-        ns = reg?.ns ?? null;
+        ns = reg?.ns ?? fromDns;
         if (ns?.length) answering = false;
         else {
           const { account } = registrarFor(accounts, d.registrar as string | null, d.accountid as string | null);
-          if (account && !(account.provider === "porkbun" && d.apiaccess === false)) ns = await account.client.getNs(name).catch(() => null);
+          if (account && !(account.provider === "porkbun" && d.apiaccess === false)) {
+            const fromRegistrar = await account.client.getNs(name).catch(() => null);
+            ns = fromRegistrar ?? fromDns;
+            if (fromRegistrar?.length) answering = false;
+          }
         }
       }
       if (d.needsage && !reg) reg = await registry(name).catch(() => null);

@@ -1081,6 +1081,20 @@ export async function validateDns(domainIds: string[] = []): Promise<ActionResul
   }
 }
 
+/** Looks up the latest nameservers now for the given domains. Only reads from DNS, the registry and the registrar. */
+export async function recheckNameservers(domainIds: string[]): Promise<ActionResult<{ queued: number }>> {
+  try {
+    await requireActor();
+    const list = z.array(z.uuid()).min(1).max(1000).parse(domainIds);
+    const due = await sql`update domains set nameservers_checked_at = null where id in ${sql(list)} and status not in ('burned', 'resting') returning id`;
+    kickJob("nameserver-check");
+    refresh();
+    return { ok: true, data: { queued: due.length } };
+  } catch (e) {
+    return fail(e);
+  }
+}
+
 async function smartleadAppOrError(what: string) {
   const { jobContext } = await import("@/jobs");
   const app = (await jobContext(jobSql)).smartleadApp;

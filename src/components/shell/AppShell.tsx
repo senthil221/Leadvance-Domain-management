@@ -84,7 +84,8 @@ export function AppShell({ nav, user, children }: { nav: ReactNode; user: ReactN
             <Search size={16} strokeWidth={1.5} />
           </button>
         </div>
-        <ViewTransition key={pathname} name="workspace-content">
+        {/* Only moving between pages fades. While a fade runs the page takes no clicks, so a filter or a refresh must not start one. */}
+        <ViewTransition key={pathname} name="workspace-content" enter="auto" exit="auto" default="none">
           <div className="flex min-w-0 flex-1 flex-col">{children}</div>
         </ViewTransition>
       </main>
