@@ -39,6 +39,7 @@ async function NavWithCounts() {
         "/fix": { value: c.fixToday, warning: true },
         "/inventory": { value: c.byStatus.active ?? 0 },
         "/replacements": { value: c.runningBatches, warning: true },
+        "/expiring": { value: c.expiringUrgent, warning: true },
         "/inboxes": { value: c.attention, warning: true },
       }}
     />

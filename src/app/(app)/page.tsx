@@ -44,6 +44,8 @@ function actions(i: Issues, weeksLeft: number | null): { tone: Tone; n: number; 
   const out: { tone: Tone; n: number; text: string; href: string }[] = [
     { tone: "danger", n: i.dead, text: "paid-for domains are dead: nothing on them can send", href: "#dead" },
     { tone: "danger", n: i.noZone, text: "domains with no DNS zone: nothing on them resolves", href: "/inventory" },
+    { tone: "danger", n: i.expiredInUse, text: "domains in use are past their expiry date", href: "/expiring" },
+    { tone: "warning", n: i.expiringNoRenew, text: "domains in use expire within 14 days and won't renew on their own", href: "/expiring" },
     { tone: "danger", n: i.flagged, text: "sending domains breaking a health rule", href: "/inboxes?view=attention" },
     { tone: "danger", n: i.disconnected, text: "inboxes disconnected in Smartlead", href: "/inboxes?view=disconnected" },
     { tone: "warning", n: i.lowRep, text: "inboxes with warmup reputation under 90", href: "/inboxes?view=attention" },
@@ -54,7 +56,7 @@ function actions(i: Issues, weeksLeft: number | null): { tone: Tone; n: number; 
     { tone: "warning", n: i.nsFailed, text: "nameserver changes failed this week", href: "/inventory" },
     { tone: "warning", n: i.settingsFailed, text: "inbox setting updates failed", href: "/inboxes" },
     { tone: "success", n: i.readyForCampaigns, text: "new domains warmed up and ready for campaigns", href: "/replacements?view=ready" },
-    { tone: "info", n: i.renew14, text: "domains renew in the next 14 days", href: "/inventory" },
+    { tone: "info", n: i.expiring30, text: "domains in use expire in the next 30 days", href: "/expiring" },
   ];
   if (i.freeLow) out.push({ tone: "warning", n: i.free, text: `free domains left${weeksLeft != null ? `, about ${Math.max(0, Math.floor(weeksLeft))} weeks at the current pace` : ""}`, href: "/inventory?view=free" });
   return out.filter((a) => a.n > 0);

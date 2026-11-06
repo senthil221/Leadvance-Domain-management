@@ -39,6 +39,7 @@ export const REPLACEMENT_REASONS = {
   low_reputation: "Low warmup reputation",
   blacklisted: "Blacklisted",
   client_request: "Client request",
+  expiring: "Expiring soon",
   other: "Other",
 } as const;
 export type ReplacementReason = keyof typeof REPLACEMENT_REASONS;

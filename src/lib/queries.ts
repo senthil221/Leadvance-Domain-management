@@ -44,7 +44,7 @@ export async function listVendors() {
   return sql<VendorRow[]>`select id, name, kind, api_supported from vendors order by kind, name`;
 }
 
-export type NavCounts = { byStatus: Record<DomainStatus, number>; openAlerts: number; runningBatches: number; connectionProblems: number; attention: number; fixToday: number };
+export type NavCounts = { byStatus: Record<DomainStatus, number>; openAlerts: number; runningBatches: number; connectionProblems: number; expiringUrgent: number; attention: number; fixToday: number };
 
 export type FixQueueData = { items: FixItem[]; snoozed: (FixItem & { until: string })[]; slSyncedAt: Date | null };
 
@@ -61,8 +61,10 @@ export async function getFixQueue(): Promise<FixQueueData> {
 export async function getNavCounts(): Promise<NavCounts> {
   const [statusRows, [extra], attention, fix] = await Promise.all([
     sql<{ status: DomainStatus; n: number }[]>`select status, count(*)::int as n from domains group by status`,
-    sql<{ openAlerts: number; runningBatches: number; connectionProblems: number }[]>`
+    sql<{ openAlerts: number; runningBatches: number; connectionProblems: number; expiringUrgent: number }[]>`
       select
+        (select count(*)::int from domains d where d.status in ('active', 'warming', 'provisioning') and d.expires_at <= current_date + 14 and d.auto_renew is not true
+          and not exists (select 1 from replacement_items ri join replacement_batches rb on rb.id = ri.batch_id where ri.old_domain_id = d.id and rb.status <> 'cancelled')) as expiring_urgent,
         (select count(*)::int from alerts where status = 'open') as open_alerts,
         (select count(*)::int from replacement_batches where status = 'running') as running_batches,
         (select count(*)::int from order_connections where problem) as connection_problems`,
@@ -207,6 +209,9 @@ export type DomainRow = {
   /** When the domain was bought, or registered if we only know that: what its age counts from. */
   bornAt: Date | null;
   expiresAt: Date | null;
+  /** Days until it expires, by the database's calendar; below zero once it has. */
+  daysToExpiry: number | null;
+  autoRenew: boolean | null;
   openAlerts: number;
   spark: number[];
   sl7Sent: number | null;
@@ -259,6 +264,7 @@ export async function listDomains() {
       h.bounce_rate::float8 as bounce_rate, h.human_reply_rate::float8 as human_reply_rate,
       h.warmup_reputation::float8 as warmup_reputation,
       d.active_since, d.purchased_at, coalesce(d.purchased_at, d.registered_at)::timestamptz as born_at, d.expires_at,
+      (d.expires_at - current_date)::int as days_to_expiry, d.auto_renew,
       (select count(*)::int from alerts a where a.domain_id = d.id and a.status = 'open') as open_alerts,
       s7.sent as sl7_sent, s7.replies as sl7_replies, s7.bounces as sl7_bounces,
       array(
@@ -1329,7 +1335,7 @@ export async function listIcemailAccounts() {
 
 export type Issues = {
   flagged: number; dead: number; noZone: number; disconnected: number; lowRep: number; htUnpaid: number; htCancelledLive: number;
-  billedRetired: number; renew14: number; readyForCampaigns: number; nsFailed: number; settingsFailed: number; stuckSetup: number; freeLow: boolean; free: number;
+  billedRetired: number; expiredInUse: number; expiringNoRenew: number; expiring30: number; readyForCampaigns: number; nsFailed: number; settingsFailed: number; stuckSetup: number; freeLow: boolean; free: number;
 };
 export type ClientInsight = {
   id: string; name: string; hue: number; active: number; warming: number; inboxes: number; capacity: number;
@@ -1429,7 +1435,10 @@ export async function getInsights() {
           and not exists (select 1 from hypertide_orders o2 where o2.domain_id = d.id and o2.gone_at is null and coalesce(o2.status, '') not in ('NPC', 'Cancelled'))) as ht_cancelled_live,
         (select count(distinct o.domain_id)::int from hypertide_orders o join domains d on d.id = o.domain_id
           where o.gone_at is null and o.status = 'Done' and d.status in ('burned', 'resting')) as billed_retired,
-        (select count(*)::int from domains d join domain_standing st on st.domain_id = d.id where d.expires_at between current_date and current_date + 14 and (st.current or st.order_live)) as renew14,
+        (select count(*)::int from domains d where d.status in ('active', 'warming', 'provisioning') and d.expires_at < current_date) as expired_in_use,
+        (select count(*)::int from domains d where d.status in ('active', 'warming', 'provisioning') and d.expires_at between current_date and current_date + 14 and d.auto_renew is not true
+          and not exists (select 1 from replacement_items ri join replacement_batches rb on rb.id = ri.batch_id where ri.old_domain_id = d.id and rb.status <> 'cancelled')) as expiring_no_renew,
+        (select count(*)::int from domains d where d.status in ('active', 'warming', 'provisioning') and d.expires_at between current_date and current_date + 30) as expiring30,
         (select count(*)::int from replacement_readiness where ready) as ready_for_campaigns,
         (select count(*)::int from nameserver_requests where status = 'failed' and created_at > now() - interval '7 days') as ns_failed,
         (select count(distinct inbox_id)::int from inbox_setting_changes where status = 'failed' and created_at > now() - interval '2 days') as settings_failed,
