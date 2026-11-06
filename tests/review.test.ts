@@ -208,6 +208,6 @@ describe("Smartlead status now", () => {
     expect(slText(c(3, 2, 0))).toBe("2 of 5 disconnected");
     expect(slText(c(0, 4, 1))).toBe("Disconnected · 4");
     expect(slText(c(0, 0, 6))).toBe("Deleted in Smartlead");
-    expect([c(5, 0, 2), c(3, 2, 0), c(0, 4, 1), c(0, 0, 6), c(0, 0, 0)].map(slShort)).toEqual(["Live · 5", "2 of 5 off", "Disconnected · 4", "Deleted", "—"]);
+    expect([c(5, 0, 2), c(3, 2, 0), c(0, 4, 1), c(0, 0, 6), c(0, 0, 0)].map(slShort)).toEqual(["Live · 5", "2 of 5 off", "Off · 4", "Deleted", "—"]);
   });
 });

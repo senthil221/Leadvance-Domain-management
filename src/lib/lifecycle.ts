@@ -11,7 +11,7 @@ export type Life = "active" | "setup" | "free" | "cooling" | "replaced" | "recov
 export const LIFE: Record<Life, { label: string; tone: Tone }> = {
   active: { label: "Active", tone: "success" },
   setup: { label: "Setting up", tone: "info" },
-  free: { label: "Free", tone: "faint" },
+  free: { label: "In storage", tone: "faint" },
   cooling: { label: "Cooling down", tone: "info" },
   replaced: { label: "Replaced", tone: "warning" },
   recovery: { label: "Recovery", tone: "violet" },
@@ -60,15 +60,15 @@ export function nsOf(d: Pick<DomainRow, "nameservers" | "nsRequestStatus" | "nsR
     case "pending": case "running":
       return { host: target ? dnsHost(target) : host, status: "Switching", tone: "info", title: `Switching to ${target?.join(", ") ?? "the new pair"}. ${now}` };
     case "manual":
-      return { host: dnsHost(target ?? []) ?? host, status: "Set at registrar", tone: "warning", title: `${d.nsRequestMessage ?? "Set these by hand"}: ${target?.join(", ")}. ${now}`, copy: target };
+      return { host: dnsHost(target ?? []) ?? host, status: "Manual", tone: "warning", title: `${d.nsRequestMessage ?? "Set these by hand"}: ${target?.join(", ")}. ${now}`, copy: target };
     case "failed":
-      return { host, status: "Switch failed", tone: "danger", title: `${d.nsRequestMessage ?? "The change failed"}. ${now}` };
+      return { host, status: "Failed", tone: "danger", title: `${d.nsRequestMessage ?? "The change failed"}. ${now}` };
     case "dry_run":
       return { host, status: "Dry run", tone: "faint", title: `Would switch to ${target?.join(", ")}. ${now}`, copy: target };
   }
   if (!ns.length) return { host: null, status: "Not checked", tone: "faint" };
   if (d.nameserversAnswering === false) {
-    return { host, status: "No DNS zone", tone: "danger", title: `The domain points to ${ns.join(", ")}, but ${host ?? "that host"} has no DNS zone for it, so the domain doesn't resolve: no website, no email. Point it to its Hypertide pair (Set up) or create the zone at ${host ?? "that host"}.` };
+    return { host, status: "No zone", tone: "danger", title: `The domain points to ${ns.join(", ")}, but ${host ?? "that host"} has no DNS zone for it, so the domain doesn't resolve: no website, no email. Point it to its Hypertide pair (Set up) or create the zone at ${host ?? "that host"}.` };
   }
   if (host === "Porkbun") return { host, status: "Parked", tone: "faint", title: `Porkbun's default nameservers: not set up for sending yet. ${now}` };
   return { host, status: "Live", tone: "success", title: now };

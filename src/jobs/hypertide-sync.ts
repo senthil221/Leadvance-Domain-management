@@ -77,7 +77,8 @@ export async function syncHypertideOrders(sql: Sql, ctx: StepContext & { hyperti
         and exists (select 1 from hypertide_orders o where o.domain_id = d.id and o.gone_at is null and coalesce(o.status, '') not in ('NPC', 'Cancelled'))`;
 
     const [{ n: lastUsed }] = await tx`select refresh_last_used() as n`;
-    return { added: added.length, gone: gone.length, provisioning: provisioning.length, lastUsedChanged: Number(lastUsed) };
+    const [auto] = await tx`select * from replace_dropped_domains()`;
+    return { added: added.length, gone: gone.length, provisioning: provisioning.length, lastUsedChanged: Number(lastUsed), autoReplaced: auto.moved as number, autoRestored: auto.restored as number };
   });
 
   // Hand-ordered replacements: the inbox step finishes when the order is Done.

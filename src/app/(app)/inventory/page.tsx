@@ -18,7 +18,7 @@ export const metadata: Metadata = { title: "Inventory" };
 export default function InventoryPage() {
   return (
     <>
-      <PageHead title="Domains" sub="Every domain you own: free, setting up, active or replaced, where it's registered and what renews next">
+      <PageHead title="Domains" sub="Every domain you own: in storage, setting up, active or replaced, where it's registered and what renews next">
         <Suspense fallback={<button type="button" className="btn btn-primary" disabled><Plus size={14} /> Add domains</button>}>
           <AddButton />
         </Suspense>
@@ -47,7 +47,8 @@ async function InventoryContent() {
   const activeCapacity = domains.filter((d) => lifeOf(d) === "active").reduce((a, d) => a + d.capacity, 0);
   const activeInboxes = domains.filter((d) => lifeOf(d) === "active").reduce((a, d) => a + d.inboxCount, 0);
   const weekly = ht.replacedLast28 / 4;
-  const weeksLeft = weekly > 0 ? life.free / weekly : null;
+  const free = domains.filter((d) => d.isFree).length;
+  const weeksLeft = weekly > 0 ? free / weekly : null;
   const htConnected = Boolean(process.env.HYPERTIDE_API_KEY);
 
   return (
@@ -63,12 +64,11 @@ async function InventoryContent() {
           <span className="stat-value">{int(life.setup)}</span>
           <span className="stat-foot">not in campaigns yet</span>
         </Link>
-        <Link href="/inventory?view=free" className="stat">
+        <Link href="/free-domains" className="stat">
           <span className="stat-label"><Dot tone="faint" />Free</span>
-          <span className="stat-value">{int(life.free)}</span>
+          <span className="stat-value">{int(free)}</span>
           <span className="stat-foot">
             {weeksLeft == null ? "no replacements lately" : `≈ ${Math.floor(weeksLeft)} weeks' worth`}
-            {life.cooling ? ` · ${int(life.cooling)} cooling` : ""}
           </span>
         </Link>
         <Link href="/inventory?view=replaced" className="stat">
@@ -193,7 +193,7 @@ function BreakdownTable({ tld, rows, cooling }: { tld: boolean; rows: Breakdown[
               <th className="is-num">Owned</th>
               <th className="is-num">Active</th>
               <th className="is-num" title="Being set up or warming up">Setup</th>
-              <th className="is-num" title="In storage and rested: ready to use">Free</th>
+              <th className="is-num" title="Not in use now. May have been used before: Free domains lists the untouched ones">In storage</th>
               <th className="is-num" title={`In storage but used in the last ${cooling} days (Hypertide order, sends or replacement): not offered as a replacement yet`}>Cooling</th>
               <th className="is-num" title="Draining, burned or resting">Replaced</th>
               <th className="is-num" title="Past their expiry date. Not counted anywhere else in this table">Expired</th>

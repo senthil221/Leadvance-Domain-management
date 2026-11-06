@@ -130,7 +130,7 @@ async function OverviewContent() {
           delta={<Delta now={bounceRate} before={bounceRateP} points invert />} foot={`${int(sum(t7, "bounces"))} bounces`}>
           <Sparkline points={spark((d) => rate(d.bounces, d.sent), pctOf(1))} />
         </Kpi>
-        <Kpi href="/inventory?view=free" label="Free domains" icon={Globe} accent={ins.issues.freeLow ? "warning" : "faint"} alert={ins.issues.freeLow} value={int(o.totals.storage)}
+        <Kpi href="/free-domains" label="Free domains" icon={Globe} accent={ins.issues.freeLow ? "warning" : "faint"} alert={ins.issues.freeLow} value={int(o.totals.free)}
           foot={o.weeksLeft == null ? "no replacements in 4 weeks" : `at ${o.weeklyBurn.toFixed(1)} a week`}>
           <span className="kpi-runway">{o.weeksLeft == null ? "Plenty of runway" : `About ${Math.floor(o.weeksLeft)} weeks left`}</span>
         </Kpi>

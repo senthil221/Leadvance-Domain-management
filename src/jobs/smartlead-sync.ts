@@ -138,7 +138,8 @@ export async function syncAccounts(sql: Sql, sl: Smartlead) {
     // default), or a list of tags mapped to clients (Settings → Client assignment).
     const tagged = (await clientSource(tx)) === "mapped" ? await clientsFromMappedTags(tx, true) : await clientsFromTags(tx);
     const senders = await clientsFromSenders(tx);
-    return { accounts: accounts.length, newDomains: newDomains.length, promoted: promoted.length, upserted: upserted.length, removed: removed.length, ...tagged, ...senders };
+    const [auto] = await tx`select * from replace_dropped_domains()`;
+    return { accounts: accounts.length, newDomains: newDomains.length, promoted: promoted.length, upserted: upserted.length, removed: removed.length, autoReplaced: auto.moved as number, autoRestored: auto.restored as number, ...tagged, ...senders };
   });
 }
 

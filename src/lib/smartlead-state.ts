@@ -31,10 +31,11 @@ export function slText(c: SlCounts): string {
   return SL_META[s].label;
 }
 
-/** The same in a narrow column headed Smartlead: "Live · 5", "2 of 5 off", "Deleted". Never there says nothing. */
+/** The same in a narrow column headed Smartlead: "Live · 5", "2 of 5 off", "Off · 5", "Deleted". Never there says nothing. */
 export function slShort(c: SlCounts): string {
   const s = slState(c);
   if (s === "partial") return `${c.slDisconnected} of ${c.slConnected + c.slDisconnected} off`;
+  if (s === "disconnected") return `Off · ${c.slDisconnected}`;
   if (s === "deleted") return "Deleted";
   if (s === "none") return "—";
   return slText(c);

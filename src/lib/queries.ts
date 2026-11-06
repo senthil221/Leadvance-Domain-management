@@ -107,12 +107,12 @@ export type ClientFleetRow = { clientId: string; name: string; hue: number; coun
 
 export async function getOverview() {
   const [[totals], attention, activity, fleetRows, [rates]] = await Promise.all([
-    sql<{ active: number; storage: number; warming: number; retiredLast28: number; storageLow: number; flagged: number }[]>`
+    sql<{ active: number; free: number; warming: number; retiredLast28: number; storageLow: number; flagged: number }[]>`
       select
         (select count(distinct a.domain_id)::int from alerts a join domain_standing st on st.domain_id = a.domain_id
           where a.status = 'open' and st.current) as flagged,
         count(*) filter (where status = 'active')::int as active,
-        count(*) filter (where status = 'in_storage' and (expires_at is null or expires_at >= current_date))::int as storage,
+        count(*) filter (where domain_is_free(domains))::int as free,
         count(*) filter (where status in ('provisioning', 'warming'))::int as warming,
         (select count(*)::int from domain_status_history
           where to_status = 'draining' and at > now() - interval '28 days') as retired_last28,
@@ -168,7 +168,7 @@ export async function getOverview() {
   return {
     totals,
     weeklyBurn,
-    weeksLeft: weeklyBurn > 0 ? totals.storage / weeklyBurn : null,
+    weeksLeft: weeklyBurn > 0 ? totals.free / weeklyBurn : null,
     humanRate,
     humanRateDelta: humanRate != null && humanRatePrev != null ? humanRate - humanRatePrev : null,
     sent7: rates.sent7,
@@ -233,6 +233,10 @@ export type DomainRow = {
   nameserversAnswering: boolean | null;
   /** Last day it was in use: a Hypertide order, a send, or being replaced. */
   lastUsedOn: Date | null;
+  /** Bought and never touched: no vendor, inbox or order, on its registrar's default nameservers or none. */
+  isFree: boolean;
+  /** In storage only: any sign the domain has been used before. */
+  everUsed: boolean | null;
   /** A free domain used too recently to pick again, until this day. */
   coolingUntil: Date | null;
   /** Past its renewal date, and what the registrar calls it (redemption…). */
@@ -265,6 +269,7 @@ export async function listDomains() {
       ) as spark,
       d.tags, grace_days_left(d.status, d.draining_since) as grace_days_left, d.nameservers, d.draining_since, d.burned_at, d.cost_cents, d.registrar_api_access as api_access, d.nameservers_checked_at, d.nameservers_answering,
       d.last_used_on, case when d.status = 'in_storage' and d.last_used_on + reuse_after_days() > current_date then d.last_used_on + reuse_after_days() end as cooling_until,
+      domain_is_free(d) as is_free, case when d.status = 'in_storage' then domain_ever_used(d) end as ever_used,
       coalesce(d.expires_at < current_date, false) as expired, d.registrar_status,
       ho.status as ht_order_status, ho.payment_status as ht_payment,
       nr.status as ns_request_status, nr.message as ns_request_message, nr.target as ns_request_target,
@@ -493,7 +498,7 @@ export async function listStorageCandidates(limit = 200) {
     select d.id, d.name, d.tld, v.name as registrar, d.purchased_at, d.last_used_on
     from domains d left join vendors v on v.id = d.registrar_id
     where d.status = 'in_storage' and (d.expires_at is null or d.expires_at >= current_date) and (d.last_used_on is null or d.last_used_on + reuse_after_days() <= current_date)
-    order by (d.last_used_on is not null), (d.registrar_id is null), d.purchased_at nulls last, d.created_at, d.name
+    order by domain_is_free(d) desc, (d.last_used_on is not null), (d.registrar_id is null), d.purchased_at nulls last, d.created_at, d.name
     limit ${limit}`;
 }
 
@@ -1430,8 +1435,8 @@ export async function getInsights() {
         (select count(distinct inbox_id)::int from inbox_setting_changes where status = 'failed' and created_at > now() - interval '2 days') as settings_failed,
         (select count(*)::int from domains d where d.status = 'provisioning'
           and coalesce((select max(h.at) from domain_status_history h where h.domain_id = d.id), d.created_at) < now() - interval '10 days') as stuck_setup,
-        (select count(*)::int from domains where status = 'in_storage' and (expires_at is null or expires_at >= current_date) and (last_used_on is null or last_used_on + reuse_after_days() <= current_date)) as free,
-        (select count(*) from domains where status = 'in_storage' and (expires_at is null or expires_at >= current_date) and (last_used_on is null or last_used_on + reuse_after_days() <= current_date)) <= coalesce((select (value #>> '{}')::int from settings where key = 'storage_low_threshold'), 20) as free_low`,
+        (select count(*)::int from domains d where domain_is_free(d)) as free,
+        (select count(*) from domains d where domain_is_free(d)) <= coalesce((select (value #>> '{}')::int from settings where key = 'storage_low_threshold'), 20) as free_low`,
     sql<{ capacity: number; sentToday: number; inboxes: number }[]>`
       select coalesce(sum(i.daily_limit), 0)::int as capacity, coalesce(sum(i.daily_sent), 0)::int as sent_today, count(*)::int as inboxes
       from inboxes i join domains d on d.id = i.domain_id join domain_standing st on st.domain_id = d.id

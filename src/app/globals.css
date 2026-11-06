@@ -1721,6 +1721,9 @@ a.kpi:hover { border-color: var(--accent-line, var(--line-strong)); }
 .data-table.is-fixed .status-dot, .data-table.is-fixed .ns-cell, .data-table.is-fixed .sl-badge, .data-table.is-fixed .client-cell { height: 20px; max-width: 100%; min-width: 0; vertical-align: top; font-size: 13px; }
 .data-table.is-fixed .ns-host, .data-table.is-fixed .sl-badge > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .data-table.is-fixed .ns-status { flex: none; font-size: 12px; }
+.data-table.is-fixed .ns-cell .row-actions { display: none; flex: none; }
+.data-table.is-fixed tr:hover .ns-cell .row-actions, .data-table.is-fixed .ns-cell .row-actions:focus-visible { display: inline-flex; }
+@media (hover: none) { .data-table.is-fixed .ns-cell .row-actions { display: inline-flex; } }
 .inv-line { display: inline-flex; align-items: center; gap: 6px; height: 20px; max-width: 100%; min-width: 0; vertical-align: top; }
 .inv-line > * { flex: none; }
 .inv-line > .inv-cut, .inv-line > a { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
