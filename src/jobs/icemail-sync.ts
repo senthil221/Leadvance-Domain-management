@@ -117,11 +117,13 @@ export async function syncIcemailAccount(sql: Sql, account: IcemailAccount) {
       where d.status = 'in_storage'
         and exists (select 1 from icemail_mailboxes m where m.domain_id = d.id and m.gone_at is null)`;
 
+    const [auto] = await tx`select * from replace_dropped_domains()`;
+
     const linked = mailboxes.length
       ? (await tx`select count(*)::int as n from icemail_mailboxes where account_id = ${account.id} and gone_at is null and inbox_id is not null`)[0].n
       : 0;
 
-    return { added: added.length, goneDomains: goneDomains.length, goneMailboxes: goneMailboxes.length, provisioning: provisioning.length, linked: Number(linked) };
+    return { added: added.length, goneDomains: goneDomains.length, goneMailboxes: goneMailboxes.length, provisioning: provisioning.length, linked: Number(linked), autoReplaced: auto.moved as number, autoRestored: auto.restored as number };
   });
 
   await sql`
@@ -139,12 +141,12 @@ export async function syncAllIcemail(sql: Sql, accounts: IcemailAccount[], broke
     await sql`update icemail_accounts set last_synced_at = now(), last_ok = false, last_error = ${b.error} where id = ${b.id}`;
   }
   if (!accounts.length && !broken.length) return { skipped: "No Icemail workspace connected (Settings → Connections)" };
-  let domains = 0, mailboxes = 0, linked = 0, failed = broken.length;
+  let domains = 0, mailboxes = 0, linked = 0, autoReplaced = 0, autoRestored = 0, failed = broken.length;
   const errors: string[] = broken.map((b) => b.error);
   for (const a of accounts) {
     try {
       const r = await syncIcemailAccount(sql, a);
-      domains += r.domains; mailboxes += r.mailboxes; linked += r.linked;
+      domains += r.domains; mailboxes += r.mailboxes; linked += r.linked; autoReplaced += r.autoReplaced; autoRestored += r.autoRestored;
     } catch (e) {
       failed++;
       const msg = e instanceof Error ? e.message : String(e);
@@ -153,5 +155,5 @@ export async function syncAllIcemail(sql: Sql, accounts: IcemailAccount[], broke
     }
   }
   if (failed && failed === accounts.length + broken.length) throw new Error(errors.join("; "));
-  return { workspaces: accounts.length + broken.length, domains, mailboxes, linked, ...(failed ? { failed, errors: errors.join("; ").slice(0, 500) } : {}) };
+  return { workspaces: accounts.length + broken.length, domains, mailboxes, linked, autoReplaced, autoRestored, ...(failed ? { failed, errors: errors.join("; ").slice(0, 500) } : {}) };
 }

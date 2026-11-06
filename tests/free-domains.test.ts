@@ -10,7 +10,7 @@ beforeAll(async () => {
 });
 afterAll(async () => db.close());
 beforeEach(async () => {
-  await db.exec("truncate domains cascade; truncate hypertide_orders cascade;");
+  await db.exec("truncate domains cascade; truncate hypertide_orders cascade; truncate icemail_accounts cascade;");
 });
 
 const add = async (name: string, opts: { status?: string; ns?: string[]; expires?: string } = {}) => {
@@ -24,6 +24,13 @@ const inbox = (id: string, name: string, status: string, limit = 30) =>
 const order = (orderId: string, name: string, status: string, domainId: string | null, gone = false, replaced: string[] = []) =>
   db.query("insert into hypertide_orders (id, domain_name, domain_id, status, gone_at, replaced_domains) values ($1, $2, $3, $4, $5, $6)",
     [orderId, name, domainId, status, gone ? new Date() : null, replaced]);
+const mailbox = async (id: string, name: string, opts: { gone?: boolean; status?: string } = {}) => {
+  const account = (await db.query<{ id: string }>(
+    "insert into icemail_accounts (label, credentials, webhook_token, created_by) values ($1, 'x', $2, 'test') returning id",
+    [`w${name}${opts.status ?? ""}${opts.gone ?? ""}`, `${name}${opts.status ?? ""}${opts.gone ?? ""}`.padEnd(40, "0")])).rows[0].id;
+  await db.query("insert into icemail_mailboxes (id, account_id, domain_id, email, status, gone_at) values ($1, $2, $3, $4, $5, $6)",
+    [`m${name}${opts.status ?? ""}${opts.gone ?? ""}`, account, id, `a${opts.status ?? ""}${opts.gone ?? ""}@${name}`.toLowerCase(), opts.status ?? "ACTIVE", opts.gone ? new Date() : null]);
+};
 const statusOf = async (id: string) => (await db.query<{ status: string }>("select status from domains where id = $1", [id])).rows[0].status;
 const run = async () => (await db.query<{ moved: number; restored: number }>("select * from replace_dropped_domains()")).rows[0];
 const free = async () =>
@@ -99,6 +106,39 @@ describe("replace_dropped_domains", () => {
 
     expect((await run()).moved).toBe(0);
     for (const id of [stillSending, disconnected, paidFor, noOrder]) expect(await statusOf(id)).toBe("active");
+  });
+
+  it("treats ended Icemail mailboxes like a cancelled Hypertide order", async () => {
+    const gone = await add("gone.com", { status: "active" });
+    await inbox(gone, "gone.com", "removed");
+    await mailbox(gone, "gone.com", { gone: true });
+    const cancelled = await add("cancelled.com", { status: "warming" });
+    await inbox(cancelled, "cancelled.com", "removed");
+    await mailbox(cancelled, "cancelled.com", { status: "CANCELLED" });
+
+    expect((await run()).moved).toBe(2);
+    expect(await statusOf(gone)).toBe("burned");
+    expect(await statusOf(cancelled)).toBe("burned");
+  });
+
+  it("keeps a domain while any Icemail mailbox or inbox is still live", async () => {
+    const live = await add("live.com", { status: "active" });
+    await inbox(live, "live.com", "removed");
+    await mailbox(live, "live.com");
+    const partly = await add("partly.com", { status: "active" });
+    await inbox(partly, "partly.com", "removed");
+    await mailbox(partly, "partly.com", { gone: true });
+    await mailbox(partly, "partly.com");
+    const sending = await add("sending.com", { status: "active" });
+    await inbox(sending, "sending.com", "connected");
+    await mailbox(sending, "sending.com", { gone: true });
+    const both = await add("both.com", { status: "active" });
+    await inbox(both, "both.com", "removed");
+    await order("o1", "both.com", "NPC", both);
+    await mailbox(both, "both.com");
+
+    expect((await run()).moved).toBe(0);
+    for (const id of [live, partly, sending, both]) expect(await statusOf(id)).toBe("active");
   });
 
   it("leaves a domain in a running replacement to the replacement", async () => {
