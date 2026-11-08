@@ -19,7 +19,7 @@ import type { ClientRow, DomainRow } from "@/lib/queries";
 import { LIFE, LIFE_ORDER, LIFE_TABS, htOf, lifeOf, nsOf, type Life } from "@/lib/lifecycle";
 import { SlBadge } from "@/components/domains/SlStatus";
 import { SL_META, SL_ORDER, slState, slText, type SlState } from "@/lib/smartlead-state";
-import { REPLACEABLE_STATUSES, isOneOf } from "@/lib/status";
+import { canReplace } from "@/lib/status";
 
 // Ownership view of every domain: where it is in its life (free, setting up,
 // active, replaced, retired), where it is registered, where its nameservers
@@ -60,7 +60,7 @@ const sortValue = (d: DomainRow, k: SortKey): string | number | null => {
 
 const usd = (n: number) => `$${n.toFixed(n % 1 ? 2 : 0)}`;
 
-const replaceable = (d: DomainRow) => isOneOf(REPLACEABLE_STATUSES, d.status);
+const replaceable = (d: DomainRow) => canReplace(d.status, d.beingReplaced);
 
 export function InventoryView({ domains, clients }: { domains: DomainRow[]; clients: ClientRow[] }) {
   const params = useSearchParams();
@@ -429,7 +429,7 @@ export function InventoryView({ domains, clients }: { domains: DomainRow[]; clie
           <ConfigureDomains domainIds={[...selected]} />
           <WarmingButtons rows={selectedRows} onDone={() => setSelected(new Set())} />
           <button type="button" className="btn btn-sm" onClick={() => setSetupOpen(true)}><Tag size={14} /> Set up</button>
-          <button type="button" className="btn btn-sm" disabled={!selectedRows.some(replaceable)} title="Swap the selected active or warming domains for free ones" onClick={() => setReplaceOpen(true)}><ArrowLeftRight size={14} /> Replace</button>
+          <button type="button" className="btn btn-sm" disabled={!selectedRows.some(replaceable)} title="Swap the selected active or warming domains for free ones. Domains already being replaced are left out" onClick={() => setReplaceOpen(true)}><ArrowLeftRight size={14} /> Replace</button>
               <button type="button" className="btn btn-sm" disabled={!selectedRows.some((d) => lifeOf(d) !== "replaced")} onClick={() => setMoveTo("replaced")}><Archive size={14} /> Mark as replaced</button>
               <button type="button" className="btn btn-sm" disabled={!selectedRows.some((d) => lifeOf(d) !== "recovery")} onClick={() => setMoveTo("recovery")}><LifeBuoy size={14} /> Move to recovery</button>
               <button type="button" className="btn btn-sm" onClick={() => setStatusOpen(true)}><CircleDot size={14} /> Status</button>

@@ -104,7 +104,8 @@ needs force.
   - to burned: sets `burned_at`;
   - to in_storage: clears `client_id`.
 - `start_replacement()` only accepts an old domain that is active or warming
-  (`REPLACEABLE_STATUSES`), and a new domain that is in_storage.
+  (`REPLACEABLE_STATUSES`) and not already being replaced
+  (`domain_being_replaced()`), and a new domain that is in_storage.
 
 ### Status groups
 
@@ -114,7 +115,7 @@ listed in §15.
 | Group | Statuses | Used by |
 |---|---|---|
 | `IN_USE_STATUSES` | provisioning, warming, active | Expiring tab (`isInUse`), Validate DNS with nothing ticked (`validateDns`), Overview expiry warnings |
-| `REPLACEABLE_STATUSES` | active, warming | Replace button (Domains, Expiring, domain sheet, Inboxes), `start_replacement` |
+| `REPLACEABLE_STATUSES` | active, warming | `canReplace`, which gates the Replace button on Domains, Expiring, the domain sheet and Inboxes, together with `domain_being_replaced()`. Mirrors `start_replacement` |
 | `RETIRED_STATUSES` | draining, burned, resting | `domain_standing` "retired", Mark as replaced skips these |
 | `FLEET_STATUSES` | active, warming, provisioning, draining | Overview fleet bar, Clients table |
 
@@ -504,9 +505,14 @@ what the app does.
    - `grace_days_left()` and `domain_standing` fall back to 18.
    - The setting is seeded, so this only matters if the row is deleted. One
      `drain_days()` function, like `reuse_after_days()`, would fix it.
-5. **Make the Replace button agree.** Domains and Inboxes offer Replace on a
-   domain already being replaced; Expiring and the domain sheet hide it. The
-   server refuses either way ("already being replaced"). Hide it everywhere.
+5. **Done: the Replace button agrees everywhere.** `canReplace` in `status.ts`
+   asks the same two things `start_replacement()` checks: is the domain active
+   or warming, and is it not already being replaced (`domain_being_replaced()`,
+   0040, which `start_replacement()` now calls too). Domains and Inboxes now
+   leave out domains whose replacement is running. Expiring and the domain sheet
+   used to hide Replace after any replacement that wasn't cancelled, even a
+   finished one; they now offer it again once that replacement has finished, as
+   the server already allowed.
 6. **Base a pair's attention on its current step only.** `ReplacementsView`
    flags attention when any step is manual or failed, but `StepActions` acts on
    the current step. The worker only sets the current step, so this doesn't

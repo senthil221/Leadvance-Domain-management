@@ -65,6 +65,13 @@ export const RETIRED_STATUSES = ["draining", "burned", "resting"] as const satis
 
 export const isOneOf = <T extends string>(list: readonly T[], s: string | null | undefined): s is T => s != null && (list as readonly string[]).includes(s);
 
+/**
+ * Whether Replace is offered for a domain: the same two checks
+ * start_replacement() makes. beingReplaced is domain_being_replaced() (0040):
+ * the old domain of a pair still running.
+ */
+export const canReplace = (status: string, beingReplaced: boolean) => isOneOf(REPLACEABLE_STATUSES, status) && !beingReplaced;
+
 export const REPLACEMENT_REASONS = {
   high_bounce: "High bounce rate",
   low_replies: "Low or no replies",

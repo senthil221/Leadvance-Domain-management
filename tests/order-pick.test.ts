@@ -3,11 +3,11 @@ import { PGLiteSocketServer } from "@electric-sql/pglite-socket";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { loadMigrations } from "../scripts/migrations";
 
-// Every page reads a domain's Hypertide order through domain_hypertide_order
-// (0039), the same pick domain_standing makes, so the Domains page, the domain
-// sheet and Inboxes can't disagree with the rest of the app about an order.
-// The page queries run for real, on the app's camel-case client, against
-// PGlite over a socket.
+// The page queries agree with the rest of the app: every page reads a domain's
+// Hypertide order through domain_hypertide_order (0039), the same pick
+// domain_standing makes, and every Replace button asks domain_being_replaced
+// (0040), the check start_replacement makes. The queries run for real, on the
+// app's camel-case client, against PGlite over a socket.
 
 const PORT = 54395;
 vi.mock("server-only", () => ({}));
@@ -41,7 +41,7 @@ afterAll(async () => {
 });
 
 beforeEach(async () => {
-  await sql`truncate hypertide_orders, icemail_mailboxes, icemail_domains, icemail_accounts, inboxes, domain_status_history, domains cascade`;
+  await sql`truncate replacement_items, replacement_batches, hypertide_orders, icemail_mailboxes, icemail_domains, icemail_accounts, inboxes, domain_status_history, domains cascade`;
 });
 
 /** An active domain with one connected inbox, at a provider. */
@@ -143,5 +143,27 @@ describe("the order state on Inboxes", () => {
     }
     expect((await inbox(ids.noProvider)).domainProvider).toBeNull();
     expect((await inbox(ids.icActive)).domainProvider).toBe("Icemail");
+  });
+});
+
+describe("whether Replace is offered", () => {
+  it("is off on every page only while the domain's replacement is running", async () => {
+    const old = await domain("oldone.com");
+    const [fresh] = await sql<{ id: string }[]>`insert into domains (name) values ('freshone.com') returning id`;
+    const flags = async () => ({
+      domains: (await row(old)).beingReplaced,
+      sheet: (await getDomainDetail(old))?.domain.beingReplaced,
+      inboxes: (await inbox(old)).domainBeingReplaced,
+    });
+    expect(await flags()).toEqual({ domains: false, sheet: false, inboxes: false });
+
+    const [b] = await sql<{ id: string }[]>`select start_replacement(array[${old}]::uuid[], array[${fresh.id}]::uuid[], 'other', null, 'test') as id`;
+    expect(await flags()).toEqual({ domains: true, sheet: true, inboxes: true });
+    // The domain coming in isn't being replaced itself.
+    expect((await row(fresh.id)).beingReplaced).toBe(false);
+
+    // Finished (say the old domain was put back to active afterwards): it can be replaced again.
+    await sql`update replacement_items set completed_at = now() where batch_id = ${b.id}`;
+    expect(await flags()).toEqual({ domains: false, sheet: false, inboxes: false });
   });
 });

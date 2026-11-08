@@ -229,6 +229,8 @@ export type DomainRow = {
   replacedById: string | null;
   replacedByName: string | null;
   replacedAt: Date | null;
+  /** The old domain of a replacement still running (domain_being_replaced): Replace isn't offered. */
+  beingReplaced: boolean;
   drainingSince: Date | null;
   burnedAt: Date | null;
   costCents: number | null;
@@ -280,6 +282,7 @@ export async function listDomains() {
       ho.status as ht_order_status, ho.payment_status as ht_payment,
       nr.status as ns_request_status, nr.message as ns_request_message, nr.target as ns_request_target,
       rp.new_domain_id as replaced_by_id, rp.name as replaced_by_name, rp.created_at as replaced_at,
+      domain_being_replaced(d.id) as being_replaced,
       nullif(im.mailboxes, 0) as icemail_mailboxes, im.monthly as icemail_monthly, im.next_bill as icemail_next_bill,
       case when ix.id is null then null
         when ix.blacklisted then 'Blacklisted'
@@ -420,7 +423,7 @@ export async function getDomainDetail(id: string): Promise<DomainDetail | null> 
       s7.sent as sl7_sent, s7.replies as sl7_replies, s7.bounces as sl7_bounces,
       d.tags, grace_days_left(d.status, d.draining_since) as grace_days_left, d.registrar_api_access as api_access, d.nameservers_answering, ho.status as ht_order_status, ho.payment_status as ht_payment,
       nr.status as ns_request_status, nr.message as ns_request_message, nr.target as ns_request_target,
-      null as replaced_by_id, null as replaced_by_name, null as replaced_at,
+      null as replaced_by_id, null as replaced_by_name, null as replaced_at, domain_being_replaced(d.id) as being_replaced,
       nullif(im.mailboxes, 0) as icemail_mailboxes, im.monthly as icemail_monthly, im.next_bill as icemail_next_bill,
       case when ix.id is null then null
         when ix.blacklisted then 'Blacklisted'
@@ -721,6 +724,8 @@ export type InboxListRow = InboxRow & {
   blDomain: number | null; blIp: number | null; blListings: { kind: string; list: string }[] | null; blCheckedAt: Date | null;
   /** The domain's order at its inbox provider; null when the provider's orders aren't synced. */
   domainOrder: OrderState | null; domainOrderStatus: string | null; domainProvider: string | null;
+  /** The domain is the old one in a replacement still running: Replace isn't offered. */
+  domainBeingReplaced: boolean;
   /** All the domain's inboxes in Smartlead (not deleted), and how many are disconnected, whatever a view shows. */
   domainInboxes: number; domainDisconnected: number;
   /** Active, in grace, or still paid for: everything else stays out of the default view. */
@@ -764,6 +769,7 @@ export async function listInboxes() {
     select i.id, i.email, i.sender_name, i.status, i.warmup_enabled, i.warmup_per_day, i.warmup_rampup, i.daily_limit,
       i.warmup_reputation::float8 as warmup_reputation, i.smartlead_account_id, i.last_synced_at,
       d.id as domain_id, d.name as domain, d.status as domain_status, c.name as client_name, c.hue as client_hue,
+      domain_being_replaced(d.id) as domain_being_replaced,
       d.tags as domain_tags, grace_days_left(d.status, d.draining_since) as domain_grace_days_left, d.tld as domain_tld,
       d.warmup_started_at as domain_warmup_started_at, d.warmup_days as domain_warmup_days, d.warmup_done_at as domain_warmup_done_at,
       (select count(*)::int from alerts a where a.domain_id = d.id and a.status = 'open') as domain_alerts,

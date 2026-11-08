@@ -6,7 +6,7 @@ import { htOf, isDefaultNs, lifeOf, type Life } from "../src/lib/lifecycle";
 import { HT_CANCELLED, INBOX_STATUSES, NS_REQUEST_STATUSES, OPEN_QUEUE_STATUSES, SETTING_CHANGE_STATUSES } from "../src/lib/states";
 import {
   BATCH_STATUSES, DOMAIN_STATUSES, FORCED_MOVES, NEXT_STATUSES, REPLACEABLE_STATUSES, REPLACEMENT_REASONS, RETIRED_STATUSES, STEP_STATUSES,
-  canMove, isStepFinished, stepWaitsOnPerson, type DomainStatus,
+  canMove, canReplace, isStepFinished, stepWaitsOnPerson, type DomainStatus,
 } from "../src/lib/status";
 
 // Every state machine in docs/state-machines.md has its states and moves in
@@ -87,6 +87,41 @@ describe("the domain lifecycle", () => {
       const fresh = await addDomain("in_storage");
       const ok = await pg.query("select start_replacement(array[$1]::uuid[], array[$2]::uuid[], 'other', null, 'tester')", [old, fresh]).then(() => true, () => false);
       expect([s, ok]).toEqual([s, (REPLACEABLE_STATUSES as readonly string[]).includes(s)]);
+    }
+  });
+
+  it("start_replacement refuses exactly the domains domain_being_replaced flags", async () => {
+    const pair = async () => {
+      const old = await addDomain("active");
+      const fresh = await addDomain("in_storage");
+      const [b] = await q<{ id: string }>("select start_replacement(array[$1]::uuid[], array[$2]::uuid[], 'other', null, 'tester') as id", [old, fresh]);
+      return { old, fresh, batch: b.id };
+    };
+    const flagged = async (id: string) => (await q<{ b: boolean }>("select domain_being_replaced($1) as b", [id]))[0].b;
+    const again = async (id: string) =>
+      pg.query("select start_replacement(array[$1]::uuid[], array[$2]::uuid[], 'other', null, 'tester')", [id, await addDomain("in_storage")]).then(() => true, () => false);
+
+    const running = await pair();
+    expect(await flagged(running.old)).toBe(true);
+    expect(await again(running.old)).toBe(false);
+    // The new domain of a running pair isn't being replaced.
+    expect(await flagged(running.fresh)).toBe(false);
+
+    const finished = await pair();
+    await q("update replacement_items set completed_at = now() where batch_id = $1", [finished.batch]);
+    expect(await flagged(finished.old)).toBe(false);
+    expect(await again(finished.old)).toBe(true);
+
+    const cancelled = await pair();
+    await q("update replacement_batches set status = 'cancelled' where id = $1", [cancelled.batch]);
+    expect(await flagged(cancelled.old)).toBe(false);
+    expect(await again(cancelled.old)).toBe(true);
+  });
+
+  it("canReplace offers Replace for the statuses start_replacement takes, unless already being replaced", () => {
+    for (const s of DOMAIN_STATUSES) {
+      expect([s, canReplace(s, false)]).toEqual([s, (REPLACEABLE_STATUSES as readonly string[]).includes(s)]);
+      expect([s, canReplace(s, true)]).toEqual([s, false]);
     }
   });
 
