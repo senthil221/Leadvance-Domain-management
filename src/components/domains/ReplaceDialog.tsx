@@ -1,7 +1,7 @@
 "use client";
 
 import { Dialog } from "radix-ui";
-import { ArrowRight, Info, TriangleAlert } from "lucide-react";
+import { ArrowRight, Check as CheckIcon, Info, Search, TriangleAlert, X } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useState, useTransition } from "react";
 import { toast } from "sonner";
@@ -57,6 +57,62 @@ function Check({ checked, onChange, label, hint }: { checked: boolean; onChange:
   );
 }
 
+const lastUsed = (d: Date | null) => (d ? `used ${new Date(d).toLocaleDateString("en-US", { month: "short", year: "numeric", timeZone: "UTC" })}` : "never used");
+
+/** Storage's rested domains, searchable by name and TLD: click one to swap it in, click a picked one to put it back. */
+function FreeDomains({ candidates, assign, targets, hypertide, onPick }: {
+  candidates: StorageCandidate[] | null; assign: Record<string, string>; targets: ReplaceTarget[]; hypertide: boolean; onPick: (id: string) => void;
+}) {
+  const [q, setQ] = useState("");
+  const [tld, setTld] = useState("");
+  const holder = useMemo(() => new Map(Object.entries(assign).map(([t, c]) => [c, targets.find((x) => x.id === t)?.name ?? ""])), [assign, targets]);
+  const tlds = useMemo(() => {
+    const m = new Map<string, number>();
+    for (const c of candidates ?? []) if (c.tld) m.set(c.tld, (m.get(c.tld) ?? 0) + 1);
+    return [...m].sort((a, b) => b[1] - a[1]);
+  }, [candidates]);
+  const needle = q.trim().toLowerCase();
+  const list = (candidates ?? []).filter((c) => (!tld || c.tld === tld) && (!needle || c.name.includes(needle)));
+  return (
+    <div className="card rp-free">
+      <div className="card-head">
+        <span className="card-title">Free domains</span>
+        <span className="card-sub">{candidates ? `${candidates.length} rested · ${holder.size} picked` : "Loading…"}</span>
+      </div>
+      <div className="rp-free-tools">
+        <label className="search-input">
+          <Search size={14} strokeWidth={1.5} />
+          <input className="input" value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search free domains" aria-label="Search free domains" />
+        </label>
+        {tlds.length > 1 ? (
+          <select className="select" value={tld} onChange={(e) => setTld(e.target.value)} aria-label="Filter by TLD">
+            <option value="">All TLDs</option>
+            {tlds.map(([k, n]) => <option key={k} value={k}>.{k} ({n})</option>)}
+          </select>
+        ) : null}
+      </div>
+      <div className="rp-list" role="listbox" aria-label="Free domains" aria-multiselectable>
+        {candidates === null ? <div style={{ padding: 12 }}><Skeleton h={22} /></div>
+          : !list.length ? <p className="rv-none" style={{ padding: "10px 12px" }}>{candidates.length ? "No free domain matches." : "Storage is empty: add domains in Inventory first."}</p>
+          : list.map((c) => {
+            const by = holder.get(c.id);
+            return (
+              <button key={c.id} type="button" role="option" aria-selected={!!by} className="rp-free-row" data-on={by ? true : undefined} onClick={() => onPick(c.id)}
+                title={by ? `Picked for ${by}: click to put it back` : "Click to swap it in"}>
+                <span className="rp-tick" aria-hidden>{by ? <CheckIcon size={11} strokeWidth={2.5} /> : null}</span>
+                <span className="rp-side">
+                  <span className="list-title">{c.name}</span>
+                  <span className="list-meta">{by ? <>for {by}</> : <>{c.registrar ?? "no registrar account"} · {lastUsed(c.lastUsedOn)}</>}</span>
+                </span>
+                {hypertide && !hypertideAcceptsDomain(c.name) ? <span className="badge tone-warning" title="Hypertide takes no hyphens and 35 characters at most">Hypertide won&apos;t accept</span> : null}
+              </button>
+            );
+          })}
+      </div>
+    </div>
+  );
+}
+
 export function ReplaceDialog({
   open,
   onOpenChange,
@@ -85,6 +141,8 @@ export function ReplaceDialog({
   const [addToCampaigns, setAddToCampaigns] = useState(false);
   const [autoWarmup, setAutoWarmup] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  // The old domain the next click in the free list goes to.
+  const [active, setActive] = useState<string | null>(null);
   const [pending, startTransition] = useTransition();
 
   // Start clean each time the dialog opens for a new set of domains.
@@ -111,7 +169,9 @@ export function ReplaceDialog({
       setCandidates(c);
       setHtDone(done);
       // Domains Hypertide can replace get first pick of the free domains.
-      setAssign(autoAssign([...targets].sort((a, b) => Number(done.has(b.id)) - Number(done.has(a.id))), c));
+      const first = autoAssign([...targets].sort((a, b) => Number(done.has(b.id)) - Number(done.has(a.id))), c);
+      setAssign(first);
+      setActive(targets.find((t) => !first[t.id])?.id ?? targets[0]?.id ?? null);
     });
     return () => { live = false; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -127,6 +187,35 @@ export function ReplaceDialog({
   const refused = mode === "hypertide" && candidates
     ? going.filter((t) => assign[t.id] && !hypertideAcceptsDomain(candidates.find((c) => c.id === assign[t.id])?.name ?? "")).length
     : 0;
+  const nextOpen = (a: Record<string, string>, after?: string) => {
+    const open = going.filter((t) => !a[t.id]);
+    const i = after ? going.findIndex((t) => t.id === after) : -1;
+    return (open.find((t) => going.indexOf(t) > i) ?? open[0])?.id ?? null;
+  };
+  const unpick = (tid: string) => {
+    setAssign((a) => { const n = { ...a }; delete n[tid]; return n; });
+    setActive(tid);
+  };
+  // A free domain clicked: put it back if it's taken, otherwise give it to the
+  // active old domain (or the first one still without a pick) and move on.
+  const pickFree = (cid: string) => {
+    const holder = Object.keys(assign).find((k) => assign[k] === cid);
+    if (holder) { unpick(holder); return; }
+    // With every domain picked, the click swaps the active (or first) one's pick.
+    const to = active && going.some((t) => t.id === active) ? active : nextOpen(assign) ?? going[0]?.id;
+    if (!to) return;
+    const next = { ...assign, [to]: cid };
+    setAssign(next);
+    setActive(nextOpen(next, to) ?? to);
+  };
+  const autoPick = () => {
+    if (!candidates) return;
+    const keep = Object.fromEntries(Object.entries(assign).filter(([k]) => going.some((t) => t.id === k)));
+    const taken = new Set(Object.values(keep));
+    const next = { ...keep, ...autoAssign(going.filter((t) => !keep[t.id]), candidates.filter((c) => !taken.has(c.id))) };
+    setAssign(next);
+    setActive(nextOpen(next));
+  };
   const ready = candidates !== null && going.length > 0 && short === 0 && going.every((t) => assign[t.id]) && namesOk && refused === 0;
 
   const submit = () => {
@@ -165,13 +254,13 @@ export function ReplaceDialog({
     <Dialog.Root open={open} onOpenChange={onOpenChange}>
       <Dialog.Portal>
         <Dialog.Overlay className="overlay" />
-        <Dialog.Content className="dialog is-wide">
+        <Dialog.Content className="dialog is-xl rp-dialog">
           <div className="dialog-head">
             <Dialog.Title className="dialog-title">
               Replace {targets.length} domain{targets.length === 1 ? "" : "s"}
             </Dialog.Title>
             <Dialog.Description className="dialog-desc">
-              Each one gets a free domain from storage, set up for the same client.
+              Each one gets a free domain from storage, set up for the same client. Click a domain on the left, then a free domain on the right to swap it in.
             </Dialog.Description>
           </div>
 
@@ -191,45 +280,47 @@ export function ReplaceDialog({
               </label>
             </div>
 
-            <div className="card">
-              <div className="card-head">
-                <span className="card-title">Replacements</span>
-                <span className="card-sub">{candidates ? `${candidates.length} rested in storage${skipped.size ? ` · ${skipped.size} skipped` : ""}` : "Checking storage…"}</span>
+            <div className="rp-pick">
+              <div className="card rp-pairs">
+                <div className="card-head">
+                  <span className="card-title">Replacements</span>
+                  <span className="card-sub">{candidates ? `${going.filter((t) => assign[t.id]).length} of ${going.length} picked${skipped.size ? ` · ${skipped.size} skipped` : ""}` : "Checking storage…"}</span>
+                  {candidates ? (
+                    <span className="rp-head-btns">
+                      <button type="button" className="btn btn-sm" onClick={autoPick} title="Fill the empty ones: same TLD first, then the longest rested">Auto-pick</button>
+                      <button type="button" className="btn btn-sm" onClick={() => { setAssign({}); setActive(going[0]?.id ?? null); }} disabled={!used.size}>Clear</button>
+                    </span>
+                  ) : null}
+                </div>
+                <div className="rp-list">
+                  {targets.map((t) => {
+                    const c = candidates?.find((x) => x.id === assign[t.id]);
+                    const isActive = active === t.id && !skipped.has(t.id);
+                    return (
+                      <div key={t.id} className="rp-pair" data-active={isActive || undefined}>
+                        <button type="button" className="rp-pair-btn" disabled={skipped.has(t.id) || candidates === null} onClick={() => setActive(t.id)}
+                          aria-pressed={isActive} aria-label={`Pick the new domain for ${t.name}`}>
+                          <span className="rp-side">
+                            <span className="list-title">{t.name}</span>
+                            <span className="list-meta"><ClientCell name={t.clientName} hue={t.clientHue} /></span>
+                          </span>
+                          <ArrowRight size={14} strokeWidth={1.5} className="flex-none text-faint" />
+                          {candidates === null ? <span className="rp-side"><Skeleton h={22} /></span> : skipped.has(t.id) ? (
+                            <span className="rp-side text-[12px] text-warning-ink" title="Hypertide only replaces domains whose order is Done. Replace this one by hand, or with I'll do it in Hypertide.">Skipped: order isn&apos;t Done</span>
+                          ) : c ? (
+                            <span className="rp-side">
+                              <span className="list-title">{c.name}</span>
+                              <span className="list-meta">{mode === "hypertide" && !hypertideAcceptsDomain(c.name) ? <span className="text-warning-ink">Hypertide won&apos;t accept</span> : c.registrar ?? "no registrar account"}</span>
+                            </span>
+                          ) : <span className="rp-side rp-empty">{isActive ? "Pick a free domain" : "Not picked"}</span>}
+                        </button>
+                        {c ? <button type="button" className="icon-btn rp-x" aria-label={`Clear ${c.name}`} title="Put it back" onClick={() => unpick(t.id)}><X size={13} /></button> : null}
+                      </div>
+                    );
+                  })}
+                </div>
               </div>
-              <div className="card-body" style={{ paddingTop: 4, paddingBottom: 4, maxHeight: 300, overflowY: "auto" }}>
-                {targets.map((t) => (
-                  <div key={t.id} className="pair-row">
-                    <div className="pair-side">
-                      <span className="list-title">{t.name}</span>
-                      <span className="list-meta"><ClientCell name={t.clientName} hue={t.clientHue} /></span>
-                    </div>
-                    <ArrowRight size={14} strokeWidth={1.5} />
-                    {candidates === null ? (
-                      <Skeleton h={30} />
-                    ) : skipped.has(t.id) ? (
-                      <span className="text-[12.5px] text-warning-ink" title="Hypertide only replaces domains whose order is Done. Replace this one by hand, or with I'll do it in Hypertide.">
-                        Skipped: Hypertide order isn&apos;t Done
-                      </span>
-                    ) : (
-                      <select
-                        className="select"
-                        aria-label={`New domain for ${t.name}`}
-                        value={assign[t.id] ?? ""}
-                        onChange={(e) => setAssign((a) => ({ ...a, [t.id]: e.target.value }))}
-                      >
-                        {!assign[t.id] && <option value="">No domain available</option>}
-                        {candidates
-                          .filter((c) => c.id === assign[t.id] || !used.has(c.id))
-                          .map((c) => (
-                            <option key={c.id} value={c.id}>
-                              {c.name}{c.registrar ? ` · ${c.registrar}` : " · no registrar account"}{c.lastUsedOn ? ` · last used ${new Date(c.lastUsedOn).toLocaleDateString("en-US", { month: "short", year: "numeric", timeZone: "UTC" })}` : ""}{hypertideAcceptsDomain(c.name) ? "" : " · Hypertide won't accept"}
-                            </option>
-                          ))}
-                      </select>
-                    )}
-                  </div>
-                ))}
-              </div>
+              <FreeDomains candidates={candidates} assign={assign} targets={targets} hypertide={mode === "hypertide"} onPick={pickFree} />
             </div>
 
             <div className="field">

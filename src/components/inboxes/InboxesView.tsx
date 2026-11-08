@@ -14,6 +14,8 @@ import { DomainLink } from "@/components/domains/DomainLink";
 import { MARK_CHOICES, MARK_TAGS, isMark, normTag } from "@/lib/tag-map";
 import { warmupProgress } from "@/lib/warmup-program";
 import { ReplaceDialog } from "@/components/domains/ReplaceDialog";
+import { copyDomains, copyText, keepTextUnselected } from "@/components/table-tools";
+import { useSticky } from "@/lib/sticky";
 import { ClientCell, Empty, Rep, StatusDot, TagList } from "@/components/ui";
 import { InboxSettingsDialog } from "./InboxSettingsDialog";
 import { WarmingButtons } from "@/components/domains/DomainBulk";
@@ -453,9 +455,10 @@ export function InboxesView({ inboxes, clients, plans, smartleadConnected, dryRu
   const [replaceOpen, setReplaceOpen] = useState(false);
   const [moveOpen, setMoveOpen] = useState(false);
   const [stage, setStage] = useState<Stage | null>(null);
-  const [q, setQ] = useState("");
-  const [clientId, setClientId] = useState("");
-  const [sort, setSort] = useState<{ key: SortKey; dir: 1 | -1 }>({ key: "domain", dir: 1 });
+  // Filters stay while you move between tabs and pages; Clear resets them.
+  const [q, setQ] = useSticky("inboxes:q", "");
+  const [clientId, setClientId] = useSticky("inboxes:client", "");
+  const [sort, setSort] = useSticky<{ key: SortKey; dir: 1 | -1 }>("inboxes:sort", { key: "domain", dir: 1 });
   const [open, setOpen] = useState<Set<string>>(new Set());
   const [openClients, setOpenClients] = useState<Set<string>>(new Set());
   const [openTags, setOpenTags] = useState<Set<string>>(new Set());
@@ -476,7 +479,7 @@ export function InboxesView({ inboxes, clients, plans, smartleadConnected, dryRu
     setOpenTags(new Set());
     try { window.localStorage.setItem(GROUPING_KEY, g); } catch { /* ignore */ }
   };
-  const [esp, setEsp] = useState("");
+  const [esp, setEsp] = useSticky("inboxes:esp", "");
   const [acting, startAct] = useTransition();
   const act = (fn: () => Promise<{ ok: true; data: { message: string } } | { ok: false; error: string }>) =>
     startAct(async () => { const r = await fn(); if (r.ok) toast.success(r.data.message); else toast.error(r.error); });
@@ -484,7 +487,7 @@ export function InboxesView({ inboxes, clients, plans, smartleadConnected, dryRu
   const on = cols.on;
   const esps = useMemo(() => [...new Set(inboxes.map((i) => i.providerType).filter((x): x is string => Boolean(x)))].sort(), [inboxes]);
   // Where the inboxes come from (Hypertide, Icemail…), with how many domains each.
-  const [provider, setProvider] = useState("");
+  const [provider, setProvider] = useSticky("inboxes:provider", "");
   const providers = useMemo(() => {
     const m = new Map<string, Set<string>>();
     for (const i of inboxes) { const k = i.domainProvider ?? ""; m.set(k, (m.get(k) ?? new Set()).add(i.domainId)); }
@@ -583,6 +586,24 @@ export function InboxesView({ inboxes, clients, plans, smartleadConnected, dryRu
     for (const id of ids) if (on) n.delete(id); else n.add(id);
     return n;
   });
+  // Shift-click a domain to select every domain between it and the last one clicked in the same list.
+  const [anchor, setAnchor] = useState<{ list: string; domainId: string } | null>(null);
+  const pickGroup = (list: string, order: Group[], g: Group, e?: { shiftKey?: boolean }) => {
+    const from = anchor;
+    setAnchor({ list, domainId: g.domainId });
+    const a = e?.shiftKey && from?.list === list ? order.findIndex((x) => x.domainId === from.domainId) : -1;
+    const b = order.findIndex((x) => x.domainId === g.domainId);
+    if (a < 0 || b < 0) { toggleIds(g.inboxes.map((x) => x.id)); return; }
+    const ids = g.inboxes.map((x) => x.id);
+    const runIds = order.slice(Math.min(a, b), Math.max(a, b) + 1).flatMap((x) => x.inboxes.map((y) => y.id));
+    setSelected((s) => {
+      const n = new Set(s);
+      const on = !ids.every((id) => s.has(id));
+      for (const id of runIds) if (on) n.add(id); else n.delete(id);
+      return n;
+    });
+  };
+  const stageGroups = useMemo(() => groups.filter((g) => !stage || stageOf(g) === stage), [groups, stage]);
   const allIds = all.map((i) => i.id);
   const allSel = allIds.length > 0 && allIds.every((id) => selected.has(id));
   const someSel = allIds.some((id) => selected.has(id));
@@ -643,7 +664,7 @@ export function InboxesView({ inboxes, clients, plans, smartleadConnected, dryRu
     return (
       <Fragment key={dKey}>
         <tr className="is-clickable" aria-expanded={isOpen} data-selected={gSel} onClick={() => toggle(dKey)}>
-          <td className="col-check" onClick={(e) => { e.stopPropagation(); toggleIds(ids); }}>
+          <td className="col-check" onMouseDown={keepTextUnselected} onClick={(e) => { e.stopPropagation(); pickGroup(prefix, domains, g, e); }}>
             <input type="checkbox" className="checkbox" checked={gSel} ref={(el) => { if (el) el.indeterminate = !gSel && gSome; }} onChange={() => {}} aria-label={`Select inboxes on ${g.domain}`} tabIndex={-1} />
           </td>
           <td className="col-first" style={{ paddingLeft: pad }}>
@@ -757,6 +778,7 @@ export function InboxesView({ inboxes, clients, plans, smartleadConnected, dryRu
             {providers.map((p) => <option key={p.name || "-"} value={p.name || "-"}>{p.name || "No provider"} · {int(p.domains)}</option>)}
           </select>
         ) : null}
+        {clientId || esp || provider || q ? <button type="button" className="btn btn-ghost btn-sm" onClick={() => { setClientId(""); setEsp(""); setProvider(""); setQ(""); }}>Clear</button> : null}
         <span className="spacer-auto" />
         <label className="search-input">
           <Search size={14} strokeWidth={1.5} />
@@ -861,12 +883,12 @@ export function InboxesView({ inboxes, clients, plans, smartleadConnected, dryRu
                 </tr>
               </thead>
               <tbody>
-                {groups.filter((g) => !stage || stageOf(g) === stage).map((g) => {
+                {stageGroups.map((g) => {
                   const ids = g.inboxes.map((x) => x.id);
                   const gSel = ids.every((id) => selected.has(id));
                   const gSome = ids.some((id) => selected.has(id));
                   return (
-                    <tr key={g.domainId} className="is-clickable" data-selected={gSel} onClick={() => toggleIds(ids)}>
+                    <tr key={g.domainId} className="is-clickable" data-selected={gSel} onMouseDown={keepTextUnselected} onClick={(e) => pickGroup("warm", stageGroups, g, e)}>
                       <td className="col-check">
                         <input type="checkbox" className="checkbox" checked={gSel} ref={(el) => { if (el) el.indeterminate = !gSel && gSome; }} onChange={() => {}} aria-label={`Select inboxes on ${g.domain}`} tabIndex={-1} />
                       </td>
@@ -983,7 +1005,7 @@ export function InboxesView({ inboxes, clients, plans, smartleadConnected, dryRu
                   const gSel = ids.every((id) => selected.has(id));
                   const gSome = ids.some((id) => selected.has(id));
                   return (
-                    <tr key={g.domainId} className="is-clickable" data-selected={gSel} onClick={() => toggleIds(ids)}>
+                    <tr key={g.domainId} className="is-clickable" data-selected={gSel} onMouseDown={keepTextUnselected} onClick={(e) => pickGroup("flat", groups, g, e)}>
                       <td className="col-check">
                         <input type="checkbox" className="checkbox" checked={gSel} ref={(el) => { if (el) el.indeterminate = !gSel && gSome; }} onChange={() => {}} aria-label={`Select inboxes on ${g.domain}`} tabIndex={-1} />
                       </td>
@@ -1141,8 +1163,11 @@ export function InboxesView({ inboxes, clients, plans, smartleadConnected, dryRu
             </DropdownMenu.Portal>
           </DropdownMenu.Root>
           <button type="button" className="btn btn-sm" title="Copy the selected inboxes' addresses, one per line"
-            onClick={() => { void navigator.clipboard.writeText(selectedRows.map((i) => i.email).join("\n")).then(() => toast.success(`Copied ${selectedRows.length} address${selectedRows.length === 1 ? "" : "es"}`)); }}>
+            onClick={() => { void copyText(selectedRows.map((i) => i.email).join("\n")).then((ok) => { if (ok) toast.success(`Copied ${selectedRows.length} address${selectedRows.length === 1 ? "" : "es"}`); else toast.error("Couldn't copy: the browser blocked the clipboard"); }); }}>
             <Copy size={14} /> Copy emails
+          </button>
+          <button type="button" className="btn btn-sm" title="Copy the selected inboxes' domains, one per line" onClick={() => copyDomains(selectedRows.map((i) => i.domain))}>
+            <Copy size={14} /> Copy domains
           </button>
           <span className="sep" />
           <button type="button" className="btn btn-sm" aria-label="Clear selection" onClick={() => setSelected(new Set())}><X size={14} /></button>

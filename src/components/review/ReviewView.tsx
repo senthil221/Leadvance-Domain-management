@@ -10,6 +10,8 @@ import { Findings } from "@/components/compare/Findings";
 import { ConfigureDomains, PasteSelect, WarmingButtons } from "@/components/domains/DomainBulk";
 import { RangePicker } from "@/components/RangePicker";
 import { SortTh } from "@/components/SortTh";
+import { keepTextUnselected, useRangeSelect } from "@/components/table-tools";
+import { useSticky } from "@/lib/sticky";
 import { ClientCell, Empty, Rep, StatusDot, TagList } from "@/components/ui";
 import { BOUNCE_META, BOUNCE_ORDER, CAUSE_COLOR, type BounceReason } from "@/lib/bounces";
 import { ago, int } from "@/lib/format";
@@ -145,17 +147,18 @@ export function ReviewView({ initial, clients }: { initial: ReviewData; clients:
   const [loading, start] = useTransition();
   const [tagging, startTag] = useTransition();
   // What matters now, or what's finished: disconnected, replaced, cancelled, expired or deleted.
-  const [scope, setScope] = useState<"current" | "ended">("current");
-  const [clientId, setClientId] = useState<string | null>(null);
-  const [slTag, setSlTag] = useState<string | null>(null);
-  const [groupBy, setGroupBy] = useState<"client" | "tag" | "provider" | "esp" | "tld">("client");
-  const [provider, setProvider] = useState<string | null>(null);
-  const [esp, setEsp] = useState<string | null>(null);
-  const [tld, setTld] = useState<string | null>(null);
-  const [q, setQ] = useState("");
-  const [only, setOnly] = useState<Verdict | "">("");
+  // Filters stay while you move between tabs and pages; Clear resets them.
+  const [scope, setScope] = useSticky<"current" | "ended">("review:scope", "current");
+  const [clientId, setClientId] = useSticky<string | null>("review:client", null);
+  const [slTag, setSlTag] = useSticky<string | null>("review:tag", null);
+  const [groupBy, setGroupBy] = useSticky<"client" | "tag" | "provider" | "esp" | "tld">("review:group", "client");
+  const [provider, setProvider] = useSticky<string | null>("review:provider", null);
+  const [esp, setEsp] = useSticky<string | null>("review:esp", null);
+  const [tld, setTld] = useSticky<string | null>("review:tld", null);
+  const [q, setQ] = useSticky("review:q", "");
+  const [only, setOnly] = useSticky<Verdict | "">("review:only", "");
   const [signals, setSignals] = useState<Set<Signal>>(new Set());
-  const [sort, setSort] = useState<{ key: SortKey; dir: 1 | -1 }>({ key: "verdict", dir: -1 });
+  const [sort, setSort] = useSticky<{ key: SortKey; dir: 1 | -1 }>("review:sort", { key: "verdict", dir: -1 });
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [tag, setTag] = useState("");
 
@@ -247,7 +250,8 @@ export function ReviewView({ initial, clients }: { initial: ReviewData; clients:
 
   const selectedRows = rows.filter((r) => selected.has(r.id));
   const allSelected = rows.length > 0 && rows.every((r) => selected.has(r.id));
-  const toggle = (id: string) => setSelected((s) => { const n = new Set(s); if (n.has(id)) n.delete(id); else n.add(id); return n; });
+  const rowIds = useMemo(() => rows.map((r) => r.id), [rows]);
+  const pick = useRangeSelect(rowIds, setSelected);
   const toggleSignal = (k: Signal) => setSignals((s) => { const n = new Set(s); if (n.has(k)) n.delete(k); else n.add(k); return n; });
   const sortBy = (key: SortKey) => setSort((s) => (s.key === key ? { key, dir: s.dir === 1 ? -1 : 1 } : { key, dir: key === "name" || key === "client" || key === "esp" ? 1 : -1 }));
   // Every domain the tab shows, with the tag its call suggests ready in the bar.
@@ -433,7 +437,7 @@ export function ReviewView({ initial, clients }: { initial: ReviewData; clients:
                 const br = pct(r.bounces, r.sent);
                 return (
                   <tr key={r.id} data-selected={selected.has(r.id)}>
-                    <td><input type="checkbox" className="checkbox" aria-label={`Select ${r.name}`} checked={selected.has(r.id)} onChange={() => toggle(r.id)} /></td>
+                    <td><input type="checkbox" className="checkbox" aria-label={`Select ${r.name}`} checked={selected.has(r.id)} onMouseDown={keepTextUnselected} onClick={(e) => pick(r.id, e)} onChange={() => {}} /></td>
                     <td className="col-first">
                       <span className="flex items-center gap-2">
                         <DomainLink id={r.id} tab="stats" className="strong hover:underline">{r.name}</DomainLink>

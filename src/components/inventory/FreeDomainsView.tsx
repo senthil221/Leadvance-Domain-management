@@ -1,6 +1,6 @@
 "use client";
 
-import { ArrowDown, ArrowUp, Download, Globe, RefreshCw, Search, Tag, X } from "lucide-react";
+import { ArrowDown, ArrowUp, Copy, Download, Globe, RefreshCw, Search, Tag, X } from "lucide-react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useEffect, useMemo, useState, useTransition } from "react";
@@ -9,9 +9,11 @@ import { recheckNameservers } from "@/app/actions";
 import { DomainLink } from "@/components/domains/DomainLink";
 import { PasteSelect } from "@/components/domains/DomainBulk";
 import { SetupDialog } from "@/components/domains/SetupDialog";
+import { ColResizer, copyDomains, keepTextUnselected, useColumnWidths, useRangeSelect } from "@/components/table-tools";
 import { Empty } from "@/components/ui";
 import { ago, daysSince, fixedDate, int } from "@/lib/format";
 import { nsOf } from "@/lib/lifecycle";
+import { useSticky } from "@/lib/sticky";
 import type { ClientRow, DomainRow } from "@/lib/queries";
 
 // Domains bought and never touched, laid out for picking which to use next:
@@ -55,14 +57,25 @@ const COLUMNS: { key: SortKey; label: string; width?: number; num?: boolean; tit
   { key: "cost", label: "A year", width: 72, num: true },
 ];
 
+// Each column's usual width; Domain takes what's left until you size it.
+const DEFAULT_WIDTHS: Record<string, number> = Object.fromEntries(COLUMNS.filter((c) => c.width).map((c) => [c.key, c.width as number]));
+const tableStyle = (custom: Record<string, number>, nameMin: number) => {
+  const total = 40 + (custom.name ?? nameMin) + COLUMNS.reduce((a, c) => a + (c.key === "name" ? 0 : custom[c.key] ?? c.width ?? 0), 0);
+  return custom.name ? { width: total, minWidth: total } : { minWidth: total };
+};
+
 export function FreeDomainsView({ domains, clients, used, pointed }: { domains: DomainRow[]; clients: ClientRow[]; used: number; pointed: number }) {
   const params = useSearchParams();
   const router = useRouter();
-  const [tlds, setTlds] = useState<Set<string>>(() => new Set((params.get("tld") ?? "").split(",").filter(Boolean)));
-  const [q, setQ] = useState("");
-  const [registrar, setRegistrar] = useState("");
-  const [ns, setNs] = useState<NsState | "">("");
-  const [sort, setSort] = useState<{ key: SortKey; dir: 1 | -1 }>({ key: "name", dir: 1 });
+  // Filters stay while you move between tabs and pages; Clear resets them. ?tld= links win.
+  const [tldList, setTldList] = useSticky("free:tlds", "", params.get("tld"));
+  const tlds = useMemo(() => new Set(tldList.split(",").filter(Boolean)), [tldList]);
+  const setTlds = (next: Set<string>) => setTldList([...next].join(","));
+  const [q, setQ] = useSticky("free:q", "");
+  const [registrar, setRegistrar] = useSticky("free:registrar", "");
+  const [ns, setNs] = useSticky<NsState | "">("free:ns", "");
+  const [sort, setSort] = useSticky<{ key: SortKey; dir: 1 | -1 }>("free:sort", { key: "name", dir: 1 });
+  const widths = useColumnWidths("free-domains", DEFAULT_WIDTHS);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [setupOpen, setSetupOpen] = useState(false);
   const [checking, startCheck] = useTransition();
@@ -127,8 +140,9 @@ export function FreeDomainsView({ domains, clients, used, pointed }: { domains: 
   const selectedRows = useMemo(() => domains.filter((d) => selected.has(d.id)), [domains, selected]);
   const allShown = rows.length > 0 && rows.every((r) => selected.has(r.id));
   const someShown = rows.some((r) => selected.has(r.id));
-  const toggle = (id: string) => setSelected((s) => { const n = new Set(s); if (n.has(id)) n.delete(id); else n.add(id); return n; });
-  const toggleTld = (t: string) => setTlds((s) => { const n = new Set(s); if (n.has(t)) n.delete(t); else n.add(t); return n; });
+  const rowIds = useMemo(() => rows.map((r) => r.id), [rows]);
+  const pick = useRangeSelect(rowIds, setSelected);
+  const toggleTld = (t: string) => { const n = new Set(tlds); if (n.has(t)) n.delete(t); else n.add(t); setTlds(n); };
   const sortBy = (key: SortKey) => setSort((s) => (s.key === key ? { key, dir: (s.dir * -1) as 1 | -1 } : { key, dir: 1 }));
   const filtered = q || registrar || ns || tlds.size > 0;
 
@@ -206,6 +220,7 @@ export function FreeDomainsView({ domains, clients, used, pointed }: { domains: 
               {(Object.keys(NS_LABEL) as NsState[]).map((k) => <option key={k} value={k}>{NS_LABEL[k]}</option>)}
             </select>
             {filtered ? <button type="button" className="btn btn-ghost btn-sm" onClick={() => { setQ(""); setRegistrar(""); setNs(""); setTlds(new Set()); }}>Clear</button> : null}
+            {widths.customized ? <button type="button" className="btn btn-ghost btn-sm" title="Put every column back to its usual width" onClick={widths.reset}>Reset widths</button> : null}
             <span className="spacer-auto" />
             <PasteSelect rows={domains} selected={selected} where="in your free domains" onSelect={setSelected} />
             <button type="button" className="btn btn-sm" disabled={checking || !checkList.length} title="Look up the latest nameservers from DNS, the registry and the registrar" onClick={() => check(checkList)}>
@@ -217,10 +232,10 @@ export function FreeDomainsView({ domains, clients, used, pointed }: { domains: 
 
         <div className="table-wrap">
           <div className="table-scroll" style={{ maxHeight: "calc(100dvh - 300px)", minHeight: 280 }}>
-            <table className="data-table is-main is-fixed" aria-rowcount={rows.length} style={{ minWidth: 40 + 200 + COLUMNS.reduce((a, c) => a + (c.width ?? 0), 0) }}>
+            <table className="data-table is-main is-fixed" aria-rowcount={rows.length} style={tableStyle(widths.custom, 200)}>
               <colgroup>
                 <col style={{ width: 40 }} />
-                {COLUMNS.map((c) => <col key={c.key} style={c.width ? { width: c.width } : undefined} />)}
+                {COLUMNS.map((c) => { const w = widths.custom[c.key] ?? c.width; return <col key={c.key} style={w ? { width: w } : undefined} />; })}
               </colgroup>
               <thead>
                 <tr>
@@ -235,6 +250,7 @@ export function FreeDomainsView({ domains, clients, used, pointed }: { domains: 
                         {c.label}
                         {sort.key === c.key ? (sort.dir === 1 ? <ArrowUp size={12} /> : <ArrowDown size={12} />) : null}
                       </button>
+                      <ColResizer col={c.key} label={c.label} onResize={widths.setWidth} />
                     </th>
                   ))}
                 </tr>
@@ -245,7 +261,7 @@ export function FreeDomainsView({ domains, clients, used, pointed }: { domains: 
                   const days = renewsIn(d);
                   const isSel = selected.has(d.id);
                   return (
-                    <tr key={d.id} data-selected={isSel} className="is-clickable" onClick={() => toggle(d.id)}>
+                    <tr key={d.id} data-selected={isSel} className="is-clickable" onMouseDown={keepTextUnselected} onClick={(e) => pick(d.id, e)}>
                       <td className="col-check"><input type="checkbox" className="checkbox" checked={isSel} onChange={() => {}} aria-label={`Select ${d.name}`} tabIndex={-1} /></td>
                       <td className="col-first"><span className="inv-name"><DomainLink id={d.id} className="strong hover:underline" title={d.name}>{d.name}</DomainLink></span></td>
                       <td className="text-muted">{d.tld ? `.${d.tld}` : <span className="zero">—</span>}</td>
@@ -293,6 +309,7 @@ export function FreeDomainsView({ domains, clients, used, pointed }: { domains: 
           <span className="bulk-count">{selected.size} selected</span>
           <button type="button" className="btn btn-sm" onClick={() => setSetupOpen(true)}><Tag size={14} /> Set up</button>
           <button type="button" className="btn btn-sm" disabled={checking} onClick={() => check(selectedRows)}><RefreshCw size={14} /> Check nameservers</button>
+          <button type="button" className="btn btn-sm" title="Copy the selected domains, one per line" onClick={() => copyDomains(selectedRows.map((d) => d.name))}><Copy size={14} /> Copy</button>
           <button type="button" className="btn btn-sm" onClick={exportCsv}><Download size={14} /> Export</button>
           <span className="sep" />
           <button type="button" className="btn btn-sm" aria-label="Clear selection" onClick={() => setSelected(new Set())}><X size={14} /></button>

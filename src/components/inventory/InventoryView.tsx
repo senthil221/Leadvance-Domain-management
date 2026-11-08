@@ -12,6 +12,8 @@ import { ReplaceDialog } from "@/components/domains/ReplaceDialog";
 import { SetupDialog } from "@/components/domains/SetupDialog";
 import { ConfigureDomains, PasteSelect, WarmingButtons } from "@/components/domains/DomainBulk";
 import { MarkReplacedDialog } from "./MarkReplacedDialog";
+import { ColResizer, copyDomains, keepTextUnselected, useColumnWidths, useRangeSelect } from "@/components/table-tools";
+import { useSticky } from "@/lib/sticky";
 import { useCompact } from "@/components/ThemeToggle";
 import { Badge, ClientCell, Empty, TagList } from "@/components/ui";
 import { daysSince, fixedDate, int, shortDate } from "@/lib/format";
@@ -73,22 +75,17 @@ export function InventoryView({ domains, clients }: { domains: DomainRow[]; clie
     setLastUrlView(urlView);
     setView(viewOf(urlView));
   }
-  const [q, setQ] = useState("");
-  const [clientId, setClientId] = useState(() => params.get("client") ?? "");
-  const [tag, setTag] = useState("");
+  // Filters stay while you move between tabs and pages (see useSticky); Clear resets them.
+  const [q, setQ] = useSticky("inventory:q", "");
+  const [clientId, setClientId] = useSticky("inventory:client", "", params.get("client"));
+  const [tag, setTag] = useSticky("inventory:tag", "");
   // "v:<registrar>" for every account at a registrar, "a:<registrar>|<account>"
   // for one login. The breakdown tables link here with ?registrar= / ?tld=.
-  const [registrar, setRegistrar] = useState(() => params.get("registrar") ?? "");
-  const [tld, setTld] = useState(() => params.get("tld") ?? "");
-  const [sl, setSl] = useState<SlState | "">(() => (SL_ORDER as string[]).includes(params.get("sl") ?? "") ? params.get("sl") as SlState : "");
-  const urlRegistrar = params.get("registrar") ?? "", urlTld = params.get("tld") ?? "";
-  const [lastUrlFilter, setLastUrlFilter] = useState(`${urlRegistrar}\n${urlTld}`);
-  if (`${urlRegistrar}\n${urlTld}` !== lastUrlFilter) {
-    setLastUrlFilter(`${urlRegistrar}\n${urlTld}`);
-    setRegistrar(urlRegistrar);
-    setTld(urlTld);
-  }
-  const [sort, setSort] = useState<{ key: SortKey; dir: 1 | -1 }>({ key: "life", dir: 1 });
+  const [registrar, setRegistrar] = useSticky("inventory:registrar", "", params.get("registrar"));
+  const [tld, setTld] = useSticky("inventory:tld", "", params.get("tld"));
+  const urlSl = params.get("sl");
+  const [sl, setSl] = useSticky<SlState | "">("inventory:sl", "", (SL_ORDER as string[]).includes(urlSl ?? "") ? urlSl as SlState : null);
+  const [sort, setSort] = useSticky<{ key: SortKey; dir: 1 | -1 }>("inventory:sort", { key: "life", dir: 1 });
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [setupOpen, setSetupOpen] = useState(false);
   const [replaceOpen, setReplaceOpen] = useState(false);
@@ -96,6 +93,8 @@ export function InventoryView({ domains, clients }: { domains: DomainRow[]; clie
   const [moveTo, setMoveTo] = useState<"replaced" | "recovery" | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const cols = useColumns("inventory", COLUMNS);
+  const widthDefaults = useMemo(() => ({ ...WIDTH, life: view === "replaced" || view === "cooling" || view === "all" ? 140 : WIDTH.life }), [view]);
+  const widths = useColumnWidths("inventory", widthDefaults);
   // A provider nobody on this server uses is only an empty column.
   const hasHt = useMemo(() => domains.some((d) => htOf(d)), [domains]);
   const hasIcemail = useMemo(() => domains.some((d) => d.icemailMailboxes || d.icemailIssue), [domains]);
@@ -169,7 +168,8 @@ export function InventoryView({ domains, clients }: { domains: DomainRow[]; clie
   const selectedRows = useMemo(() => domains.filter((d) => selected.has(d.id)), [domains, selected]);
   const allShown = rows.length > 0 && rows.every((r) => selected.has(r.id));
   const someShown = rows.some((r) => selected.has(r.id));
-  const toggle = (id: string) => setSelected((s) => { const n = new Set(s); if (n.has(id)) n.delete(id); else n.add(id); return n; });
+  const rowIds = useMemo(() => rows.map((r) => r.id), [rows]);
+  const pick = useRangeSelect(rowIds, setSelected);
   const compact = useCompact();
   const virtual = useVirtualizer({ count: rows.length, getScrollElement: () => scrollRef.current, estimateSize: () => (compact ? 30 : 42), overscan: 14 });
   // Rows change height with the compact view: size them again.
@@ -179,12 +179,13 @@ export function InventoryView({ domains, clients }: { domains: DomainRow[]; clie
   const padBottom = items.length ? virtual.getTotalSize() - items[items.length - 1].end : 0;
 
   const sortBy = (key: SortKey) => setSort((s) => (s.key === key ? { key, dir: (s.dir * -1) as 1 | -1 } : { key, dir: ["inboxCount", "capacity"].includes(key) ? -1 : 1 }));
-  const Th = ({ k, children, num, first, title }: { k: SortKey; children: React.ReactNode; num?: boolean; first?: boolean; title?: string }) => (
+  const Th = ({ k, col, label, children, num, first, title }: { k: SortKey; col: string; label: string; children: React.ReactNode; num?: boolean; first?: boolean; title?: string }) => (
     <th className={num ? "is-num" : first ? "col-first" : undefined} title={title} aria-sort={sort.key === k ? (sort.dir === 1 ? "ascending" : "descending") : undefined}>
       <button type="button" className="sort-head" onClick={() => sortBy(k)}>
         {children}
         {sort.key === k ? (sort.dir === 1 ? <ArrowUp size={12} /> : <ArrowDown size={12} />) : null}
       </button>
+      <ColResizer col={col} label={label} onResize={widths.setWidth} />
     </th>
   );
 
@@ -206,8 +207,10 @@ export function InventoryView({ domains, clients }: { domains: DomainRow[]; clie
   const filtered = q || clientId || tag || registrar || tld || sl;
   const capacity = rows.reduce((a, r) => a + r.capacity, 0);
   // Long values only appear on some tabs: "Replaced → newdomain.com", "Cooling down · until Dec 3".
-  const lifeWidth = view === "replaced" || view === "cooling" || view === "all" ? 140 : WIDTH.life;
-  const shown = COLUMNS.filter((c) => on(c.key)).map((c) => ({ key: c.key, width: c.key === "life" ? lifeWidth : WIDTH[c.key] }));
+  const shown = COLUMNS.filter((c) => on(c.key)).map((c) => ({ key: c.key, width: widths.width(c.key) }));
+  // Domain takes the room left over, until you size it yourself.
+  const nameWidth = widths.custom.name ?? null;
+  const tableWidth = CHECK_WIDTH + (nameWidth ?? DOMAIN_MIN) + shown.reduce((a, c) => a + c.width, 0);
   const COLS = 2 + shown.length;
 
   const registrarFilter = (
@@ -252,7 +255,7 @@ export function InventoryView({ domains, clients }: { domains: DomainRow[]; clie
           <PasteSelect rows={domains} selected={selected} where="in your domains"
             onSelect={(s) => { setSelected(s); if ([...s].some((id) => !rows.some((r) => r.id === id))) { setView("all"); setQ(""); } }} />
           <button type="button" className="btn btn-sm" onClick={exportCsv}><Download size={14} /> Export</button>
-          <ColumnsMenu cols={cols} />
+          <ColumnsMenu cols={cols} widths={widths} />
         </div>
         <div className="table-bar">
           <select className="select rv-filter" data-on={clientId ? true : undefined} value={clientId} onChange={(e) => setClientId(e.target.value)} aria-label="Filter by client">
@@ -279,10 +282,10 @@ export function InventoryView({ domains, clients }: { domains: DomainRow[]; clie
         <div className="table-wrap">
           <div ref={scrollRef} className="table-scroll" style={{ maxHeight: "calc(100dvh - 240px)", minHeight: 280 }}>
             <table className="data-table is-main is-fixed" aria-rowcount={rows.length}
-              style={{ minWidth: CHECK_WIDTH + DOMAIN_MIN + shown.reduce((a, c) => a + c.width, 0) }}>
+              style={nameWidth ? { width: tableWidth, minWidth: tableWidth } : { minWidth: tableWidth }}>
               <colgroup>
                 <col style={{ width: CHECK_WIDTH }} />
-                <col />
+                <col style={nameWidth ? { width: nameWidth } : undefined} />
                 {shown.map((c) => <col key={c.key} style={{ width: c.width }} />)}
               </colgroup>
               <thead>
@@ -292,20 +295,20 @@ export function InventoryView({ domains, clients }: { domains: DomainRow[]; clie
                       ref={(el) => { if (el) el.indeterminate = !allShown && someShown; }}
                       onChange={() => setSelected((s) => { const n = new Set(s); rows.forEach((r) => (allShown ? n.delete(r.id) : n.add(r.id))); return n; })} />
                   </th>
-                  <Th k="name" first>Domain</Th>
-                  {on("life") ? <Th k="life">Lifecycle</Th> : null}
-                  {on("sl") ? <Th k="sl">Smartlead</Th> : null}
-                  {on("client") ? <Th k="client">Client</Th> : null}
-                  {on("registrar") ? <Th k="registrar">Registrar</Th> : null}
-                  {on("ns") ? <Th k="ns">Nameservers</Th> : null}
-                  {on("ht") ? <Th k="ht">Hypertide</Th> : null}
-                  {on("icemail") ? <Th k="icemailMonthly">Icemail</Th> : null}
-                  {on("inboxes") ? <Th k="inboxCount" num>Inboxes</Th> : null}
-                  {on("capacity") ? <Th k="capacity" num>Per day</Th> : null}
-                  {on("age") ? <Th k="age" num title="Days since the domain went active">Active</Th> : null}
-                  {on("domainAge") ? <Th k="domainAge" num title="Days since the domain was bought">Age</Th> : null}
-                  {on("bought") ? <Th k="purchasedAt" num>Bought</Th> : null}
-                  {on("renews") ? <Th k="expiresAt" num>{view === "expired" ? "Expired on" : "Renews"}</Th> : null}
+                  <Th k="name" col="name" label="Domain" first>Domain</Th>
+                  {on("life") ? <Th k="life" col="life" label="Lifecycle">Lifecycle</Th> : null}
+                  {on("sl") ? <Th k="sl" col="sl" label="Smartlead">Smartlead</Th> : null}
+                  {on("client") ? <Th k="client" col="client" label="Client">Client</Th> : null}
+                  {on("registrar") ? <Th k="registrar" col="registrar" label="Registrar">Registrar</Th> : null}
+                  {on("ns") ? <Th k="ns" col="ns" label="Nameservers">Nameservers</Th> : null}
+                  {on("ht") ? <Th k="ht" col="ht" label="Hypertide">Hypertide</Th> : null}
+                  {on("icemail") ? <Th k="icemailMonthly" col="icemail" label="Icemail">Icemail</Th> : null}
+                  {on("inboxes") ? <Th k="inboxCount" col="inboxes" label="Inboxes" num>Inboxes</Th> : null}
+                  {on("capacity") ? <Th k="capacity" col="capacity" label="Per day" num>Per day</Th> : null}
+                  {on("age") ? <Th k="age" col="age" label="Active" num title="Days since the domain went active">Active</Th> : null}
+                  {on("domainAge") ? <Th k="domainAge" col="domainAge" label="Age" num title="Days since the domain was bought">Age</Th> : null}
+                  {on("bought") ? <Th k="purchasedAt" col="bought" label="Bought" num>Bought</Th> : null}
+                  {on("renews") ? <Th k="expiresAt" col="renews" label="Renews" num>{view === "expired" ? "Expired on" : "Renews"}</Th> : null}
                 </tr>
               </thead>
               <tbody>
@@ -317,7 +320,7 @@ export function InventoryView({ domains, clients }: { domains: DomainRow[]; clie
                   const ht = htOf(d);
                   const isSel = selected.has(d.id);
                   return (
-                    <tr key={d.id} data-index={vi.index} data-selected={isSel} className="is-clickable" onClick={() => toggle(d.id)}>
+                    <tr key={d.id} data-index={vi.index} data-selected={isSel} className="is-clickable" onMouseDown={keepTextUnselected} onClick={(e) => pick(d.id, e)}>
                       <td className="col-check"><input type="checkbox" className="checkbox" checked={isSel} onChange={() => {}} aria-label={`Select ${d.name}`} tabIndex={-1} /></td>
                       <td className="col-first">
                         <span className="inv-name">
@@ -433,6 +436,7 @@ export function InventoryView({ domains, clients }: { domains: DomainRow[]; clie
               <button type="button" className="btn btn-sm" disabled={!selectedRows.some((d) => lifeOf(d) !== "replaced")} onClick={() => setMoveTo("replaced")}><Archive size={14} /> Mark as replaced</button>
               <button type="button" className="btn btn-sm" disabled={!selectedRows.some((d) => lifeOf(d) !== "recovery")} onClick={() => setMoveTo("recovery")}><LifeBuoy size={14} /> Move to recovery</button>
               <button type="button" className="btn btn-sm" onClick={() => setStatusOpen(true)}><CircleDot size={14} /> Status</button>
+          <button type="button" className="btn btn-sm" title="Copy the selected domains, one per line" onClick={() => copyDomains(selectedRows.map((d) => d.name))}><Copy size={14} /> Copy</button>
           <button type="button" className="btn btn-sm" onClick={exportCsv}><Download size={14} /> Export</button>
           <span className="sep" />
           <button type="button" className="btn btn-sm" aria-label="Clear selection" onClick={() => setSelected(new Set())}><X size={14} /></button>

@@ -832,6 +832,11 @@ export type StatDomain = {
   /** The domain's own tags, then the Smartlead tags on its inboxes that aren't already among them. */
   allTags: string[];
   prevSent: number; prevReplies: number; prevHuman: number; prevBounces: number;
+  /** Average warmup reputation over the days before, for the trend. */
+  prevRep: number | null;
+  tld: string | null;
+  /** The old domain of a replacement still running (domain_being_replaced): Replace isn't offered. */
+  beingReplaced: boolean;
 } & import("./smartlead-state").SlCounts;
 /**
  * One domain on one day; only days with any activity. `replies` counts every
@@ -853,7 +858,8 @@ export async function getStats(from: string, to: string): Promise<StatsData> {
         (select last_finished_at from job_state where job = 'smartlead-accounts') as sl_synced_at`,
     sql<StatDomain[]>`
       with r as (select ${from}::date as f, ${to}::date as t, ${pf}::date as pf, ${pt}::date as pt)
-      select d.id, d.name, d.status, d.client_id, c.name as client_name, c.hue as client_hue, d.tags,
+      select d.id, d.name, d.tld, d.status, d.client_id, c.name as client_name, c.hue as client_hue, d.tags,
+        domain_being_replaced(d.id) as being_replaced,
         (select count(*)::int from inboxes i where i.domain_id = d.id and i.status = 'connected') as inboxes,
         (select coalesce(sum(i.daily_limit), 0)::int from inboxes i where i.domain_id = d.id and i.status = 'connected') as capacity,
         (select coalesce(array_agg(distinct trim(i.sender_name) order by trim(i.sender_name)), '{}') from inboxes i
@@ -864,7 +870,7 @@ export async function getStats(from: string, to: string): Promise<StatsData> {
           select trim(t) as t, count(*) as n from inboxes i cross join unnest(i.smartlead_tags) t
           where i.domain_id = d.id and i.status <> 'removed' and trim(t) <> ''
             and lower(trim(t)) <> all (select lower(dt) from unnest(coalesce(d.tags, '{}')) dt) group by 1) x) as all_tags,
-        coalesce(p.sent, 0) as prev_sent, coalesce(p.replies, 0) as prev_replies, coalesce(p.human, 0) as prev_human, coalesce(p.bounces, 0) as prev_bounces,
+        coalesce(p.sent, 0) as prev_sent, coalesce(p.replies, 0) as prev_replies, coalesce(p.human, 0) as prev_human, coalesce(p.bounces, 0) as prev_bounces, p.rep as prev_rep,
         sl.sl_connected, sl.sl_disconnected, sl.sl_removed, coalesce(st.current, false) as current, st.standing
       from domains d cross join r
       left join clients c on c.id = d.client_id
@@ -875,7 +881,8 @@ export async function getStats(from: string, to: string): Promise<StatsData> {
         count(*) filter (where i.status = 'removed')::int as sl_removed
       from inboxes i where i.domain_id = d.id) sl on true
       left join lateral (
-        select sum(s.sent)::int as sent, sum(s.replies)::int as replies, sum(s.human_replies)::int as human, sum(s.bounces)::int as bounces
+        select sum(s.sent)::int as sent, sum(s.replies)::int as replies, sum(s.human_replies)::int as human, sum(s.bounces)::int as bounces,
+          avg(s.warmup_reputation)::float8 as rep
         from domain_daily_stats s where s.domain_id = d.id and s.day between r.pf and r.pt) p on true
       where d.status in ('warming', 'active', 'draining')
         or exists (select 1 from domain_daily_stats x where x.domain_id = d.id and (x.day between r.f and r.t or x.day between r.pf and r.pt))

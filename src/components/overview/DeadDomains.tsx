@@ -3,6 +3,7 @@
 import { DomainLink } from "@/components/domains/DomainLink";
 import { useMemo, useState } from "react";
 import { ReplaceDialog } from "@/components/domains/ReplaceDialog";
+import { keepTextUnselected, useRangeSelect } from "@/components/table-tools";
 import { ClientCell, Dot } from "@/components/ui";
 import { DEAD_CAUSES, type DeadCause } from "@/lib/dead";
 import { int, shortDate } from "@/lib/format";
@@ -31,7 +32,8 @@ export function DeadDomains({ rows }: { rows: DeadDomainRow[] }) {
   const picked = rows.filter((r) => selected.has(r.domainId));
   const targets = (picked.length ? picked : shown).map((r) => ({ id: r.domainId, name: r.name, tld: r.tld, clientName: r.clientName, clientHue: r.clientHue }));
   const allShown = shown.length > 0 && shown.every((r) => selected.has(r.domainId));
-  const toggle = (id: string) => setSelected((s) => { const n = new Set(s); if (n.has(id)) n.delete(id); else n.add(id); return n; });
+  const shownIds = useMemo(() => shown.map((r) => r.domainId), [shown]);
+  const pick = useRangeSelect(shownIds, setSelected);
 
   return (
     <>
@@ -55,7 +57,7 @@ export function DeadDomains({ rows }: { rows: DeadDomainRow[] }) {
         </label>
         {shown.map((r) => (
           <div key={r.domainId} className="list-row">
-            <input type="checkbox" className="checkbox" checked={selected.has(r.domainId)} onChange={() => toggle(r.domainId)} aria-label={`Select ${r.name}`} />
+            <input type="checkbox" className="checkbox" checked={selected.has(r.domainId)} onMouseDown={keepTextUnselected} onClick={(e) => pick(r.domainId, e)} onChange={() => {}} aria-label={`Select ${r.name}`} />
             <Dot tone={r.cause === "dns_gone" ? "danger" : "warning"} />
             <div className="list-main">
               <DomainLink id={r.domainId} className="list-title hover:underline">{r.name}</DomainLink>

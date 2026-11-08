@@ -1,15 +1,18 @@
 "use client";
 
 import { DomainLink } from "@/components/domains/DomainLink";
-import { ArrowDown, ArrowUp, BarChart3, CalendarDays, ChevronRight, Copy, Download, Loader, Search, X } from "lucide-react";
+import { ArrowDown, ArrowLeftRight, ArrowUp, BarChart3, CalendarDays, ChevronRight, Copy, Download, Loader, Search, X } from "lucide-react";
 import { useSearchParams } from "next/navigation";
-import { Fragment, useMemo, useState, useTransition } from "react";
+import { Fragment, memo, useCallback, useDeferredValue, useEffect, useMemo, useRef, useState, useTransition } from "react";
 import { toast } from "sonner";
 import { loadReview, loadStats } from "@/app/actions";
 import { ColumnsMenu, useColumns, type ColumnDef } from "@/components/Columns";
 import { SortTh } from "@/components/SortTh";
+import { keepTextUnselected, useRangeSelect } from "@/components/table-tools";
+import { useSticky } from "@/lib/sticky";
 import { ConfigureDomains, PasteSelect, WarmingButtons } from "@/components/domains/DomainBulk";
-import { AdviceCell, DomainInsight } from "./DomainInsight";
+import { ReplaceDialog, type ReplaceTarget } from "@/components/domains/ReplaceDialog";
+import { AdviceCell, DomainInsight, TrendTags } from "./DomainInsight";
 import { Badge, ClientCell, Empty, Metric, Rep, StatusDot, TagList } from "@/components/ui";
 import { clientDays, clientDaySheet, rr, type ClientDays, type DayFigures } from "@/lib/client-days";
 import { ago, int } from "@/lib/format";
@@ -17,7 +20,8 @@ import { SlBadge } from "@/components/domains/SlStatus";
 import { slState } from "@/lib/smartlead-state";
 import type { ClientRow, StatDomain, StatsData } from "@/lib/queries";
 import { VERDICT_META, VERDICT_ORDER, advise, judge, type Judged, type ReviewData, type Verdict } from "@/lib/review";
-import { DOMAIN_STATUSES } from "@/lib/status";
+import { DOMAIN_STATUSES, canReplace } from "@/lib/status";
+import { BAD_TRENDS, TREND_META, TREND_ORDER, trendWeight, trends as trendsOf, type Trend, type TrendKey } from "@/lib/trends";
 import { PRESETS, addDays, daysBetween, matchPreset, nice, presetRange, previousLabel, weekday, type PresetKey } from "@/lib/range";
 
 // ---------------------------------------------------------------------------
@@ -29,7 +33,7 @@ import { PRESETS, addDays, daysBetween, matchPreset, nice, presetRange, previous
 type Sums = { sent: number; replies: number; slReplies: number; human: number; ooo: number; negative: number; bounces: number };
 const zero = (): Sums => ({ sent: 0, replies: 0, slReplies: 0, human: 0, ooo: 0, negative: 0, bounces: 0 });
 const addInto = (a: Sums, b: Sums) => { a.sent += b.sent; a.replies += b.replies; a.slReplies += b.slReplies; a.human += b.human; a.ooo += b.ooo; a.negative += b.negative; a.bounces += b.bounces; };
-type Row = StatDomain & Sums & { reputation: number | null; call: Judged | null };
+type Row = StatDomain & Sums & { reputation: number | null; call: Judged | null; trends: Trend[] };
 type Totals = Sums & { inboxes: number; capacity: number; prevSent: number; prevReplies: number; prevBounces: number; reputation?: number | null };
 const rate = (n: number, d: number) => (d > 0 ? (100 * n) / d : null);
 const avgRep = (rows: { reputation: number | null }[]) => {
@@ -42,7 +46,7 @@ const total = (rows: Row[]): Totals => {
   return t;
 };
 
-type SortKey = "name" | "status" | "call" | "advice" | "client" | "sender" | "tags" | "esp" | "inboxes" | "usage" | "sent" | "replies" | "human" | "ooo" | "negative" | "bounces" | "replyRate" | "slRate" | "humanRate" | "bounceRate" | "reputation";
+type SortKey = "name" | "status" | "call" | "advice" | "trend" | "client" | "sender" | "tags" | "esp" | "inboxes" | "usage" | "sent" | "replies" | "human" | "ooo" | "negative" | "bounces" | "replyRate" | "slRate" | "humanRate" | "bounceRate" | "reputation";
 const sortValue = (r: Row, k: SortKey, len: number): string | number | null => {
   switch (k) {
     case "status": return DOMAIN_STATUSES.indexOf(r.status);
@@ -53,6 +57,7 @@ const sortValue = (r: Row, k: SortKey, len: number): string | number | null => {
     // Worst first when sorted high to low: danger, then warning, then the rest.
     case "advice": { const a = r.call ? advise(r.call)[0] : null; return a ? ({ danger: 4, warning: 3, info: 2, faint: 1, success: 0 } as const)[a.tone] : null; }
     case "esp": return r.esp;
+    case "trend": return r.trends.length ? trendWeight(r.trends) : null;
     case "replyRate": return rate(r.replies, r.sent);
     case "slRate": return rate(r.slReplies, r.sent);
     case "humanRate": return rate(r.human, r.sent);
@@ -62,8 +67,8 @@ const sortValue = (r: Row, k: SortKey, len: number): string | number | null => {
   }
 };
 /** A client's value for a sort key, taken from its domains' totals, so clicking a header orders the clients too. */
-const groupValue = (g: { name: string | null; rows: Row[] }, k: SortKey, len: number): string | number | null => {
-  const t = total(g.rows);
+const groupValue = (g: { name: string | null; rows: Row[]; t: Totals }, k: SortKey, len: number): string | number | null => {
+  const t = g.t;
   switch (k) {
     case "name":
     case "client": return g.name?.toLowerCase() ?? null;
@@ -72,13 +77,14 @@ const groupValue = (g: { name: string | null; rows: Row[] }, k: SortKey, len: nu
     case "tags":
     case "call":
     case "advice":
+    case "trend":
     case "esp": return null;
     case "replyRate": return rate(t.replies, t.sent);
     case "slRate": return rate(t.slReplies, t.sent);
     case "humanRate": return rate(t.human, t.sent);
     case "bounceRate": return rate(t.bounces, t.sent);
     case "usage": return t.capacity ? t.sent / (t.capacity * len) : null;
-    case "reputation": return avgRep(g.rows);
+    case "reputation": return t.reputation ?? null;
     default: return t[k];
   }
 };
@@ -116,7 +122,7 @@ const gc = (key: string, on: (k: string) => boolean) => {
 };
 
 const COLUMNS: ColumnDef[] = [
-  { key: "client", label: "Client (when not grouped)" }, { key: "call", label: "Weekly review call", hidden: true }, { key: "sender", label: "Sender name" }, { key: "tags", label: "Tags", hidden: true }, { key: "esp", label: "ESP", hidden: true },
+  { key: "client", label: "Client (when not grouped)" }, { key: "call", label: "Weekly review call", hidden: true }, { key: "trend", label: "Trend" }, { key: "sender", label: "Sender name" }, { key: "tags", label: "Tags", hidden: true }, { key: "esp", label: "ESP", hidden: true },
   { key: "inboxes", label: "Inboxes" }, { key: "usage", label: "Used" }, { key: "sent", label: "Sent" },
   { key: "slReplies", label: "Replies ex. OOO" }, { key: "replies", label: "Replies incl. OOO" },
   { key: "human", label: "Human" }, { key: "ooo", label: "Out of office", hidden: true }, { key: "negative", label: "Not interested", hidden: true },
@@ -166,6 +172,67 @@ function Cells({ r, len, on, agg = false }: { r: Totals; len: number; on: (k: st
     </>
   );
 }
+
+/**
+ * One domain's line, and its bounce panel when open. Memoised: ticking or
+ * opening one row re-renders that row, not the whole table.
+ */
+const DomainRow = memo(function DomainRow({ r, i, byClient, showClient, showCall, on, len, colCount, from, to, selected, open, onPick, onToggle, onReplace }: {
+  r: Row; i: number; byClient: boolean; showClient: boolean; showCall: boolean; on: (k: string) => boolean; len: number; colCount: number;
+  from: string; to: string; selected: boolean; open: boolean;
+  onPick: (id: string, e?: { shiftKey?: boolean }) => void; onToggle: (id: string) => void; onReplace: (id: string) => void;
+}) {
+  const replaceOk = canReplace(r.status, r.beingReplaced);
+  return (
+    <>
+      <tr className={r.sent ? undefined : "st-idle"} data-selected={selected} data-open={open || undefined}>
+        <td className="col-first" style={byClient ? { paddingLeft: 14 } : undefined}>
+          <span className="flex items-center gap-2">
+            <input type="checkbox" className="checkbox" aria-label={`Select ${r.name}`} checked={selected} onMouseDown={keepTextUnselected} onClick={(e) => onPick(r.id, e)} onChange={() => {}} />
+            <button type="button" className="st-expand" aria-expanded={open} aria-label={`${open ? "Hide" : "Show"} bounce reasons and suggestions for ${r.name}`}
+              title="Bounce reasons and what to do" onClick={() => onToggle(r.id)}>
+              <ChevronRight size={13} style={{ transform: open ? "rotate(90deg)" : undefined }} />
+            </button>
+            <span className="st-n">{i + 1}</span>
+            <DomainLink id={r.id} tab="stats" className="strong hover:underline">{r.name}</DomainLink>
+            {/* Status only when it isn't the usual Active. */}
+            {r.status !== "active" ? <StatusDot status={r.status} /> : null}
+            <SlBadge c={r} quiet />
+          </span>
+        </td>
+        {showClient ? <td><ClientCell name={r.clientName} hue={r.clientHue} /></td> : null}
+        {showCall ? (
+          <td title={r.call?.why}>
+            {r.call ? <Badge tone={VERDICT_META[r.call.verdict].tone === "faint" ? undefined : VERDICT_META[r.call.verdict].tone}>{VERDICT_META[r.call.verdict].label}</Badge> : <span className="zero">—</span>}
+          </td>
+        ) : null}
+        {on("trend") ? <td className="st-trend-cell"><TrendTags list={r.trends} max={3} /></td> : null}
+        {on("sender") ? (
+          <td className="truncate" style={{ maxWidth: 180 }} title={r.senders.join(", ") || undefined}>
+            {r.senders.length ? <>{r.senders[0]}{r.senders.length > 1 ? <span className="text-faint"> +{r.senders.length - 1}</span> : null}</> : <span className="zero">—</span>}
+          </td>
+        ) : null}
+        {on("tags") ? (
+          <td title={r.allTags.join(", ") || undefined}>
+            {r.allTags.length ? <span className="inline-flex items-center gap-1"><TagList tags={r.allTags} max={3} /></span> : <span className="zero">—</span>}
+          </td>
+        ) : null}
+        {on("esp") ? <td className="text-muted text-[12px]">{r.esp ?? <span className="zero">—</span>}</td> : null}
+        <Cells r={r} len={len} on={on} />
+        {on("advice") ? <td className="st-start st-advice-cell"><AdviceCell call={r.call} /></td> : null}
+      </tr>
+      {open ? (
+        <tr className="st-insight-row">
+          <td colSpan={colCount}>
+            <DomainInsight id={r.id} name={r.name} call={r.call} trends={r.trends} from={from} to={to} sent={r.sent} bounces={r.bounces}
+              onReplace={replaceOk ? () => onReplace(r.id) : undefined}
+              replaceNote={replaceOk ? undefined : r.beingReplaced ? "Already being replaced: follow it in Replacements" : "Only active or warming domains can be replaced"} />
+          </td>
+        </tr>
+      ) : null}
+    </>
+  );
+});
 
 /**
  * Clients by day: dates across the top, each with Sent, RR (without out of
@@ -229,7 +296,9 @@ function download(name: string, head: string[], lines: unknown[][]) {
 // The weekly review's calls that ask for action; Idle, too little sent and OK don't.
 const ATTENTION: Verdict[] = ["fix", "rest", "drop", "dead", "watch"];
 type CallFilter = "" | "attention" | Verdict;
-type Facet = "call" | "tag" | "esp" | "sender" | "sl";
+type Facet = "call" | "tag" | "esp" | "sender" | "sl" | "trend";
+/** "bad" is any tag that asks for a look: no reply for days, replies or reputation down, bounces up. */
+type TrendFilter = "" | "bad" | TrendKey;
 /** Smartlead now: "in" leaves out domains deleted there, the default. */
 type SlFilter = "in" | "live" | "disconnected" | "deleted" | "all";
 const SL_FILTERS: [SlFilter, string][] = [["in", "In Smartlead now"], ["live", "All inboxes live"], ["disconnected", "Some disconnected"], ["deleted", "Deleted in Smartlead"], ["all", "All, deleted included"]];
@@ -246,29 +315,33 @@ export function StatsView({ initial, initialReview, clients }: { initial: StatsD
   const [to, setTo] = useState(initial.to);
   const params = useSearchParams();
   const [view, setView] = useState<"domain" | "day" | "clients">(() => (params.get("view") === "clients" ? "clients" : "domain"));
-  const [q, setQ] = useState("");
-  const [clientId, setClientId] = useState(() => params.get("client") ?? "");
-  const [onlySending, setOnlySending] = useState(true);
-  const [call, setCall] = useState<CallFilter>(() => {
-    const c = params.get("call");
-    return c === "attention" || VERDICT_ORDER.includes(c as Verdict) ? (c as CallFilter) : "";
-  });
-  // ?tag=, ?esp= and ?sender= open the page filtered, so a filtered view can be bookmarked.
-  const [tag, setTag] = useState(() => params.get("tag")?.toLowerCase() ?? "");
-  const [esp, setEsp] = useState(() => params.get("esp") ?? "");
-  const [sender, setSender] = useState(() => params.get("sender") ?? "");
+  // Filters stay while you move between tabs and pages; Clear resets them. A link's ?client=,
+  // ?tag=, ?esp=, ?sender=, ?status=, ?sl= or ?call= opens the page filtered and wins.
+  const [q, setQ] = useSticky("stats:q", "");
+  const [clientId, setClientId] = useSticky("stats:client", "", params.get("client"));
+  const [onlySending, setOnlySending] = useSticky("stats:sending", true);
+  const urlCall = params.get("call");
+  const [call, setCall] = useSticky<CallFilter>("stats:call", "", urlCall === "attention" || VERDICT_ORDER.includes(urlCall as Verdict) ? (urlCall as CallFilter) : null);
+  const [tag, setTag] = useSticky("stats:tag", "", params.get("tag")?.toLowerCase() ?? null);
+  const [esp, setEsp] = useSticky("stats:esp", "", params.get("esp"));
+  const [sender, setSender] = useSticky("stats:sender", "", params.get("sender"));
   // Active today (grace period included), or finished: disconnected, replaced, cancelled, expired.
-  const [standing, setStanding] = useState<"current" | "ended" | "all">(() => (params.get("status") === "ended" || params.get("status") === "all" ? params.get("status") as "ended" | "all" : "current"));
+  const urlStatus = params.get("status");
+  const [standing, setStanding] = useSticky<"current" | "ended" | "all">("stats:status", "current", urlStatus === "ended" || urlStatus === "all" ? urlStatus : null);
   // One line per client to start; open a client to see its domains.
-  const [byClient, setByClient] = useState(true);
-  const [sl, setSl] = useState<SlFilter>(() => (SL_FILTERS.some(([k]) => k === params.get("sl")) ? params.get("sl") as SlFilter : "in"));
+  const [byClient, setByClient] = useSticky("stats:by-client", true);
+  const urlSl = params.get("sl");
+  const [sl, setSl] = useSticky<SlFilter>("stats:sl", "in", SL_FILTERS.some(([k]) => k === urlSl) ? urlSl as SlFilter : null);
+  const urlTrend = params.get("trend");
+  const [trend, setTrend] = useSticky<TrendFilter>("stats:trend", "", urlTrend === "bad" || TREND_ORDER.includes(urlTrend as TrendKey) ? (urlTrend as TrendFilter) : null);
+  // The domains the Replace window is open for.
+  const [replaceIds, setReplaceIds] = useState<string[] | null>(null);
   const [openClients, setOpenClients] = useState<Set<string>>(new Set());
   // Domains opened to show their bounces and what to do.
   const [openRows, setOpenRows] = useState<Set<string>>(new Set());
   const [selected, setSelected] = useState<Set<string>>(new Set());
-  const flipIn = (set: (f: (s: Set<string>) => Set<string>) => void, id: string) => set((s) => { const n = new Set(s); if (n.has(id)) n.delete(id); else n.add(id); return n; });
   const toggleClient = (key: string) => setOpenClients((s0) => { const n = new Set(s0); if (n.has(key)) n.delete(key); else n.add(key); return n; });
-  const [sort, setSort] = useState<{ key: SortKey; dir: 1 | -1 }>({ key: "sent", dir: -1 });
+  const [sort, setSort] = useSticky<{ key: SortKey; dir: 1 | -1 }>("stats:sort", { key: "sent", dir: -1 });
   const [daySort, setDaySort] = useState<{ key: DayKey; dir: 1 | -1 }>({ key: "day", dir: -1 });
   const [loading, start] = useTransition();
   const cols = useColumns("stats", COLUMNS);
@@ -286,9 +359,30 @@ export function StatsView({ initial, initialReview, clients }: { initial: StatsD
   };
 
   const len = daysBetween(data.from, data.to);
-  const needle = q.trim().toLowerCase();
+  // Typing in search stays smooth: the table catches up a frame later.
+  const needle = useDeferredValue(q).trim().toLowerCase();
   // The weekly review's call on each domain, for the same range.
   const calls = useMemo(() => new Map(review.domains.map((d) => [d.id, judge(d)])), [review]);
+  // Every domain's totals, reputation, call and trends, worked out once per
+  // load: filters, sorting and opening rows only pick from this.
+  const base = useMemo(() => {
+    const byId = new Map<string, Row>(data.domains.map((d) => [d.id, { ...d, ...zero(), reputation: null, call: calls.get(d.id) ?? null, trends: [] }]));
+    const reps = new Map<string, [number, number]>();
+    for (const x of data.days) {
+      const r = byId.get(x.d);
+      if (!r) continue;
+      addInto(r, x);
+      if (x.rep != null) { const a = reps.get(x.d) ?? [0, 0]; a[0] += x.rep; a[1]++; reps.set(x.d, a); }
+    }
+    for (const [id, [sum, n]] of reps) byId.get(id)!.reputation = sum / n;
+    for (const r of byId.values()) {
+      r.trends = trendsOf({
+        sent: r.sent, replies: r.replies, bounces: r.bounces, prevSent: r.prevSent, prevReplies: r.prevReplies, prevBounces: r.prevBounces,
+        rep: r.reputation, prevRep: r.prevRep, quietDays: r.call?.quietDays ?? null, neverReplied: r.call?.neverReplied ?? false, sentSinceReply: r.call?.sentSinceReply ?? 0,
+      }, len);
+    }
+    return byId;
+  }, [data.domains, data.days, calls, len]);
   // Sent in the range. "Sending only" hides the rest, except while picking a
   // review call, which can be about domains that sent nothing (disconnected).
   const sentIn = useMemo(() => {
@@ -297,6 +391,7 @@ export function StatsView({ initial, initialReview, clients }: { initial: StatsD
     return m;
   }, [data.days]);
   const { visible, options } = useMemo(() => {
+    const trendMatches = (list: Trend[]) => !trend || list.some((x) => (trend === "bad" ? BAD_TRENDS.includes(x.key) : x.key === trend));
     const callMatches = (j: Judged | undefined) => !call || (!!j && (call === "attention" ? ATTENTION.includes(j.verdict) : j.verdict === call));
     // Every filter but the one skipped, so each menu counts what picking an option would leave.
     const passes = (d: StatDomain, skip?: Facet) =>
@@ -307,6 +402,7 @@ export function StatsView({ initial, initialReview, clients }: { initial: StatsD
       (skip === "esp" || !esp || (d.esp ?? "") === esp) &&
       (skip === "sender" || !sender || d.senders.includes(sender)) &&
       (skip === "sl" || slMatches(d, sl)) &&
+      (skip === "trend" || trendMatches(base.get(d.id)?.trends ?? [])) &&
       (!needle || d.name.includes(needle) || !!d.clientName?.toLowerCase().includes(needle) || d.allTags.some((t) => t.toLowerCase().includes(needle)) ||
         d.senders.some((s) => s.toLowerCase().includes(needle)));
     const sendingOk = (d: StatDomain, skip?: Facet) => !onlySending || skip === "call" || !!call || (sentIn.get(d.id) ?? 0) > 0;
@@ -325,10 +421,12 @@ export function StatsView({ initial, initialReview, clients }: { initial: StatsD
       }
     }
     const verdicts = count("call", (d) => { const j = calls.get(d.id); return j ? [j.verdict] : []; });
+    const trendCounts = count("trend", (d) => { const l = base.get(d.id)?.trends ?? []; return [...l.map((x) => x.key as string), ...(l.some((x) => BAD_TRENDS.includes(x.key)) ? ["bad"] : [])]; });
     return {
       visible: data.domains.filter((d) => passes(d)),
       options: {
         verdicts,
+        trends: trendCounts,
         attention: ATTENTION.reduce((a, x) => a + (verdicts.get(x) ?? 0), 0),
         tags: [...tags].sort((a, b) => a[1].label.localeCompare(b[1].label)),
         esps: [...count("esp", (d) => [d.esp ?? ""])].sort((a, b) => a[0].localeCompare(b[0])),
@@ -336,24 +434,16 @@ export function StatsView({ initial, initialReview, clients }: { initial: StatsD
         sl: new Map(SL_FILTERS.map(([k]) => [k, data.domains.filter((d) => passes(d, "sl") && sendingOk(d, "sl") && slMatches(d, k)).length])),
       },
     };
-  }, [data.domains, clientId, standing, needle, call, calls, tag, esp, sender, sl, sentIn, onlySending]);
-  const filtering = !!(call || tag || esp || sender || sl !== "in");
-  const clearFilters = () => { setCall(""); setTag(""); setEsp(""); setSender(""); setSl("in"); };
+  }, [data.domains, clientId, standing, needle, call, calls, tag, esp, sender, sl, trend, base, sentIn, onlySending]);
+  const filtering = !!(call || tag || esp || sender || trend || sl !== "in");
+  const clearFilters = () => { setCall(""); setTag(""); setEsp(""); setSender(""); setTrend(""); setSl("in"); };
 
   const rows = useMemo(() => {
-    const byId = new Map<string, Row>(visible.map((d) => [d.id, { ...d, ...zero(), reputation: null, call: calls.get(d.id) ?? null }]));
-    const reps = new Map<string, number[]>();
-    for (const x of data.days) {
-      const r = byId.get(x.d);
-      if (!r) continue;
-      addInto(r, x);
-      if (x.rep != null) reps.set(x.d, [...(reps.get(x.d) ?? []), x.rep]);
-    }
-    for (const [id, list] of reps) byId.get(id)!.reputation = list.reduce((a, b) => a + b, 0) / list.length;
-    return [...byId.values()]
-      .filter((r) => !onlySending || !!call || r.sent > 0)
-      .sort((a, b) => cmp(sortValue(a, sort.key, len), sortValue(b, sort.key, len), sort.dir) || a.name.localeCompare(b.name));
-  }, [visible, data.days, onlySending, call, calls, sort, len]);
+    // Each row's sort value is worked out once, not on every comparison.
+    const keyed = visible.map((d) => base.get(d.id)!).filter((r) => !onlySending || !!call || r.sent > 0).map((r) => ({ r, v: sortValue(r, sort.key, len) }));
+    keyed.sort((a, b) => cmp(a.v, b.v, sort.dir) || a.r.name.localeCompare(b.r.name));
+    return keyed.map((x) => x.r);
+  }, [visible, base, onlySending, call, sort, len]);
 
   const days = useMemo(() => {
     const ids = new Set(visible.map((d) => d.id));
@@ -372,7 +462,7 @@ export function StatsView({ initial, initialReview, clients }: { initial: StatsD
   }, [visible, data.days, data.from, len, daySort]);
 
   const groups = useMemo(() => {
-    if (!byClient) return [{ key: "all", name: null as string | null, hue: null as number | null, rows }];
+    if (!byClient) return [{ key: "all", name: null as string | null, hue: null as number | null, rows, t: null as Totals | null }];
     const map = new Map<string, { key: string; name: string | null; hue: number | null; rows: Row[] }>();
     for (const r of rows) {
       const k = r.clientId ?? "none";
@@ -380,8 +470,14 @@ export function StatsView({ initial, initialReview, clients }: { initial: StatsD
       g.rows.push(r);
       map.set(k, g);
     }
-    return [...map.values()].sort((a, b) => cmp(groupValue(a, sort.key, len), groupValue(b, sort.key, len), sort.dir) || (a.name ?? "").localeCompare(b.name ?? ""));
+    // A client's totals once, for its summary row and for sorting.
+    const list = [...map.values()].map((g) => ({ ...g, t: { ...total(g.rows), reputation: avgRep(g.rows) } as Totals }));
+    const v = new Map(list.map((g) => [g.key, groupValue(g, sort.key, len)]));
+    return list.sort((a, b) => cmp(v.get(a.key)!, v.get(b.key)!, sort.dir) || (a.name ?? "").localeCompare(b.name ?? ""));
   }, [rows, byClient, sort, len]);
+  // Shift-click picks every domain between two, in the order they're shown.
+  const shownIds = useMemo(() => groups.flatMap((g) => (!byClient || openClients.has(g.key) ? g.rows.map((r) => r.id) : [])), [groups, byClient, openClients]);
+  const pickRow = useRangeSelect(shownIds, setSelected);
 
   const perClient = useMemo(() => clientDays(visible, data.days), [visible, data.days]);
   const copyClients = () => {
@@ -391,11 +487,11 @@ export function StatsView({ initial, initialReview, clients }: { initial: StatsD
     );
   };
 
-  const t = total(rows);
+  const t = useMemo(() => total(rows), [rows]);
   const showClient = !byClient && on("client");
   const showCall = on("call") || !!call;
   const colCount = 1 + (showClient ? 1 : 0) + (showCall ? 1 : 0) + COLUMNS.filter((c) => c.key !== "client" && c.key !== "call" && on(c.key)).length;
-  const selectedRows = rows.filter((r) => selected.has(r.id));
+  const selectedRows = useMemo(() => rows.filter((r) => selected.has(r.id)), [rows, selected]);
   const allSelected = rows.length > 0 && rows.every((r) => selected.has(r.id));
   const allOpen = byClient && groups.length > 0 && groups.every((g) => openClients.has(g.key));
   const toggleAll = () => setOpenClients(allOpen ? new Set() : new Set(groups.map((g) => g.key)));
@@ -403,6 +499,32 @@ export function StatsView({ initial, initialReview, clients }: { initial: StatsD
   const sortBy = (key: SortKey) => setSort((s) => flip(s, key, key === "name" || key === "client" || key === "status"));
   const sortDay = (key: DayKey) => setDaySort((s) => flip(s, key, false));
   const rangeLabel = data.from === data.to ? nice(data.from) : `${nice(data.from)} – ${nice(data.to)}`;
+
+  const toggleRow = useCallback((id: string) => setOpenRows((s) => { const n = new Set(s); if (n.has(id)) n.delete(id); else n.add(id); return n; }), []);
+  const openReplace = useCallback((id: string) => setReplaceIds([id]), []);
+  // Replace takes active or warming domains that aren't already being replaced (the server's rule too).
+  const replaceable = useMemo(() => selectedRows.filter((r) => canReplace(r.status, r.beingReplaced)), [selectedRows]);
+  const replaceTargets = useMemo<ReplaceTarget[]>(() => (replaceIds ?? []).flatMap((id) => {
+    const d = base.get(id);
+    return d ? [{ id, name: d.name, tld: d.tld, clientName: d.clientName, clientHue: d.clientHue }] : [];
+  }), [replaceIds, base]);
+  // The reason the window starts on: bounces when that's what's wrong, otherwise "other".
+  const replaceReason = useMemo(() => {
+    const list = replaceIds ?? [];
+    return list.some((id) => (base.get(id)?.trends ?? []).some((x) => x.key === "bouncesUp") || (base.get(id)?.bounces ?? 0) / Math.max(1, base.get(id)?.sent ?? 0) >= 0.03) ? "high_bounce" as const : "other" as const;
+  }, [replaceIds, base]);
+  // A started replacement changes the domains' state: fetch the range again.
+  const reloadSoon = () => load(data.from, data.to);
+
+  // The bounce panel under a row is as wide as the visible table, not the whole scrolling one.
+  const scrollRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    const ro = new ResizeObserver(() => el.style.setProperty("--st-w", `${el.clientWidth}px`));
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
 
   const exportCsv = () => {
     if (view === "clients") {
@@ -466,6 +588,12 @@ export function StatsView({ initial, initialReview, clients }: { initial: StatsD
           <option value="attention">Needs attention ({options.attention})</option>
           {VERDICT_ORDER.map((x) => <option key={x} value={x}>{VERDICT_META[x].label} ({options.verdicts.get(x) ?? 0})</option>)}
         </select>
+        <select className="select rv-filter" data-on={trend ? true : undefined} value={trend} onChange={(e) => setTrend(e.target.value as TrendFilter)} aria-label="Filter by trend"
+          title="Against the same number of days before: replies, bounces and warmup reputation going up or down, and days without a reply">
+          <option value="">All trends</option>
+          <option value="bad">Getting worse ({options.trends.get("bad") ?? 0})</option>
+          {TREND_ORDER.map((k) => <option key={k} value={k}>{TREND_META[k].label} ({options.trends.get(k) ?? 0})</option>)}
+        </select>
         <select className="select rv-filter" data-on={tag ? true : undefined} value={tag} onChange={(e) => setTag(e.target.value)} aria-label="Filter by tag">
           <option value="">All tags</option>
           {options.tags.map(([k, x]) => <option key={k} value={k}>{x.label} ({x.n})</option>)}
@@ -507,7 +635,7 @@ export function StatsView({ initial, initialReview, clients }: { initial: StatsD
       </div>
 
       <div className="table-wrap" style={{ opacity: loading ? 0.6 : 1, transition: "opacity 120ms" }}>
-        <div className="table-scroll" style={{ maxHeight: "calc(100dvh - 250px)", minHeight: 280 }}>
+        <div className="table-scroll" ref={scrollRef} style={{ maxHeight: "calc(100dvh - 250px)", minHeight: 280 }}>
           {view === "domain" ? (
             <table className="data-table is-main">
               <thead>
@@ -524,6 +652,7 @@ export function StatsView({ initial, initialReview, clients }: { initial: StatsD
                   </th>
                   {showClient ? <SortTh k="client" sort={sort} onSort={sortBy}>Client</SortTh> : null}
                   {showCall ? <SortTh k="call" sort={sort} onSort={sortBy} title="The weekly review's call for this range; hover a call for why">Call</SortTh> : null}
+                  {on("trend") ? <SortTh k="trend" sort={sort} onSort={sortBy} title="Days without a reply, and replies, bounces and warmup reputation against the same number of days before. Hover a tag for the numbers">Trend</SortTh> : null}
                   {on("sender") ? <SortTh k="sender" sort={sort} onSort={sortBy} title="Sender names on the domain's connected inboxes">Sender</SortTh> : null}
                   {on("tags") ? <SortTh k="tags" sort={sort} onSort={sortBy} title="The domain's tags and the Smartlead tags on its inboxes">Tags</SortTh> : null}
                   {on("esp") ? <SortTh k="esp" sort={sort} onSort={sortBy}>ESP</SortTh> : null}
@@ -556,54 +685,17 @@ export function StatsView({ initial, initialReview, clients }: { initial: StatsD
                           </span>
                         </td>
                         {showCall ? <td /> : null}
+                        {on("trend") ? <td /> : null}
                         {on("sender") ? <td /> : null}
                         {on("tags") ? <td /> : null}
                         {on("esp") ? <td /> : null}
-                        <Cells r={{ ...total(g.rows), reputation: avgRep(g.rows) }} len={len} on={on} agg />
+                        <Cells r={g.t ?? total(g.rows)} len={len} on={on} agg />
                         {on("advice") ? <td className="st-start" /> : null}
                       </tr>
                     ) : null}
                     {(!byClient || openClients.has(g.key)) && g.rows.map((r, i) => (
-                      <Fragment key={r.id}>
-                      <tr className={r.sent ? undefined : "st-idle"} data-selected={selected.has(r.id)}>
-                        <td className="col-first" style={byClient ? { paddingLeft: 14 } : undefined}>
-                          <span className="flex items-center gap-2">
-                            <input type="checkbox" className="checkbox" aria-label={`Select ${r.name}`} checked={selected.has(r.id)} onChange={() => flipIn(setSelected, r.id)} />
-                            <button type="button" className="st-expand" aria-expanded={openRows.has(r.id)} aria-label={`${openRows.has(r.id) ? "Hide" : "Show"} bounce reasons and suggestions for ${r.name}`}
-                              title="Bounce reasons and what to do" onClick={() => flipIn(setOpenRows, r.id)}>
-                              <ChevronRight size={13} style={{ transform: openRows.has(r.id) ? "rotate(90deg)" : undefined }} />
-                            </button>
-                            <span className="st-n">{i + 1}</span>
-                            <DomainLink id={r.id} tab="stats" className="strong hover:underline">{r.name}</DomainLink>
-                            {/* Status only when it isn't the usual Active. */}
-                            {r.status !== "active" ? <StatusDot status={r.status} /> : null}
-                            <SlBadge c={r} quiet />
-                          </span>
-                        </td>
-                        {showClient ? <td><ClientCell name={r.clientName} hue={r.clientHue} /></td> : null}
-                        {showCall ? (
-                          <td title={r.call?.why}>
-                            {r.call ? <Badge tone={VERDICT_META[r.call.verdict].tone === "faint" ? undefined : VERDICT_META[r.call.verdict].tone}>{VERDICT_META[r.call.verdict].label}</Badge> : <span className="zero">—</span>}
-                          </td>
-                        ) : null}
-                        {on("sender") ? (
-                          <td className="truncate" style={{ maxWidth: 180 }} title={r.senders.join(", ") || undefined}>
-                            {r.senders.length ? <>{r.senders[0]}{r.senders.length > 1 ? <span className="text-faint"> +{r.senders.length - 1}</span> : null}</> : <span className="zero">—</span>}
-                          </td>
-                        ) : null}
-                        {on("tags") ? (
-                          <td title={r.allTags.join(", ") || undefined}>
-                            {r.allTags.length ? <span className="inline-flex items-center gap-1"><TagList tags={r.allTags} max={3} /></span> : <span className="zero">—</span>}
-                          </td>
-                        ) : null}
-                        {on("esp") ? <td className="text-muted text-[12px]">{r.esp ?? <span className="zero">—</span>}</td> : null}
-                        <Cells r={r} len={len} on={on} />
-                        {on("advice") ? <td className="st-start st-advice-cell"><AdviceCell call={r.call} /></td> : null}
-                      </tr>
-                      {openRows.has(r.id) ? (
-                        <tr className="st-insight-row"><td colSpan={colCount}><DomainInsight id={r.id} call={r.call} from={data.from} to={data.to} sent={r.sent} bounces={r.bounces} /></td></tr>
-                      ) : null}
-                      </Fragment>
+                      <DomainRow key={r.id} r={r} i={i} byClient={byClient} showClient={showClient} showCall={showCall} on={on} len={len} colCount={colCount}
+                        from={data.from} to={data.to} selected={selected.has(r.id)} open={openRows.has(r.id)} onPick={pickRow} onToggle={toggleRow} onReplace={openReplace} />
                     ))}
                     {byClient && openClients.has(g.key) ? <tr className="st-gap" aria-hidden><td colSpan={colCount} /></tr> : null}
                   </Fragment>
@@ -664,6 +756,11 @@ export function StatsView({ initial, initialReview, clients }: { initial: StatsD
       {view === "domain" && selected.size > 0 ? (
         <div className="bulk-bar" role="toolbar" aria-label="Selected domains">
           <span className="bulk-count">{selected.size} selected</span>
+          <button type="button" className="btn btn-sm btn-primary" disabled={!replaceable.length}
+            title={replaceable.length ? "Swap the selected domains for free ones from storage" : "Only active or warming domains that aren't already being replaced"}
+            onClick={() => setReplaceIds(replaceable.map((d) => d.id))}>
+            <ArrowLeftRight size={14} /> Replace{replaceable.length && replaceable.length !== selected.size ? ` (${int(replaceable.length)})` : ""}
+          </button>
           <ConfigureDomains domainIds={[...selected]} />
           <WarmingButtons rows={data.domains.filter((d) => selected.has(d.id))} onDone={() => setSelected(new Set())} />
           <span className="sep" />
@@ -676,6 +773,9 @@ export function StatsView({ initial, initialReview, clients }: { initial: StatsD
           <button type="button" className="btn btn-sm" aria-label="Clear selection" onClick={() => setSelected(new Set())}><X size={14} /></button>
         </div>
       ) : null}
+
+      <ReplaceDialog open={replaceIds !== null} onOpenChange={(o) => { if (!o) setReplaceIds(null); }} targets={replaceTargets} defaultReason={replaceReason}
+        onDone={() => { setSelected(new Set()); reloadSoon(); }} />
     </div>
   );
 }

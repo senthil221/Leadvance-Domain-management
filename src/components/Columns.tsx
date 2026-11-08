@@ -46,7 +46,7 @@ export function useColumns<K extends string>(table: string, defs: ColumnDef<K>[]
   return { on, hidden, toggle, reset, defs, count: defs.length - hidden.size };
 }
 
-export function ColumnsMenu<K extends string>({ cols }: { cols: ReturnType<typeof useColumns<K>> }) {
+export function ColumnsMenu<K extends string>({ cols, widths }: { cols: ReturnType<typeof useColumns<K>>; widths?: { customized: boolean; reset: () => void } }) {
   return (
     <DropdownMenu.Root>
       <DropdownMenu.Trigger asChild>
@@ -64,6 +64,9 @@ export function ColumnsMenu<K extends string>({ cols }: { cols: ReturnType<typeo
           ))}
           <DropdownMenu.Separator className="menu-sep" />
           <DropdownMenu.Item className="menu-item" onSelect={(e) => { e.preventDefault(); cols.reset(); }}>Reset to default</DropdownMenu.Item>
+          {widths ? (
+            <DropdownMenu.Item className="menu-item" disabled={!widths.customized} onSelect={(e) => { e.preventDefault(); widths.reset(); }}>Reset column widths</DropdownMenu.Item>
+          ) : null}
         </DropdownMenu.Content>
       </DropdownMenu.Portal>
     </DropdownMenu.Root>

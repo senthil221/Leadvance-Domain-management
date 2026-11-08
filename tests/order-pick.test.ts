@@ -21,7 +21,7 @@ vi.mock("../src/lib/db", async () => {
 });
 
 const { sql } = await import("../src/lib/db");
-const { getDomainDetail, listDomains, listInboxes } = await import("../src/lib/queries");
+const { getDomainDetail, getStats, listDomains, listInboxes } = await import("../src/lib/queries");
 
 let pg: PGlite;
 let server: PGLiteSocketServer;
@@ -154,16 +154,17 @@ describe("whether Replace is offered", () => {
       domains: (await row(old)).beingReplaced,
       sheet: (await getDomainDetail(old))?.domain.beingReplaced,
       inboxes: (await inbox(old)).domainBeingReplaced,
+      performance: (await getStats("2026-11-02", "2026-11-08")).domains.find((d) => d.id === old)?.beingReplaced,
     });
-    expect(await flags()).toEqual({ domains: false, sheet: false, inboxes: false });
+    expect(await flags()).toEqual({ domains: false, sheet: false, inboxes: false, performance: false });
 
     const [b] = await sql<{ id: string }[]>`select start_replacement(array[${old}]::uuid[], array[${fresh.id}]::uuid[], 'other', null, 'test') as id`;
-    expect(await flags()).toEqual({ domains: true, sheet: true, inboxes: true });
+    expect(await flags()).toEqual({ domains: true, sheet: true, inboxes: true, performance: true });
     // The domain coming in isn't being replaced itself.
     expect((await row(fresh.id)).beingReplaced).toBe(false);
 
     // Finished (say the old domain was put back to active afterwards): it can be replaced again.
     await sql`update replacement_items set completed_at = now() where batch_id = ${b.id}`;
-    expect(await flags()).toEqual({ domains: false, sheet: false, inboxes: false });
+    expect(await flags()).toEqual({ domains: false, sheet: false, inboxes: false, performance: false });
   });
 });
