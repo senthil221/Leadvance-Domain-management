@@ -328,12 +328,23 @@ stateDiagram-v2
     domain moves it to provisioning;
   - Done on a manual replacement completes that pair's inbox step.
 
+**Which order counts:** a domain can have several orders. The
+`domain_hypertide_order` view (0039) picks one, the same way for every page:
+
+1. it matches orders by domain id or by name;
+2. an order still listed beats one that's gone;
+3. Done beats the rest, cancelled comes last;
+4. ties go to the order seen most recently.
+
+`domain_standing` reads the pick as it is. Domains, the domain sheet and
+Inboxes only use it while it's still listed.
+
 **Where the same words are checked:**
 
 | Check | Places |
 |---|---|
 | Done, not gone | `actions.ts` (`loadReplaceOptions`, `startReplacement`), `jobs/replacements.ts`, `jobs/hypertide-sync.ts` |
-| Cancelled = NPC or Cancelled | `hypertide-sync.ts` (twice), `domain_standing` (0029), `replace_dropped_domains` (0036 and 0037), `queries.ts` `listInboxes`, `htOf` |
+| Cancelled = NPC or Cancelled | `hypertide-sync.ts` (twice), `domain_hypertide_order` and `domain_standing` (0039), `replace_dropped_domains` (0036 and 0037), `htOf` |
 | Recovery pool = `/recovery/i` on payment | `inRecoveryPool`, used by `lifeOf` and `htOf` |
 
 `htOf` used to recognise only NPC as cancelled. A Cancelled order showed as a
@@ -475,17 +486,14 @@ same values as before:
 None of these is made in this change: each would change what someone sees or
 what the app does.
 
-1. **Pick one Hypertide order per domain everywhere.**
-   - `listDomains` (the Domains Hypertide column) takes the latest order that
-     isn't gone.
-   - `domain_standing` and `listInboxes` let a Done order win.
-   - So a domain with an old cancelled order and a newer Done one can show
-     Cancelled on Domains and Active everywhere else.
-   - Use the `domain_standing` ordering in `listDomains`.
-2. **Use `domain_standing.order_state` in `listInboxes`.** It has its own copy
-   of the order-state CASE, which has no gone state, so an Icemail domain that
-   Icemail stopped listing shows as missing instead. `OrderState` in
-   `queries.ts` also has no gone.
+1. **Done: one Hypertide order per domain everywhere.** The
+   `domain_hypertide_order` view (0039) holds the pick `domain_standing` used.
+   `domain_standing`, the Domains page and the domain sheet all read it now, so
+   a Done order wins over a newer cancelled one on Domains too. Pinned by
+   `tests/order-pick.test.ts`.
+2. **Done: Inboxes takes its order state from `domain_standing`.** Its own copy
+   of the rules is gone. An order the provider no longer lists now shows as
+   "Order ended" instead of "No order". `OrderState` includes gone.
 3. **Add SQL helpers for the vendor words**, for example
    `ht_order_live(hypertide_orders)`, `ht_order_done(...)` and
    `icemail_mailbox_ended(...)`. Then use them in `domain_standing`,

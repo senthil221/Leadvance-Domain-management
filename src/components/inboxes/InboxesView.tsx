@@ -94,6 +94,7 @@ function reasonsOf(g: Group): Reason[] {
 const ORDER_META: Record<Exclude<OrderState, "active">, { label: string; tone: "danger" | "warning"; hint: string }> = {
   cancelled: { label: "Order cancelled", tone: "danger", hint: "The order is cancelled at the provider (NPC in Hypertide's API): the inboxes are going or gone" },
   pending: { label: "Order not done", tone: "warning", hint: "The order isn't done at the provider yet" },
+  gone: { label: "Order ended", tone: "danger", hint: "The provider no longer lists this domain's order: it was removed or moved to another domain" },
   replaced: { label: "Replaced at Hypertide", tone: "danger", hint: "Hypertide moved this domain's order onto another domain" },
   missing: { label: "No order", tone: "danger", hint: "No live order for this domain at the provider" },
 };

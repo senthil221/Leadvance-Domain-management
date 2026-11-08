@@ -308,9 +308,8 @@ export async function listDomains() {
       select x.* from icemail_domains x where x.domain_id = d.id and x.gone_at is null order by x.last_seen_at desc limit 1) ix on true
     left join domain_health_7d h on h.domain_id = d.id
     left join smartlead_domain_7d s7 on s7.domain_name = d.name
-    left join lateral (
-      select o.status, o.payment_status from hypertide_orders o
-      where o.domain_id = d.id and o.gone_at is null order by o.last_seen_at desc limit 1) ho on true
+    -- The same order domain_standing goes by, while Hypertide still lists it (0039).
+    left join domain_hypertide_order ho on ho.domain_id = d.id and ho.gone_at is null
     left join lateral (
       select r.status, r.message, r.target from nameserver_requests r
       where r.domain_id = d.id and r.created_at > now() - interval '14 days' order by r.created_at desc limit 1) nr on true
@@ -444,9 +443,7 @@ export async function getDomainDetail(id: string): Promise<DomainDetail | null> 
       select x.* from icemail_domains x where x.domain_id = d.id and x.gone_at is null order by x.last_seen_at desc limit 1) ix on true
     left join domain_health_7d h on h.domain_id = d.id
     left join smartlead_domain_7d s7 on s7.domain_name = d.name
-    left join lateral (
-      select o.status, o.payment_status from hypertide_orders o
-      where o.domain_id = d.id and o.gone_at is null order by o.last_seen_at desc limit 1) ho on true
+    left join domain_hypertide_order ho on ho.domain_id = d.id and ho.gone_at is null
     left join lateral (
       select r.status, r.message, r.target from nameserver_requests r
       where r.domain_id = d.id order by r.created_at desc limit 1) nr on true
@@ -731,11 +728,12 @@ export type InboxListRow = InboxRow & {
 };
 
 /**
- * A domain's order at Hypertide or Icemail: active (Done at Hypertide, active
- * at Icemail), not done yet, cancelled (NPC or Cancelled), moved onto another
- * domain by a Hypertide replacement, or no live order at all.
+ * A domain's order at Hypertide or Icemail, as domain_standing.order_state
+ * says: active (Done at Hypertide, active at Icemail), not done yet, cancelled
+ * (NPC or Cancelled), no longer listed by the provider, moved onto another
+ * domain by a Hypertide replacement, or no order at all.
  */
-export type OrderState = "active" | "pending" | "cancelled" | "replaced" | "missing";
+export type OrderState = "active" | "pending" | "cancelled" | "gone" | "replaced" | "missing";
 
 export async function listInboxes() {
   return sql<InboxListRow[]>`
@@ -754,35 +752,14 @@ export async function listInboxes() {
       select domain_id, count(*)::int as n, count(*) filter (where status = 'disconnected')::int as disconnected
       from inboxes where status <> 'removed' group by domain_id
     ), ord as (
-      -- A Done order wins over an older cancelled one for the same domain.
-      -- Tenant default domains (*.onmicrosoft.com) never have an order of their own.
-      select d.id as domain_id, v.name as provider, ho.status as order_status,
-        case
-          when d.name like '%.onmicrosoft.com' then null
-          when v.name = 'Hypertide' then case
-            when ho.status = 'Done' then 'active'
-            when ho.status in ('NPC', 'Cancelled') then 'cancelled'
-            when ho.status is not null then 'pending'
-            when exists (select 1 from hypertide_orders o where o.replaced_domains @> array[d.name]) then 'replaced'
-            when exists (select 1 from hypertide_orders) then 'missing'
-          end
-          when v.name = 'Icemail' then case
-            when ix.active then 'active'
-            when ix.found then 'pending'
-            when exists (select 1 from icemail_accounts) then 'missing'
-          end
-        end as state
-      from domains d
-      join vendors v on v.id = d.inbox_provider_id
-      left join lateral (
-        select o.status from hypertide_orders o
-        where v.name = 'Hypertide' and (o.domain_id = d.id or o.domain_name = d.name) and o.gone_at is null
-        order by case when o.status = 'Done' then 0 when o.status in ('NPC', 'Cancelled') then 2 else 1 end, o.last_seen_at desc limit 1) ho on true
-      left join lateral (
-        select true as found, x.active from icemail_domains x
-        where v.name = 'Icemail' and x.domain_id = d.id and x.gone_at is null
-        order by x.active desc nulls last, x.last_seen_at desc limit 1) ix on true
-      where exists (select 1 from inboxes i where i.domain_id = d.id and i.status <> 'removed')
+      -- Where the order stands, as domain_standing says (it skips tenant
+      -- default domains, *.onmicrosoft.com), and Hypertide's own word for it.
+      select st.domain_id, st.provider, st.order_state as state,
+        case when st.provider = 'Hypertide' then ho.status end as order_status
+      from domain_standing st
+      left join domain_hypertide_order ho on ho.domain_id = st.domain_id and ho.gone_at is null
+      where st.provider is not null
+        and exists (select 1 from inboxes i where i.domain_id = st.domain_id and i.status <> 'removed')
     )
     select i.id, i.email, i.sender_name, i.status, i.warmup_enabled, i.warmup_per_day, i.warmup_rampup, i.daily_limit,
       i.warmup_reputation::float8 as warmup_reputation, i.smartlead_account_id, i.last_synced_at,
