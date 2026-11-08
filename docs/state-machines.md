@@ -437,7 +437,7 @@ stateDiagram-v2
 | `InboxSettingsDialog` | Three cards, each with busy and error. Limit mode is set, random or split. | |
 | `DiagnosisCard` | idle / running / error / has diagnosis. Feedback is right, wrong or none. | Feedback updates at once and rolls back if saving fails. |
 | `SyncPanel` | idle / one job running / a queue of jobs | |
-| `AutoRefresh` | On while some condition holds | Domains: while a nameserver request is pending or running (5 s). Replacements: while any pair isn't completed (10 s). |
+| `AutoRefresh` | On while some condition holds | Domains: while a nameserver request is pending or running (5 s). Replacements: `replacementsRefreshSeconds`, 10 s while a pair is moving and 60 s while every open pair waits on a person. |
 | `FreeDomainsView` Check nameservers | watching: refreshes every 5 s while a shown domain has no check date, for up to 5 minutes | |
 
 ---
@@ -517,9 +517,14 @@ what the app does.
    flags attention when any step is manual or failed, but `StepActions` acts on
    the current step. The worker only sets the current step, so this doesn't
    happen today, but basing both on the current step rules it out.
-7. **Stop Replacements polling forever.** It refreshes every 10 s while any
-   pair is open, including pairs waiting on a person (manual or failed).
-   Polling only while some step is pending or running would stop that.
+7. **Done: Replacements refreshes only as fast as the work moves.**
+   `replacementsRefreshSeconds` in `status.ts` decides:
+   - every 10 s while some open pair's current step is pending or running, or
+     the pair is finishing;
+   - once a minute while every open pair waits on a person, because a sync can
+     still move those (the Hypertide sync finishes an inbox step when the order
+     shows Done);
+   - not at all once every pair is done.
 8. **Free domains: tidy the Check nameservers watch.**
    - The watch is never switched off, so a domain added later with no check
      date starts the polling again.

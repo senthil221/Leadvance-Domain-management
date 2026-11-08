@@ -6,7 +6,7 @@ import { htOf, isDefaultNs, lifeOf, type Life } from "../src/lib/lifecycle";
 import { HT_CANCELLED, INBOX_STATUSES, NS_REQUEST_STATUSES, OPEN_QUEUE_STATUSES, SETTING_CHANGE_STATUSES } from "../src/lib/states";
 import {
   BATCH_STATUSES, DOMAIN_STATUSES, FORCED_MOVES, NEXT_STATUSES, REPLACEABLE_STATUSES, REPLACEMENT_REASONS, RETIRED_STATUSES, STEP_STATUSES,
-  canMove, canReplace, isStepFinished, stepWaitsOnPerson, type DomainStatus,
+  canMove, canReplace, currentStepStatus, isStepFinished, replacementsRefreshSeconds, stepWaitsOnPerson, type DomainStatus, type StepStatus,
 } from "../src/lib/status";
 
 // Every state machine in docs/state-machines.md has its states and moves in
@@ -174,6 +174,26 @@ describe("replacement steps", () => {
     const waiting = STEP_STATUSES.filter(stepWaitsOnPerson);
     expect(finished).toEqual(["done", "skipped"]);
     expect(waiting).toEqual(["failed", "manual"]);
+  });
+
+  it("Replacements refreshes fast while a pair is moving, slowly while all wait on a person, and not once all are done", () => {
+    const row = (steps: StepStatus[], completedAt: Date | null = null) =>
+      ({ stepNameservers: steps[0], stepInboxes: steps[1], stepSmartlead: steps[2], stepCampaigns: steps[3], completedAt });
+    const moving = row(["done", "running", "pending", "pending"]);
+    const queued = row(["done", "done", "pending", "pending"]);
+    const finishing = row(["done", "done", "done", "skipped"]);
+    const manual = row(["done", "manual", "pending", "pending"]);
+    const failed = row(["failed", "pending", "pending", "pending"]);
+    // A later step waiting doesn't matter: only the current one does.
+    const laterManual = row(["running", "manual", "pending", "pending"]);
+    const done = row(["done", "done", "done", "done"], new Date());
+
+    expect(replacementsRefreshSeconds([])).toBeNull();
+    expect(replacementsRefreshSeconds([done])).toBeNull();
+    for (const r of [moving, queued, finishing, laterManual]) expect(replacementsRefreshSeconds([done, manual, r])).toBe(10);
+    expect(replacementsRefreshSeconds([done, manual, failed])).toBe(60);
+    expect(currentStepStatus(manual)).toBe("manual");
+    expect(currentStepStatus(finishing)).toBeNull();
   });
 
   it("the current step is the first one not finished", () => {

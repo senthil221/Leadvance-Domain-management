@@ -104,6 +104,24 @@ export const isStepFinished = (s: string) => s === "done" || s === "skipped";
 /** Manual or failed: the worker leaves it until a person acts. */
 export const stepWaitsOnPerson = (s: string) => s === "manual" || s === "failed";
 
+/** The steps in the order they run, as the page rows name them. */
+export const STEP_KEYS = Object.keys(STEP_LABELS) as StepKey[];
+/** The status of a pair's current step: the first one not done or skipped. Null once every step is. */
+export const currentStepStatus = (r: Record<StepKey, StepStatus>) => STEP_KEYS.map((k) => r[k]).find((s) => !isStepFinished(s)) ?? null;
+
+/**
+ * How often Replacements refreshes. Every 10 seconds while some open pair is
+ * moving (its current step is pending or running, or it's finishing). Once a
+ * minute while every open pair waits on a person: a sync can still move those
+ * (the Hypertide sync finishes an inbox step when the order shows Done, every
+ * 5 minutes), and acting on the page refreshes it anyway. Never once all are done.
+ */
+export function replacementsRefreshSeconds(rows: readonly (Record<StepKey, StepStatus> & { completedAt: Date | string | null })[]): number | null {
+  const open = rows.filter((r) => !r.completedAt);
+  if (!open.length) return null;
+  return open.some((r) => !stepWaitsOnPerson(currentStepStatus(r) ?? "")) ? 10 : 60;
+}
+
 /**
  * A replacement batch (replacement_batches.status). Only running → completed
  * happens today: the worker completes a batch once every pair is finished.

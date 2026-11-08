@@ -5,6 +5,7 @@ import { ReplacementsView } from "@/components/replacements/ReplacementsView";
 import { PageHead, TableSkeleton } from "@/components/ui";
 import { getCurrentUser } from "@/lib/auth";
 import { listReplacements } from "@/lib/queries";
+import { replacementsRefreshSeconds } from "@/lib/status";
 
 export const metadata: Metadata = { title: "Replacements" };
 
@@ -24,10 +25,10 @@ export default function ReplacementsPage() {
 async function Replacements() {
   await getCurrentUser();
   const { rows, now, graceDays } = await listReplacements();
-  const running = rows.some((r) => !r.completedAt);
+  const refresh = replacementsRefreshSeconds(rows);
   return (
     <>
-      {running ? <AutoRefresh seconds={10} /> : null}
+      {refresh ? <AutoRefresh seconds={refresh} /> : null}
       <ReplacementsView rows={rows} now={now} graceDays={graceDays}
         smartleadLive={Boolean(process.env.SMARTLEAD_API_KEY) && process.env.INTEGRATIONS_DRY_RUN === "false"} />
     </>
