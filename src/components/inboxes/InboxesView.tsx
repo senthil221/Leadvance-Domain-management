@@ -21,7 +21,7 @@ import { MoveToTagDialog } from "./MoveToTagDialog";
 import { PlansCard } from "./PlansCard";
 import { ageLabel, ago, int } from "@/lib/format";
 import type { ClientRow, InboxListRow, OrderState, PlanRow } from "@/lib/queries";
-import { DOMAIN_STATUSES, type DomainStatus } from "@/lib/status";
+import { DOMAIN_STATUSES, REPLACEABLE_STATUSES, isOneOf, type DomainStatus } from "@/lib/status";
 
 // Six views of the sending setup. Active and Disconnected list inboxes under
 // their client and domain; the others list one line per domain.
@@ -560,7 +560,7 @@ export function InboxesView({ inboxes, clients, plans, smartleadConnected, dryRu
   const selectedStatuses = useMemo(() => selectedDomains.map((id) => ({ id, status: selectedRows.find((x) => x.domainId === id)!.domainStatus })), [selectedDomains, selectedRows]);
   const replaceTargets = useMemo(() => selectedDomains.flatMap((id) => {
     const i = selectedRows.find((x) => x.domainId === id)!;
-    return i.domainStatus === "active" || i.domainStatus === "warming" ? [{ id, name: i.domain, tld: i.domainTld, clientName: i.clientName, clientHue: i.clientHue }] : [];
+    return isOneOf(REPLACEABLE_STATUSES, i.domainStatus) ? [{ id, name: i.domain, tld: i.domainTld, clientName: i.clientName, clientHue: i.clientHue }] : [];
   }), [selectedDomains, selectedRows]);
   const current = useMemo(() => {
     const m = (f: (i: InboxListRow) => number | null) => avg(selectedRows.map(f).filter((x): x is number => x != null));

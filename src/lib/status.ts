@@ -21,8 +21,11 @@ export const STATUS_META: Record<DomainStatus, { label: string; tone: Tone; live
   resting: { label: "Resting", tone: "violet", hint: "Cooling off before going back to storage" },
 };
 
+// The domain lifecycle. See docs/state-machines.md for the diagram.
+
 // Moves the UI offers. Mirrors domain_transitions in the database, which is
-// the source of truth and rejects anything else.
+// the source of truth and rejects anything else unless the move is forced;
+// tests/state-machines.test.ts keeps the two identical.
 export const NEXT_STATUSES: Record<DomainStatus, DomainStatus[]> = {
   in_storage: ["provisioning"],
   provisioning: ["warming", "in_storage"],
@@ -32,6 +35,35 @@ export const NEXT_STATUSES: Record<DomainStatus, DomainStatus[]> = {
   burned: ["resting"],
   resting: ["in_storage"],
 };
+
+/** A move transition_domain() accepts without force. Staying put is always fine (it's a no-op). */
+export const canMove = (from: DomainStatus, to: DomainStatus) => from === to || NEXT_STATUSES[from].includes(to);
+
+/**
+ * Moves the app makes on its own with force, because they skip the normal
+ * path. Each is logged in domain_status_history with forced = true. None of
+ * these may be added to domain_transitions: the tests check they still need force.
+ */
+export const FORCED_MOVES: { from: DomainStatus[]; to: DomainStatus; by: string; why: string }[] = [
+  { from: ["in_storage", "provisioning"], to: "active", by: "smartlead sync", why: "Found sending in Smartlead (a daily limit is set)" },
+  { from: ["in_storage"], to: "warming", by: "smartlead sync", why: "Found in Smartlead with no daily limit yet" },
+  { from: ["active", "warming"], to: "burned", by: "auto replace (replace_dropped_domains)", why: "No inboxes left in Smartlead and nothing live at Hypertide or Icemail" },
+  { from: ["burned"], to: "active", by: "auto replace (replace_dropped_domains)", why: "Its inboxes came back in Smartlead, with a daily limit" },
+  { from: ["burned"], to: "warming", by: "auto replace (replace_dropped_domains)", why: "Its inboxes came back in Smartlead, no daily limit" },
+  { from: ["in_storage", "provisioning", "warming", "active"], to: "burned", by: "Mark as replaced (person)", why: "Recording old data" },
+  { from: ["in_storage", "provisioning", "warming", "active", "draining"], to: "resting", by: "Move to recovery (person)", why: "Resting a domain" },
+];
+
+/** Being set up or sending: what Expiring and Validate DNS count as in use. */
+export const IN_USE_STATUSES = ["provisioning", "warming", "active"] as const satisfies readonly DomainStatus[];
+/** What start_replacement() accepts as the old domain. */
+export const REPLACEABLE_STATUSES = ["active", "warming"] as const satisfies readonly DomainStatus[];
+/** The fleet bars on the Overview and per client, in the order they're drawn. */
+export const FLEET_STATUSES = ["active", "warming", "provisioning", "draining"] as const satisfies readonly DomainStatus[];
+/** Taken out of use here: domain_standing calls these retired, and Mark as replaced leaves them alone. */
+export const RETIRED_STATUSES = ["draining", "burned", "resting"] as const satisfies readonly DomainStatus[];
+
+export const isOneOf = <T extends string>(list: readonly T[], s: string | null | undefined): s is T => s != null && (list as readonly string[]).includes(s);
 
 export const REPLACEMENT_REASONS = {
   high_bounce: "High bounce rate",
@@ -51,7 +83,28 @@ export const STEP_LABELS = {
   stepCampaigns: "Campaigns",
 } as const;
 export type StepKey = keyof typeof STEP_LABELS;
-export type StepStatus = "pending" | "running" | "done" | "failed" | "skipped" | "manual";
+
+/**
+ * A replacement step (the step_status enum). The worker moves pending →
+ * running → done, or parks the step on manual (a person has to do it) or
+ * failed (Retry). A person can mark the current step done, skip it, or retry
+ * it (back to pending). See docs/state-machines.md.
+ */
+export const STEP_STATUSES = ["pending", "running", "done", "failed", "skipped", "manual"] as const;
+export type StepStatus = (typeof STEP_STATUSES)[number];
+/** Done or skipped: the pair moves on to the next step. */
+export const isStepFinished = (s: string) => s === "done" || s === "skipped";
+/** Manual or failed: the worker leaves it until a person acts. */
+export const stepWaitsOnPerson = (s: string) => s === "manual" || s === "failed";
+
+/**
+ * A replacement batch (replacement_batches.status). Only running → completed
+ * happens today: the worker completes a batch once every pair is finished.
+ * "partial" and "cancelled" are allowed by the column but nothing sets them;
+ * queries still skip cancelled batches so a hand-cancelled one drops out.
+ */
+export const BATCH_STATUSES = ["running", "completed", "partial", "cancelled"] as const;
+export type BatchStatus = (typeof BATCH_STATUSES)[number];
 
 // Reply types, in the order the filter lists them. "human" is a person
 // replying with interest or a question, shown as Interested.

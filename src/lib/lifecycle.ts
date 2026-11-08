@@ -1,5 +1,6 @@
 import type { DomainRow } from "./queries";
 import type { Tone } from "./status";
+import { HT_DONE, inRecoveryPool, isHtCancelled } from "./states";
 
 // Inventory wording for where a domain is in its life, where its nameservers
 // point and what Hypertide knows about it. Shared by server and client code.
@@ -21,8 +22,14 @@ export const LIFE_ORDER: Life[] = ["active", "setup", "free", "cooling", "replac
 /** The Inventory tabs. */
 export const LIFE_TABS: Life[] = ["active", "setup", "free", "cooling", "replaced", "recovery", "expired"];
 
-export const inRecoveryPool = (payment: string | null | undefined) => /recovery/i.test(payment ?? "");
+export { inRecoveryPool };
 
+/**
+ * The Inventory tab for a domain: a view over domains.status (see
+ * docs/state-machines.md), not a state of its own. Expired wins over
+ * everything; storage splits on the reuse cool-down; draining and burned are
+ * Replaced unless the domain sits in Hypertide's recovery pool.
+ */
 export function lifeOf(d: Pick<DomainRow, "status" | "htPayment"> & { coolingUntil?: Date | string | null; expired?: boolean }): Life {
   // Past its renewal date, it's expired whatever else it says: never Active or Free.
   if (d.expired) return "expired";
@@ -90,11 +97,12 @@ export function nsOf(d: Pick<DomainRow, "nameservers" | "nsRequestStatus" | "nsR
 export function htOf(d: Pick<DomainRow, "htOrderStatus" | "htPayment">): { label: string; tone: Tone } | null {
   if (!d.htOrderStatus && !d.htPayment) return null;
   const pay = (d.htPayment ?? "").toLowerCase();
-  if (pay.includes("recovery")) return { label: "Recovery pool", tone: "violet" };
+  if (inRecoveryPool(pay)) return { label: "Recovery pool", tone: "violet" };
   if (pay && !pay.startsWith("paid")) return { label: "Unpaid", tone: "warning" };
-  if (d.htOrderStatus === "Done") return { label: "Done", tone: "success" };
-  // The API's "NPC" is what Hypertide's dashboard shows as Cancelled: no longer billed.
-  if (d.htOrderStatus === "NPC") return { label: "Cancelled", tone: "faint" };
+  if (d.htOrderStatus === HT_DONE) return { label: "Done", tone: "success" };
+  // The API's "NPC" is what Hypertide's dashboard shows as Cancelled: no longer
+  // billed. Either word reads the same here, as it does in the SQL.
+  if (isHtCancelled(d.htOrderStatus)) return { label: "Cancelled", tone: "faint" };
   return { label: d.htOrderStatus ?? "Ordered", tone: "info" };
 }
 

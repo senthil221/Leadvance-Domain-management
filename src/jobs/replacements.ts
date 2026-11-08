@@ -3,6 +3,7 @@ import { buildOrderPayload, type Hypertide, type OrderTemplate, type SmartleadCr
 import type { Porkbun } from "../integrations/porkbun";
 import { accountName, applyNameservers, registrarFor, type RegistrarAccount } from "../integrations/registrars";
 import { API_REGISTRARS } from "../lib/registrar-providers";
+import { isStepFinished, stepWaitsOnPerson } from "../lib/status";
 import type { Smartlead } from "../integrations/smartlead";
 import type { SmartleadApp, SmartleadTag } from "../integrations/smartlead-app";
 
@@ -26,7 +27,7 @@ const COLUMN: Record<StepName, string> = {
   smartlead: "step_smartlead",
   campaigns: "step_campaigns",
 };
-const finished = (s: string) => s === "done" || s === "skipped";
+const finished = isStepFinished;
 
 type Item = {
   id: string;
@@ -166,7 +167,7 @@ export async function advanceItem(sql: Sql, ctx: StepContext, id: string, actor 
     const step = currentStep(item);
     if (!step) return;
     const state = item[step];
-    if (state === "manual" || state === "failed") return; // waiting on a person
+    if (stepWaitsOnPerson(state)) return;
 
     if (step === "nameservers") {
       // Hypertide reserves a pair per domain; ask once and keep it.

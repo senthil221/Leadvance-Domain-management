@@ -1,4 +1,5 @@
 import type { DomainRow } from "./queries";
+import { IN_USE_STATUSES, isOneOf } from "./status";
 
 // Domains in use whose registration is running out. The Active and Warming &
 // setup tabs of Domains are what counts as in use; domains in storage or already
@@ -9,7 +10,7 @@ export const LONGEST_WINDOW = EXPIRY_WINDOWS[EXPIRY_WINDOWS.length - 1];
 
 type Row = Pick<DomainRow, "status" | "daysToExpiry">;
 
-export const isInUse = (d: Pick<DomainRow, "status">) => d.status === "active" || d.status === "warming" || d.status === "provisioning";
+export const isInUse = (d: Pick<DomainRow, "status">) => isOneOf(IN_USE_STATUSES, d.status);
 
 /** In use, and past its date, inside the longest window, or with no date to go on. */
 export const isExpiryTracked = (d: Row) => isInUse(d) && (d.daysToExpiry === null || d.daysToExpiry <= LONGEST_WINDOW);

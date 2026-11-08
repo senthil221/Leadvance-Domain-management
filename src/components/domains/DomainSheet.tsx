@@ -10,7 +10,7 @@ import { Badge, ClientCell, Dot, Metric, Rep, Skeleton, StatusDot } from "@/comp
 import { ago, daysSince, int, shortDate } from "@/lib/format";
 import { DEAD_CAUSES } from "@/lib/dead";
 import type { DomainDetail } from "@/lib/queries";
-import { REPLACEMENT_REASONS, STATUS_META } from "@/lib/status";
+import { REPLACEABLE_STATUSES, REPLACEMENT_REASONS, STATUS_META, isOneOf } from "@/lib/status";
 
 export function DomainSheet({
   domainId,
@@ -55,7 +55,7 @@ export function DomainSheet({
                 </div>
               ) : null}
             </div>
-            {d && (d.domain.status === "active" || d.domain.status === "warming") && !d.lineage.replacedBy ? (
+            {d && isOneOf(REPLACEABLE_STATUSES, d.domain.status) && !d.lineage.replacedBy ? (
               <button type="button" className="btn btn-sm" onClick={() => onReplace(d.domain)}>
                 <ArrowLeftRight size={14} strokeWidth={1.5} /> Replace
               </button>

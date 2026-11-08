@@ -11,6 +11,7 @@ import { fixedDate, int } from "@/lib/format";
 import { EXPIRY_WINDOWS, autoRenewOf, expiryLabel, expiryTone, isWithin, needsAction } from "@/lib/expiring";
 import { htOf } from "@/lib/lifecycle";
 import type { DomainRow } from "@/lib/queries";
+import { REPLACEABLE_STATUSES, isOneOf } from "@/lib/status";
 
 // What's running out among the domains in use: how long is left, whether the
 // registrar will renew it, what's riding on it, and whether a swap has started.
@@ -105,7 +106,7 @@ export function ExpiringView({ domains, free }: { domains: DomainRow[]; free: nu
   }, [rows]);
 
   const selectedRows = useMemo(() => domains.filter((d) => selected.has(d.id)), [domains, selected]);
-  const replaceable = selectedRows.filter((d) => (d.status === "active" || d.status === "warming") && !d.replacedById);
+  const replaceable = selectedRows.filter((d) => isOneOf(REPLACEABLE_STATUSES, d.status) && !d.replacedById);
   const allShown = rows.length > 0 && rows.every((r) => selected.has(r.id));
   const someShown = rows.some((r) => selected.has(r.id));
   const toggle = (id: string) => setSelected((s) => { const n = new Set(s); if (n.has(id)) n.delete(id); else n.add(id); return n; });

@@ -9,7 +9,7 @@ import { jobSql, sql } from "@/lib/db";
 import { hypertideAcceptsDomain } from "@/integrations/hypertide";
 import { getDomainDetail, listStorageCandidates } from "@/lib/queries";
 import { MARK_CHOICES, normTag, parseSavedPairs, parseTagPairs } from "@/lib/tag-map";
-import { DOMAIN_STATUSES, REPLACEMENT_REASONS } from "@/lib/status";
+import { DOMAIN_STATUSES, REPLACEMENT_REASONS, RETIRED_STATUSES } from "@/lib/status";
 
 export type ActionResult<T = undefined> = { ok: true; data: T } | { ok: false; error: string };
 
@@ -103,7 +103,7 @@ export async function markReplaced(input: { ids: string[]; note?: string; to?: "
     const v = z.object({ ids, note: z.string().trim().max(300).optional(), to: z.enum(["replaced", "recovery"]).default("replaced") }).parse(input);
     const reason = `${v.to === "recovery" ? "Moved to recovery" : "Marked as replaced"}${v.note ? `: ${v.note}` : ""}`;
     const target = v.to === "recovery" ? "resting" : "burned";
-    const skip = v.to === "recovery" ? ["resting"] : ["draining", "burned", "resting"];
+    const skip: string[] = v.to === "recovery" ? ["resting"] : [...RETIRED_STATUSES];
     const rows = await sql.begin((tx) => tx<{ id: string }[]>`
       select (transition_domain(id, ${target}::domain_status, ${reason}, ${actor}, null, true)).id from domains
       where id in ${sql(v.ids)} and status::text <> all(${skip}::text[])`);

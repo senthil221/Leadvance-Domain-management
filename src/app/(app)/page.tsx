@@ -17,11 +17,9 @@ import { ago, int } from "@/lib/format";
 import { findings } from "@/lib/compare";
 import { getConnectionCheck, getInsights, getOverview, getReview, listDeadDomains, thisWeek, type Issues, type TrendDay } from "@/lib/queries";
 import { isCurrent } from "@/lib/review";
-import { STATUS_META, type DomainStatus, type Tone } from "@/lib/status";
+import { FLEET_STATUSES as FLEET_STATES, STATUS_META, type Tone } from "@/lib/status";
 
 export const metadata: Metadata = { title: "Overview" };
-
-const FLEET_STATES: DomainStatus[] = ["active", "warming", "provisioning", "draining"];
 
 export default function OverviewPage() {
   return (

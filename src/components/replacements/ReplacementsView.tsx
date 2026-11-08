@@ -10,16 +10,16 @@ import { ApprovePayment } from "@/components/replacements/ApprovePayment";
 import { StepActions } from "@/components/replacements/StepActions";
 import { ClientCell, Empty } from "@/components/ui";
 import type { ReplacementRow } from "@/lib/queries";
-import { REPLACEMENT_REASONS, STATUS_META, type StepStatus } from "@/lib/status";
+import { REPLACEMENT_REASONS, STATUS_META, isStepFinished as finished, stepWaitsOnPerson } from "@/lib/status";
 
 type StepName = "nameservers" | "inboxes" | "smartlead" | "campaigns";
 const STEP_COL = { nameservers: "stepNameservers", inboxes: "stepInboxes", smartlead: "stepSmartlead", campaigns: "stepCampaigns" } as const;
 const STEPS = Object.keys(STEP_COL) as StepName[];
-const finished = (s: StepStatus) => s === "done" || s === "skipped";
 
+// A pair's row state, derived from its steps (docs/state-machines.md).
 type State = "attention" | "progress" | "warming" | "live";
 function stateOf(r: ReplacementRow): State {
-  if (!r.completedAt && STEPS.some((s) => ["manual", "failed"].includes(r[STEP_COL[s]]))) return "attention";
+  if (!r.completedAt && STEPS.some((s) => stepWaitsOnPerson(r[STEP_COL[s]]))) return "attention";
   if (!r.completedAt) return "progress";
   return r.stepCampaigns === "done" ? "live" : "warming";
 }

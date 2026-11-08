@@ -8,10 +8,9 @@ import { ClientCell, Metric } from "@/components/ui";
 import { isSendingDay } from "@/lib/client-sending";
 import { int } from "@/lib/format";
 import type { ClientFleetRow, ClientInsight } from "@/lib/queries";
-import { STATUS_META, type DomainStatus } from "@/lib/status";
+import { FLEET_STATUSES as FLEET, STATUS_META } from "@/lib/status";
 
 type Key = "name" | "active" | "sent" | "replyRate" | "humanRate" | "bounceRate";
-const FLEET: DomainStatus[] = ["active", "warming", "provisioning", "draining"];
 const rate = (n: number, d: number) => (d > 0 ? (100 * n) / d : null);
 const value = (c: ClientInsight, k: Key): string | number | null =>
   k === "name" ? c.name.toLowerCase() : k === "replyRate" ? rate(c.replies, c.sent) : k === "humanRate" ? rate(c.human, c.sent) : k === "bounceRate" ? rate(c.bounces, c.sent) : c[k];

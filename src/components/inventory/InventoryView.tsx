@@ -19,6 +19,7 @@ import type { ClientRow, DomainRow } from "@/lib/queries";
 import { LIFE, LIFE_ORDER, LIFE_TABS, htOf, lifeOf, nsOf, type Life } from "@/lib/lifecycle";
 import { SlBadge } from "@/components/domains/SlStatus";
 import { SL_META, SL_ORDER, slState, slText, type SlState } from "@/lib/smartlead-state";
+import { REPLACEABLE_STATUSES, isOneOf } from "@/lib/status";
 
 // Ownership view of every domain: where it is in its life (free, setting up,
 // active, replaced, retired), where it is registered, where its nameservers
@@ -59,7 +60,7 @@ const sortValue = (d: DomainRow, k: SortKey): string | number | null => {
 
 const usd = (n: number) => `$${n.toFixed(n % 1 ? 2 : 0)}`;
 
-const replaceable = (d: DomainRow) => d.status === "active" || d.status === "warming";
+const replaceable = (d: DomainRow) => isOneOf(REPLACEABLE_STATUSES, d.status);
 
 export function InventoryView({ domains, clients }: { domains: DomainRow[]; clients: ClientRow[] }) {
   const params = useSearchParams();

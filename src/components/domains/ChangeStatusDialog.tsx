@@ -5,7 +5,7 @@ import { TriangleAlert } from "lucide-react";
 import { useMemo, useState, useTransition } from "react";
 import { toast } from "sonner";
 import { changeStatus } from "@/app/actions";
-import { DOMAIN_STATUSES, NEXT_STATUSES, STATUS_META, type DomainStatus } from "@/lib/status";
+import { DOMAIN_STATUSES, STATUS_META, canMove, type DomainStatus } from "@/lib/status";
 
 export function ChangeStatusDialog({
   open,
@@ -37,7 +37,7 @@ export function ChangeStatusDialog({
   }
 
   const blocked = useMemo(
-    () => (to ? targets.filter((t) => t.status !== to && !NEXT_STATUSES[t.status].includes(to)) : []),
+    () => (to ? targets.filter((t) => !canMove(t.status, to)) : []),
     [targets, to],
   );
   const force = blocked.length > 0;
