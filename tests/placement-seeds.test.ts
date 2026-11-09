@@ -20,6 +20,19 @@ describe("which auto-replies make a seed", () => {
     expect(seedReason("Jane is no longer with the firm. Your message has been forwarded to her manager.")?.forwards).toBe(true);
     expect(seedReason("I no longer work at Acme. This inbox is monitored by our office team.")?.forwards).toBe(true);
     expect(seedReason("I'm no longer with Acme, my new email is jane@new.com")?.forwards).toBe(true);
+    expect(seedReason("The person is no longer with Promier. Please note that this email is actively monitored.")?.forwards).toBe(true);
+    expect(seedReason("This email is no longer active but is being monitored periodically.")?.forwards).toBe(true);
+    expect(seedReason("Melissa is no longer with BGCWPA. Your email is being forward to the appropriate person.")?.forwards).toBe(true);
+    expect(seedReason("Julie is no longer with the company. Your message has been received and forwarded.")?.forwards).toBe(true);
+    // Saying it isn't monitored or forwarded doesn't count.
+    expect(seedReason("Please note that this inbox is no longer being monitored.")?.forwards).toBe(false);
+    expect(seedReason("I am no longer with Clean-Seas, and this email address is unmonitored.")?.forwards).toBe(false);
+    expect(seedReason("This account is not being actively monitored, and messages are not forwarded. Sam is no longer with us.")?.forwards).toBe(false);
+  });
+
+  it("leaves out a colleague writing about someone who left: a person reads that address", () => {
+    expect(seedReason("Adele no longer works for French Truck Coffee. Please remove her email. Myndi Savoy, Director of HR")).toBeNull();
+    expect(seedReason("Veronica no longer works at AdvisorLaw - please take her off of your mailing list. Best, Kerry")).toBeNull();
   });
 
   it("leaves out out-of-office and ordinary replies", () => {
@@ -27,6 +40,7 @@ describe("which auto-replies make a seed", () => {
     expect(seedReason("No longer with the team until Friday, I'll be back Monday.")).toBeNull();
     expect(seedReason("Sounds good, call me Tuesday.")).toBeNull();
     expect(seedReason("She has left a voicemail for you.")).toBeNull();
+    expect(seedReason("I have left the office for the weekend. If you need immediate attention, please call.")).toBeNull();
     expect(seedReason(null)).toBeNull();
   });
 });
@@ -118,6 +132,7 @@ describe("the placement-seeds job", () => {
     await event("reply", "bob@globex.com", "2026-11-02T10:00:00Z", "Bob has left the company. Mail is forwarded to his manager.", "auto");
     await event("reply", "sam@acme.com", "2026-11-02T10:00:00Z", "I'm out of office until Monday.", "ooo");
     await event("reply", "me@gmail.com", "2026-11-02T10:00:00Z", "I am no longer with Acme.", "auto");
+    await event("reply", "former-employee+noreply@acme.com", "2026-11-02T10:00:00Z", "The person is no longer with Acme.", "auto");
     await event("reply", "real@acme.com", "2026-11-02T10:00:00Z", "I'm no longer with the old team but happy to talk", "human");
     await sql`insert into untracked_replies (id, subject, sender_name, sender_email, body, received_at)
       values ('u1', 'Automatic reply: For Initech', 'Peter Gibbons', 'Peter@Initech.com', 'Peter is no longer employed at Initech. This mailbox is not monitored.', '2026-11-03T09:00:00Z'),
@@ -137,6 +152,18 @@ describe("the placement-seeds job", () => {
     // A second run adds nothing, and the failed lookup waits a day before it's tried again.
     const again = await syncPlacementSeeds(sql, { lookupMx, since });
     expect(again).toMatchObject({ seeds: 4, added: 0, lookedUp: 0, lookupErrors: 0 });
+  });
+
+  it("reads a year back and rebuilds the list when the rules have changed since the last run", async () => {
+    await event("reply", "jane@acme.com", "2026-11-01T10:00:00Z", "Jane is no longer with Acme.", "auto");
+    // Kept by older rules, and not a seed now.
+    await sql`insert into placement_seeds (email, domain, source, first_reply_at, last_reply_at) values ('alias2+noreply@acme.com', 'acme.com', 'reply', now(), now())`;
+    await sql`insert into job_state (job, last_ok, last_detail) values ('placement-seeds', true, ${sql.json({ scannedTo: new Date().toISOString(), rules: 1 })})
+      on conflict (job) do update set last_ok = true, last_detail = excluded.last_detail`;
+    const r = await syncPlacementSeeds(sql, { lookupMx });
+    expect(r).toMatchObject({ rebuilt: true, seeds: 1, rules: 2 });
+    expect((await seeds()).map((s) => s.email)).toEqual(["jane@acme.com"]);
+    await sql`delete from job_state where job = 'placement-seeds'`;
   });
 
   it("drops a seed once a person replies from it or an email to it bounces", async () => {

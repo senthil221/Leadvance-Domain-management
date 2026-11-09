@@ -15,10 +15,14 @@ resolver.setServers(["1.1.1.1", "8.8.8.8"]);
 const dnsMx: MxLookup = (domain) => resolver.resolveMx(domain);
 
 /** Cheap text match in the database before the real test in seedReason. */
-const PREFILTER = String.raw`no longer|longer (working|with)|has left|have left|left the|departed|retired|moved on|not (being )?(actively )?monitored|not in use`;
+const PREFILTER = String.raw`no longer|longer (working|with)|has left|have left|left the|departed|retired|moved on|monitored|not in use|not active`;
 /** Personal mailboxes: someone still reads them whatever the auto-reply says. */
 const FREEMAIL = /^(?:gmail|googlemail|outlook|hotmail|live|msn|yahoo|ymail|icloud|me|aol|proton|protonmail|gmx|mail|yandex|zoho)\.[a-z.]+$/;
+/** The address an auto-reply is sent from rather than the mailbox we wrote to ("former-employee+noreply@"). */
+const ALIAS = /(?:^|[._+-])(?:no-?reply|do-?not-?reply|auto-?respon\w*|auto-?reply|mailer-?daemon|postmaster|former-?(?:employee|staff)s?|formerstaff|alias\d*)(?:[._+-]|$)/;
 const AUTO = new Set(["auto", "ooo"]);
+/** Raised whenever the rules for what makes a seed change: the next run reads a year of replies again and rebuilds the list. */
+export const SEED_RULES = 2;
 const DAY = 86_400_000;
 
 type Candidate = {
@@ -27,17 +31,20 @@ type Candidate = {
 };
 
 const domainOf = (email: string) => email.split("@")[1] ?? "";
-const usable = (email: string | null) => !!email && /^[^@\s]+@[a-z0-9.-]+\.[a-z]{2,}$/.test(email) && !FREEMAIL.test(domainOf(email));
+const usable = (email: string | null) =>
+  !!email && /^[^@\s]+@[a-z0-9.-]+\.[a-z]{2,}$/.test(email) && !FREEMAIL.test(domainOf(email)) && !ALIAS.test(email.split("@")[0]);
 
 export async function syncPlacementSeeds(sql: postgres.Sql, { lookupMx = dnsMx, maxLookups = 300, since }: {
   lookupMx?: MxLookup; maxLookups?: number; since?: Date;
 } = {}) {
   const startedAt = new Date();
-  // Only what arrived since the last good run (with a day's overlap); a year back the first time.
+  // Only what arrived since the last good run (with a day's overlap); a year back the first time, or when the rules changed.
+  let rebuild = false;
   if (!since) {
-    const [state] = await sql<{ to: string | null }[]>`
-      select last_detail->>'scannedTo' as "to" from job_state where job = 'placement-seeds' and last_ok`;
-    since = state?.to ? new Date(new Date(state.to).getTime() - DAY) : new Date(startedAt.getTime() - 365 * DAY);
+    const [state] = await sql<{ to: string | null; rules: string | null }[]>`
+      select last_detail->>'scannedTo' as "to", last_detail->>'rules' as rules from job_state where job = 'placement-seeds' and last_ok`;
+    rebuild = !!state?.to && state.rules !== String(SEED_RULES);
+    since = state?.to && !rebuild ? new Date(new Date(state.to).getTime() - DAY) : new Date(startedAt.getTime() - 365 * DAY);
   }
 
   const found = new Map<string, Candidate>();
@@ -73,6 +80,8 @@ export async function syncPlacementSeeds(sql: postgres.Sql, { lookupMx = dnsMx, 
     if (why) add({ email: u.email, domain: domainOf(u.email), name: u.name, source: "untracked", ...why, first: u.at, last: u.at, campaignName: null, clientId: u.client_id });
   }
 
+  // New rules: what they no longer take goes, and forwarding is judged afresh. Bounces and later replies are counted again below.
+  if (rebuild) await sql`delete from placement_seeds`;
   let added = 0;
   for (const c of found.values()) {
     const [row] = await sql<{ inserted: boolean }[]>`
@@ -96,7 +105,7 @@ export async function syncPlacementSeeds(sql: postgres.Sql, { lookupMx = dnsMx, 
   const dropped = await refreshSeeds(sql);
   const mx = await lookUpDomains(sql, lookupMx, maxLookups);
   const [{ seeds }] = await sql<{ seeds: number }[]>`select count(*)::int as seeds from placement_seeds`;
-  return { seeds, found: found.size, added, ...dropped, ...mx, scannedTo: startedAt.toISOString() };
+  return { seeds, found: found.size, added, ...(rebuild ? { rebuilt: true } : {}), ...dropped, ...mx, rules: SEED_RULES, scannedTo: startedAt.toISOString() };
 }
 
 /**
