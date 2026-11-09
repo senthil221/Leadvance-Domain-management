@@ -12,6 +12,7 @@ import { SetupDialog } from "@/components/domains/SetupDialog";
 import { ColResizer, copyDomains, keepTextUnselected, useColumnWidths, useRangeSelect } from "@/components/table-tools";
 import { Empty } from "@/components/ui";
 import { ageLabel, ago, daysSince, fixedDate, int } from "@/lib/format";
+import { FREE_MIN_DAYS } from "@/lib/expiring";
 import { nsOf } from "@/lib/lifecycle";
 import { useSticky } from "@/lib/sticky";
 import { isReplacementTld, REPLACEMENT_TLDS } from "@/lib/tlds";
@@ -71,7 +72,7 @@ const tableStyle = (custom: Record<string, number>) => {
   return { minWidth: total };
 };
 
-export function FreeDomainsView({ domains: all, clients, used, pointed }: { domains: DomainRow[]; clients: ClientRow[]; used: number; pointed: number }) {
+export function FreeDomainsView({ domains: all, clients, used, expiring, pointed }: { domains: DomainRow[]; clients: ClientRow[]; used: number; expiring: number; pointed: number }) {
   const params = useSearchParams();
   // Only the endings used for replacements, unless you ask to see the rest.
   const [showOther, setShowOther] = useSticky("free:other-tlds", false);
@@ -345,10 +346,10 @@ export function FreeDomainsView({ domains: all, clients, used, pointed }: { doma
           </div>
           <div className="table-footer">
             <span><b>{int(rows.length)}</b> domain{rows.length === 1 ? "" : "s"}</span>
-            {used || pointed ? (
+            {used || expiring || pointed ? (
               <span className="table-footer-hint hidden md:inline-flex">
                 <span>
-                  Not counted: {[used ? `${int(used)} used before` : null, pointed ? `${int(pointed)} on other nameservers` : null].filter(Boolean).join(", ")}.{" "}
+                  Not counted: {[used ? `${int(used)} used before` : null, expiring ? `${int(expiring)} expire within ${FREE_MIN_DAYS} days` : null, pointed ? `${int(pointed)} on other nameservers` : null].filter(Boolean).join(", ")}.{" "}
                   <Link href="/inventory?view=free" className="underline" onClick={(e) => e.stopPropagation()}>See them in storage</Link>
                 </span>
               </span>

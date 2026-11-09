@@ -501,7 +501,9 @@ export async function getDomainDetail(id: string): Promise<DomainDetail | null> 
 export type StorageCandidate = { id: string; name: string; tld: string | null; registrar: string | null; purchasedAt: Date | null; bornAt: Date | null; lastUsedOn: Date | null };
 
 /**
- * Storage domains a replacement can use: only the endings in REPLACEMENT_TLDS.
+ * Storage domains a replacement can use: only the endings in REPLACEMENT_TLDS,
+ * and more than free_min_days() (60) left at the registrar, so a new domain
+ * isn't warmed up only to run out; start_replacement refuses the rest too.
  * Never-used domains first, then the oldest, since age helps reputation.
  */
 export async function listStorageCandidates(limit = 200) {
@@ -509,7 +511,7 @@ export async function listStorageCandidates(limit = 200) {
     select d.id, d.name, d.tld, v.name as registrar, d.purchased_at,
       coalesce(d.purchased_at, d.registered_at)::timestamptz as born_at, d.last_used_on
     from domains d left join vendors v on v.id = d.registrar_id
-    where d.status = 'in_storage' and (d.expires_at is null or d.expires_at >= current_date) and (d.last_used_on is null or d.last_used_on + reuse_after_days() <= current_date)
+    where d.status = 'in_storage' and (d.expires_at is null or d.expires_at > current_date + free_min_days()) and (d.last_used_on is null or d.last_used_on + reuse_after_days() <= current_date)
       and lower(d.tld) = any(${[...REPLACEMENT_TLDS]}::text[])
     order by domain_is_free(d) desc, (d.last_used_on is not null), (d.registrar_id is null), coalesce(d.purchased_at, d.registered_at) nulls last, d.created_at, d.name
     limit ${limit}`;
@@ -532,7 +534,7 @@ const breakdownCounts = (s: typeof sql) => s`
   count(*) filter (where d.expires_at is null or d.expires_at >= current_date)::int as total,
   count(*) filter (where d.status = 'active' and (d.expires_at is null or d.expires_at >= current_date))::int as active,
   count(*) filter (where d.status in ('provisioning', 'warming') and (d.expires_at is null or d.expires_at >= current_date))::int as setup,
-  count(*) filter (where d.status = 'in_storage' and (d.expires_at is null or d.expires_at >= current_date) and (d.last_used_on is null or d.last_used_on + reuse_after_days() <= current_date))::int as free,
+  count(*) filter (where d.status = 'in_storage' and (d.expires_at is null or d.expires_at > current_date + free_min_days()) and (d.last_used_on is null or d.last_used_on + reuse_after_days() <= current_date))::int as free,
   count(*) filter (where d.status = 'in_storage' and (d.expires_at is null or d.expires_at >= current_date) and d.last_used_on + reuse_after_days() > current_date)::int as cooling,
   count(*) filter (where d.status in ('draining', 'burned', 'resting') and (d.expires_at is null or d.expires_at >= current_date))::int as replaced,
   count(*) filter (where d.status = 'in_storage' and (d.expires_at is null or d.expires_at >= current_date) and d.last_used_on is not null)::int as used_before,

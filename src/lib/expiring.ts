@@ -6,6 +6,9 @@ import { IN_USE_STATUSES, isOneOf } from "./status";
 // replaced aren't being mailed from, so they aren't listed here.
 
 export const EXPIRY_WINDOWS = [7, 14, 30, 60, 90] as const;
+
+/** A free domain needs more than this many days left; free_min_days() in the database says the same. */
+export const FREE_MIN_DAYS = 60;
 export const LONGEST_WINDOW = EXPIRY_WINDOWS[EXPIRY_WINDOWS.length - 1];
 
 type Row = Pick<DomainRow, "status" | "daysToExpiry">;

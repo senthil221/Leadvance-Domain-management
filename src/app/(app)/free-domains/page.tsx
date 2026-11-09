@@ -3,6 +3,7 @@ import { Suspense } from "react";
 import { FreeDomainsView } from "@/components/inventory/FreeDomainsView";
 import { PageHead, TableSkeleton } from "@/components/ui";
 import { getCurrentUser } from "@/lib/auth";
+import { FREE_MIN_DAYS } from "@/lib/expiring";
 import { listClients, listDomains } from "@/lib/queries";
 
 export const metadata: Metadata = { title: "Free domains" };
@@ -27,8 +28,10 @@ async function FreeDomains() {
   // In storage but not free: say why, so the two numbers can be squared.
   const rest = domains.filter((d) => d.status === "in_storage" && !d.expired && !d.isFree);
   const used = rest.filter((d) => d.everUsed).length;
+  // Never used, but running out too soon to be worth warming up.
+  const expiring = rest.filter((d) => !d.everUsed && d.daysToExpiry !== null && d.daysToExpiry <= FREE_MIN_DAYS).length;
 
   return (
-    <FreeDomainsView domains={free} clients={clients} used={used} pointed={rest.length - used} />
+    <FreeDomainsView domains={free} clients={clients} used={used} expiring={expiring} pointed={rest.length - used - expiring} />
   );
 }
