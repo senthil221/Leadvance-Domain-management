@@ -76,7 +76,8 @@ export async function askAi(facts: DiagnosisFacts, setup: AiSetup): Promise<AiAn
 
   return {
     raw: raw.data,
-    model: body.model ?? setup.model,
+    // The model asked for, so a later run can tell whether this answer came from the current one.
+    model: setup.model,
     inputTokens: body.usage?.prompt_tokens ?? null,
     outputTokens: body.usage?.completion_tokens ?? null,
     costUsd: body.usage?.cost ?? null,
@@ -87,16 +88,18 @@ const STORED = sql`id, created_at, created_by, model, result, input_tokens, outp
 
 /**
  * Diagnoses one domain and keeps the answer. It only pays for the AI when it has
- * to: too little data is answered by the rules, and unchanged facts reuse the last answer.
+ * to: too little data is answered by the rules, and unchanged facts reuse the last answer
+ * from the same model (after switching model, running again asks the new one).
  */
 export async function runDiagnosis(domainId: string, actor: string): Promise<{ diagnosis: StoredDiagnosis; reused: boolean }> {
   const input = await getDiagnosisInput(domainId);
   if (!input) throw new DiagnosisError("This domain no longer exists.");
   const facts = input.fact ? buildFacts(input, input.fact) : null;
+  const model = process.env.OPENROUTER_MODEL || DEFAULT_DIAGNOSIS_MODEL;
 
   const [same] = facts ? await sql<StoredDiagnosis[]>`
     select ${STORED} from domain_diagnoses
-    where domain_id = ${domainId} and facts = ${sql.json(facts as never)}
+    where domain_id = ${domainId} and facts = ${sql.json(facts as never)} and (model is null or model = ${model})
     order by id desc limit 1` : [];
   if (same) return { diagnosis: same, reused: true };
 
@@ -117,7 +120,7 @@ export async function runDiagnosis(domainId: string, actor: string): Promise<{ d
   const answer = await askAi(facts, {
     apiKey,
     baseUrl: process.env.OPENROUTER_BASE_URL || OPENROUTER_URL,
-    model: process.env.OPENROUTER_MODEL || DEFAULT_DIAGNOSIS_MODEL,
+    model,
   });
   return save(checkDiagnosis(answer.raw, facts), answer);
 }
