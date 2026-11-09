@@ -730,10 +730,17 @@ export async function syncSmartleadTags(sql: Sql, app: SmartleadApp) {
         or (ri.sl_old_tagged_at is null and od.status = 'draining'))`;
   if (!due.length) return { tagged: 0, errors: 0 };
   let known: SmartleadTag[] = await app.tags();
+  // A tag Smartlead wouldn't create is not asked for again this run: the
+  // remaining replacements fail the same way and try again next run.
+  const refused = new Map<string, unknown>();
   const tagId = async (name: string) => {
     let t = known.find((k) => k.name.toLowerCase() === name.toLowerCase());
     if (!t) {
-      const made = await app.createTag(name);
+      if (refused.has(name.toLowerCase())) throw refused.get(name.toLowerCase());
+      const made = await app.createTag(name).catch((e: unknown) => {
+        refused.set(name.toLowerCase(), e);
+        throw e;
+      });
       if (!made) return null;
       known = [...known, made];
       t = made;

@@ -256,6 +256,26 @@ describe("Smartlead tags and bulk config", () => {
     expect(bodies[0].body.updateData).toEqual({ dailyReplyLimit: null, tags: [3, 5] });
   });
 
+  it("creates a tag the way Smartlead's own UI does", async () => {
+    const calls: { url: string; method?: string; body: { name: string; color: string } }[] = [];
+    const fetchImpl = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body));
+      calls.push({ url: String(url), method: init?.method, body });
+      return new Response(JSON.stringify({ data: { id: 9, name: body.name, color: body.color } }), { status: 201 });
+    }) as unknown as typeof fetch;
+    const app = createSmartleadApp({ jwt, dryRun: false, fetchImpl });
+    const tag = await app.createTag("Replaced");
+    expect(calls[0].url).toBe("https://sl-fe-v2.smartlead.ai/api/v1/tags");
+    expect(calls[0].method).toBe("POST");
+    expect(calls[0].body.name).toBe("Replaced");
+    expect(tag).toEqual({ id: 9, name: "Replaced", color: calls[0].body.color });
+  });
+
+  it("fails a tag create that comes back without the tag", async () => {
+    const fetchImpl = vi.fn(async () => new Response(JSON.stringify({ data: null }), { status: 200 })) as unknown as typeof fetch;
+    await expect(createSmartleadApp({ jwt, dryRun: false, fetchImpl }).createTag("Replaced")).rejects.toThrow(/didn't return the new tag "Replaced"/);
+  });
+
   it("writes nothing in dry run", async () => {
     const fetchImpl = vi.fn() as unknown as typeof fetch;
     const app = createSmartleadApp({ jwt, dryRun: true, fetchImpl });

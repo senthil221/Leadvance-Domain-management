@@ -7,7 +7,6 @@ import type postgres from "postgres";
 
 const BASE = "https://server.smartlead.ai";
 const TAGS_URL = "https://sl-fe-v2.smartlead.ai/api/v1/tags";
-const GQL_URL = "https://fe-gql.smartlead.ai/v1/graphql";
 const TAG_COLORS = ["#B1FCFA", "#FCE1B1", "#FCEFB1", "#D7FCB1", "#B1DDFC", "#D6B1FC", "#FCB1D7", "#FCC4B1"];
 
 export type SmartleadTag = { id: number; name: string; color: string };
@@ -120,18 +119,17 @@ export function createSmartleadApp({ jwt, sql, dryRun = true, fetchImpl = fetch 
     blacklist: async (campaignId: number) => readBlacklist(await call("GET", `/api/email-campaigns/${campaignId}/black-list-domains`)),
     /** Every tag in the workspace (Smartlead's own UI reads them here). */
     tags: async () => readTags(await call("GET", `${TAGS_URL}?limit=500`)),
-    /** Creates a workspace tag with a random pastel colour. */
+    /**
+     * Creates a workspace tag with a random pastel colour, the way Smartlead's
+     * own UI does now (POST /api/v1/tags → { data: { id, name, color } }). Its
+     * old GraphQL endpoint answers every request with a 503.
+     */
     createTag: async (name: string): Promise<SmartleadTag | null> => {
       const color = TAG_COLORS[Math.floor(Math.random() * TAG_COLORS.length)];
-      const json = obj(await call("POST", GQL_URL, true, {
-        operationName: "createTag",
-        variables: { object: { name, color } },
-        query: "mutation createTag($object: tags_insert_input!) { insert_tags_one(object: $object) { id name color } }",
-      }));
+      const json = obj(await call("POST", TAGS_URL, true, { name, color }));
       if ("dryRun" in json) return null;
-      const errors = arr(json.errors);
-      if (errors.length) throw new SmartleadAppError(String(obj(errors[0]).message ?? "Smartlead couldn't create the tag"), null);
-      const t = obj(obj(json.data).insert_tags_one);
+      const t = obj(json.data);
+      if (!Number(t.id)) throw new SmartleadAppError(`Smartlead didn't return the new tag "${name}"`, null);
       return { id: Number(t.id), name: String(t.name ?? name), color: String(t.color ?? color) };
     },
     /**

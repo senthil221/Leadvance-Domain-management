@@ -386,6 +386,23 @@ describe("replacement through Hypertide's replace queue", () => {
     expect(await syncSmartleadTags(sql, app)).toEqual({ tagged: 0, errors: 0 });
   });
 
+  it("asks Smartlead for a missing tag once a run, not once per replacement", async () => {
+    const [old2] = await sql`insert into domains (name, status) values ('oldsend2.com', 'active') returning id`;
+    const [new2] = await sql`insert into domains (name) values ('freshsend2.com') returning id`;
+    await sql`insert into inboxes (domain_id, email, status, smartlead_account_id) values (${old2.id}, 'x@oldsend2.com', 'connected', 21)`;
+    await sql`select start_replacement(array[${old2.id}]::uuid[], array[${new2.id}]::uuid[], 'high_bounce', null, 'me')`;
+    await sql`update domains set status = 'draining', draining_since = now() where id in (${oldId}, ${old2.id})`;
+
+    const createTag = vi.fn(async () => { throw new Error("Smartlead /api/v1/tags failed (HTTP 503)"); });
+    const app = { dryRun: false, tags: vi.fn(async () => []), createTag, bulkConfig: vi.fn(async () => 0) } as unknown as SmartleadApp;
+    expect(await syncSmartleadTags(sql, app)).toEqual({ tagged: 0, errors: 2 });
+    expect(createTag).toHaveBeenCalledTimes(1);
+
+    // The next run asks again.
+    await syncSmartleadTags(sql, app);
+    expect(createTag).toHaveBeenCalledTimes(2);
+  });
+
   it("won't submit while the old domain's Hypertide order isn't Done", async () => {
     await sql`update hypertide_orders set status = 'In progress' where id = 'recOLD'`;
     const ht = fakeHypertide();
