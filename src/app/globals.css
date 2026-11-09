@@ -1427,25 +1427,50 @@ a.kpi:hover { border-color: var(--accent-line, var(--line-strong)); }
 .rpl-tag.is-ready { background: var(--success-soft-2); color: var(--success-ink); box-shadow: inset 0 0 0 1px var(--success-line); }
 
 
-/* Warming up: stage summary, segmented day track */
-.wu-summary { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; margin-bottom: 10px; }
-.wu-stage {
-  display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 10px 14px; border-radius: 10px;
-  background: var(--surface); box-shadow: 0 0 0 1px var(--line); text-align: left; cursor: pointer;
-  transition: box-shadow 160ms var(--t-ease), background 160ms var(--t-ease), transform 160ms var(--t-ease);
+/* Warming up: segmented day track */
+/* Smartlead → Inboxes, compact: two short rows above the table (views and numbers;
+   search, filters, warm-up stages and actions), then a denser table. */
+.inb-page { container-type: inline-size; }
+.inb-row { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; min-width: 0; }
+/* Narrower screens keep the views and numbers on one line: the small print moves to the tooltip. */
+@container (max-width: 1440px) { .inb-kpi span { display: none; } }
+.inb-row .spacer-auto { margin-left: auto; }
+.inb-row .select { width: auto; height: 30px; flex: none; }
+.inb-row .search-input { width: 200px; max-width: 100%; }
+.inb-row .search-input .input { height: 30px; }
+.inb-tabs { gap: 2px; border-bottom: 0; padding: 2px; border-radius: 8px; background: var(--surface-2); box-shadow: inset 0 0 0 1px var(--line); }
+.inb-tabs > button { height: 26px; margin: 0; padding: 0 9px; gap: 6px; border-radius: 6px; border-bottom: 0; font-size: 12.5px; }
+.inb-tabs > .is-on { background: var(--surface); box-shadow: 0 0 0 1px var(--line), 0 1px 2px rgb(0 0 0 / .05); }
+.inb-kpis { display: flex; align-items: center; margin: 0; height: 30px; border-radius: 8px; background: var(--surface); box-shadow: inset 0 0 0 1px var(--line); }
+.inb-kpi { display: flex; align-items: baseline; gap: 6px; padding: 0 12px; white-space: nowrap; cursor: default; }
+.inb-kpi + .inb-kpi { border-left: 1px solid var(--line); }
+.inb-kpi dt { color: var(--muted); font-size: 12px; }
+.inb-kpi dd { margin: 0; color: var(--ink); font-size: 13.5px; font-weight: 600; letter-spacing: -.01em; font-variant-numeric: tabular-nums; }
+.inb-kpi span { color: var(--faint); font-size: 11.5px; font-variant-numeric: tabular-nums; }
+.inb-kpi span.is-warn { color: var(--warning-ink); }
+/* Warm-up stages as one segmented strip; a stage with nothing in it fades back. */
+.wu-strip { display: inline-flex; align-items: center; gap: 2px; padding: 2px; border-radius: 8px; background: var(--surface-2); box-shadow: inset 0 0 0 1px var(--line); }
+.wu-chip {
+  display: inline-flex; align-items: center; gap: 6px; height: 26px; padding: 0 8px; border-radius: 6px;
+  color: var(--muted); font-size: 12.5px; white-space: nowrap; cursor: pointer;
+  transition: background 120ms var(--t-ease), color 120ms var(--t-ease);
 }
-.wu-stage:hover { box-shadow: 0 0 0 1px var(--line-strong); }
-.wu-stage:active { transform: scale(.99); }
-.wu-stage[aria-pressed="true"] { background: var(--surface-3); box-shadow: 0 0 0 1px var(--line-strong), 0 0 0 3px color-mix(in srgb, var(--ink) 6%, transparent); }
-.wu-stage-label { display: inline-flex; align-items: center; gap: 8px; color: var(--muted); font-size: 12.5px; }
-.wu-stage-label i { width: 7px; height: 7px; border-radius: 50%; background: var(--faint); }
-.wu-stage.is-dns i { background: var(--warning-solid); }
-.wu-stage.is-ready i { background: var(--info-solid); }
-.wu-stage.is-setup i { background: var(--faint); }
-.wu-stage.is-warming i { background: var(--violet-solid); box-shadow: 0 0 0 3px color-mix(in srgb, var(--violet-solid) 22%, transparent); }
-.wu-stage.is-done i { background: var(--success-solid); }
-.wu-stage-n { font-size: 18px; font-weight: 600; color: var(--ink); font-variant-numeric: tabular-nums; letter-spacing: -.01em; }
-@media (max-width: 760px) { .wu-summary { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+.wu-chip:hover { color: var(--ink); background: var(--row-hover); }
+.wu-chip i { width: 6px; height: 6px; border-radius: 50%; background: var(--faint); flex: none; }
+.wu-chip.is-dns i { background: var(--warning-solid); }
+.wu-chip.is-ready i { background: var(--info-solid); }
+.wu-chip.is-warming i { background: var(--violet-solid); }
+.wu-chip.is-done i { background: var(--success-solid); }
+.wu-chip b { min-width: 14px; text-align: right; color: var(--ink); font-weight: 600; font-variant-numeric: tabular-nums; }
+.wu-chip[data-empty="true"] { color: var(--faint); }
+.wu-chip[data-empty="true"] b { color: var(--faint); font-weight: 500; }
+.wu-chip[data-empty="true"] i { opacity: .45; }
+.wu-chip[aria-pressed="true"] { background: var(--surface); color: var(--ink); box-shadow: 0 0 0 1px var(--line-strong), 0 1px 2px rgb(0 0 0 / .05); }
+@media (max-width: 760px) {
+  .inb-tabs, .inb-kpis, .wu-strip { max-width: 100%; overflow-x: auto; scrollbar-width: none; }
+  .inb-tabs > button { flex: none; }
+}
+
 
 .wu-table .wu-col-track { min-width: 250px; }
 .wu-sub { font-size: 11.5px; color: var(--faint); }
@@ -1469,9 +1494,35 @@ a.kpi:hover { border-color: var(--accent-line, var(--line-strong)); }
 .wu-state.is-setup { background: var(--surface-2); color: var(--muted); }
 .wu-state.is-setup.is-attention { background: var(--warning-soft-2); color: var(--warning-ink); }
 
+/* Smartlead → Inboxes table: 36px rows, 40px where a row has a second line; tabular figures. */
+.inb-page .cln-bar { padding: 6px 12px; margin-bottom: 0; }
+.inb-page .data-table thead th { height: 32px; padding: 0 10px; }
+.inb-page .data-table tbody td { height: 36px; padding: 0 10px; font-variant-numeric: tabular-nums; }
+.inb-page .data-table .col-check { padding: 0 0 0 12px; width: 34px; }
+.inb-page .wu-table tbody td, .inb-page .cl-table tbody td { height: 40px; }
+.wu-name { display: flex; flex-direction: column; justify-content: center; line-height: 16px; }
+.wu-name .wu-sub { font-size: 11px; line-height: 14px; }
+/* The domain takes the spare width, so the warm-up track and numbers sit together. */
+.inb-page .wu-table td.col-first, .inb-page .wu-table th:nth-child(2) { width: 100%; }
+.inb-page .wu-table .wu-col-track { min-width: 0; width: 1%; }
+.inb-page .wu-track { gap: 8px; }
+.inb-page .wu-segs { min-width: 0; width: 120px; flex: none; gap: 2px; }
+.inb-page .wu-segs > span { height: 6px; border-radius: 2px; }
+.inb-page .wu-count { gap: 4px; min-width: 76px; }
+.inb-page .wu-count b { font-size: 12.5px; }
+.inb-page .wu-count span { font-size: 11.5px; }
+.inb-page .wu-count em { font-size: 11px; }
+.inb-page .wu-state { height: 20px; padding: 0 8px; font-size: 11.5px; }
+[data-density="compact"] .inb-page .data-table thead th { height: 28px; padding: 0 8px; }
+[data-density="compact"] .inb-page .data-table tbody td { height: 28px; padding: 0 8px; }
+[data-density="compact"] .inb-page .data-table .col-check { padding-left: 10px; width: 32px; }
+[data-density="compact"] .inb-page .wu-table tbody td, [data-density="compact"] .inb-page .cl-table tbody td { height: 34px; }
+[data-density="compact"] .inb-row .select, [data-density="compact"] .inb-row .search-input .input, [data-density="compact"] .inb-kpis { height: 28px; }
+[data-density="compact"] .inb-tabs > button, [data-density="compact"] .wu-chip { height: 24px; }
+
 /* Smartlead → Cleanup: domains with too many inboxes or several sender names. */
-.cl-bar { display: flex; align-items: center; gap: 10px; padding: 10px 14px; margin-bottom: 10px; border-radius: 10px; background: var(--surface); box-shadow: 0 0 0 1px var(--line); }
-.cl-bar-text { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 6px; color: var(--muted); font-size: 12.5px; }
+.cln-bar { display: flex; align-items: center; gap: 10px; padding: 10px 14px; margin-bottom: 10px; border-radius: 10px; background: var(--surface); box-shadow: 0 0 0 1px var(--line); }
+.cln-bar-text { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 6px; color: var(--muted); font-size: 12.5px; }
 .cl-limit { width: 58px; height: 26px; text-align: center; }
 .cl-count { display: inline-flex; align-items: center; justify-content: flex-end; gap: 6px; }
 .cl-senders { display: flex; flex-wrap: wrap; gap: 4px; }

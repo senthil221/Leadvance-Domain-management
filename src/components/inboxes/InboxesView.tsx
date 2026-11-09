@@ -609,6 +609,9 @@ export function InboxesView({ inboxes, setups = [], clients, plans, smartleadCon
     };
   }, [all]);
 
+  const warmupOffCount = useMemo(() => all.filter((i) => !i.warmupEnabled).length, [all]);
+  const disconnectedCount = useMemo(() => inboxes.filter((i) => i.status === "disconnected").length, [inboxes]);
+
   const selectedRows = useMemo(() => inboxes.filter((i) => selected.has(i.id)), [inboxes, selected]);
   const selectedDomains = useMemo(() => [...new Set(selectedRows.map((i) => i.domainId))], [selectedRows]);
   const selectedStatuses = useMemo(() => selectedDomains.map((id) => ({ id, status: selectedRows.find((x) => x.domainId === id)!.domainStatus })), [selectedDomains, selectedRows]);
@@ -788,7 +791,7 @@ export function InboxesView({ inboxes, setups = [], clients, plans, smartleadCon
   });
 
   return (
-    <div className="flex flex-col gap-3">
+    <div className="inb-page flex flex-col gap-2">
       {!smartleadConnected ? (
         <div className="callout tone-info">
           <Info size={15} strokeWidth={1.75} />
@@ -799,41 +802,67 @@ export function InboxesView({ inboxes, setups = [], clients, plans, smartleadCon
         </div>
       ) : null}
 
-      <section className="stats" aria-label="Inbox numbers">
-        <div className="stat"><span className="stat-label">Inboxes</span><span className="stat-value">{int(totals.inboxes)}</span><span className="stat-foot">on {int(groups.length)} domains · {groups.length ? (totals.inboxes / groups.length).toFixed(1) : "0"} per domain</span></div>
-        <div className="stat"><span className="stat-label">Campaign emails / day</span><span className="stat-value">{int(totals.capacity)}</span><span className="stat-foot">{totals.inboxes ? (totals.capacity / totals.inboxes).toFixed(1) : "0"} per inbox on average</span></div>
-        <div className="stat"><span className="stat-label">Warmup emails / day</span><span className="stat-value">{int(totals.warmup)}</span><span className="stat-foot">{int(all.filter((i) => !i.warmupEnabled).length)} inboxes with warmup off</span></div>
-        <div className="stat"><span className="stat-label">Average reputation</span><span className="stat-value">{totals.avgRep == null ? "—" : totals.avgRep.toFixed(1)}</span><span className="stat-foot">{int(lowRepInboxes)} connected inboxes under 90</span></div>
-      </section>
-
-      <div className="table-bar">
-        <div className="view-tabs" role="tablist">
+      {/* Row 1: which view, and the numbers for what it shows. */}
+      <div className="inb-row">
+        <div className="view-tabs inb-tabs" role="tablist">
           {TABS.map((t) => (
             <button key={t.key} type="button" role="tab" aria-selected={tab === t.key} className={tab === t.key ? "is-on" : undefined} onClick={() => setTab(t.key)}>
               {t.label} <span>{int(counts[t.key] ?? 0)}</span>
             </button>
           ))}
         </div>
-        <Select className="select" style={{ width: 160 }} value={clientId} onChange={(e) => setClientId(e.target.value)} aria-label="Filter by client">
+        <span className="spacer-auto" />
+        <dl className="inb-kpis" aria-label="Inbox numbers">
+          <div className="inb-kpi" title={`${int(totals.inboxes)} inboxes on ${int(groups.length)} domains, ${groups.length ? (totals.inboxes / groups.length).toFixed(1) : "0"} per domain`}>
+            <dt>Inboxes</dt><dd>{int(totals.inboxes)}</dd><span>{int(groups.length)} domains</span>
+          </div>
+          <div className="inb-kpi" title={`Campaign emails a day: ${totals.inboxes ? (totals.capacity / totals.inboxes).toFixed(1) : "0"} per inbox on average`}>
+            <dt>Campaign / day</dt><dd>{int(totals.capacity)}</dd><span>{totals.inboxes ? (totals.capacity / totals.inboxes).toFixed(1) : "0"} per inbox</span>
+          </div>
+          <div className="inb-kpi" title={`Warmup emails a day. ${int(warmupOffCount)} inboxes with warmup off`}>
+            <dt>Warmup / day</dt><dd>{int(totals.warmup)}</dd><span>{int(warmupOffCount)} off</span>
+          </div>
+          <div className="inb-kpi" title={`Average warmup reputation. ${int(lowRepInboxes)} connected inboxes under 90`}>
+            <dt>Reputation</dt><dd>{totals.avgRep == null ? "—" : totals.avgRep.toFixed(1)}</dd><span className={lowRepInboxes ? "is-warn" : undefined}>{int(lowRepInboxes)} under 90</span>
+          </div>
+        </dl>
+      </div>
+
+      {/* Row 2: find and filter on the left, the stage strip on Warming up, actions on the right. */}
+      <div className="inb-row">
+        <label className="search-input">
+          <Search size={14} strokeWidth={1.5} />
+          <input className="input" value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search" aria-label="Search inboxes" />
+        </label>
+        <Select className="select" style={{ width: 128 }} value={clientId} onChange={(e) => setClientId(e.target.value)} aria-label="Filter by client">
           <option value="">All clients</option>
           {clients.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
         </Select>
-        <Select className="select" style={{ width: 130 }} value={esp} onChange={(e) => setEsp(e.target.value)} aria-label="Filter by ESP">
+        <Select className="select" style={{ width: 112 }} value={esp} onChange={(e) => setEsp(e.target.value)} aria-label="Filter by ESP">
           <option value="">All ESPs</option>
           {esps.map((x) => <option key={x} value={x}>{espLabel(x)}</option>)}
         </Select>
         {providers.length > 1 ? (
-          <Select className="select" style={{ width: 150 }} value={provider} onChange={(e) => setProvider(e.target.value)} aria-label="Filter by inbox provider">
+          <Select className="select" style={{ width: 128 }} value={provider} onChange={(e) => setProvider(e.target.value)} aria-label="Filter by inbox provider">
             <option value="">All providers</option>
             {providers.map((p) => <option key={p.name || "-"} value={p.name || "-"}>{p.name || "No provider"} · {int(p.domains)}</option>)}
           </Select>
         ) : null}
         {clientId || esp || provider || q ? <button type="button" className="btn btn-ghost btn-sm" onClick={() => { setClientId(""); setEsp(""); setProvider(""); setQ(""); }}>Clear</button> : null}
+        {tab === "warming" ? (
+          <div className="wu-strip" role="group" aria-label="Warm-up stages">
+            {STAGES.map((s) => {
+              const n = warmStages[s.key].length;
+              return (
+                <button key={s.key} type="button" className={`wu-chip is-${s.key}`} aria-pressed={stage === s.key} data-empty={n === 0} title={s.hint}
+                  onClick={() => setStage((x) => (x === s.key ? null : s.key))}>
+                  <i />{s.label}<b>{int(n)}</b>
+                </button>
+              );
+            })}
+          </div>
+        ) : null}
         <span className="spacer-auto" />
-        <label className="search-input">
-          <Search size={14} strokeWidth={1.5} />
-          <input className="input" value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search" aria-label="Search inboxes" />
-        </label>
         {FLAT.includes(tab) ? null : (
           <Select className="select" style={{ width: 170 }} value={grouping} onChange={(e) => chooseGrouping(e.target.value as Grouping)} aria-label="Group domains">
             <option value="none">No grouping</option>
@@ -868,7 +897,7 @@ export function InboxesView({ inboxes, setups = [], clients, plans, smartleadCon
           <ShieldCheck size={14} /> Validate DNS{selectedDomains.length ? ` (${selectedDomains.length})` : ""}
         </button>
         <button type="button" className="btn btn-sm" disabled={acting || Boolean(appProblem)} title={appProblem ?? "Ask Smartlead to retry the login of every disconnected inbox"} onClick={() => act(reconnectInboxes)}>
-          <PlugZap size={14} /> Reconnect{inboxes.filter((i) => i.status === "disconnected").length ? ` (${inboxes.filter((i) => i.status === "disconnected").length})` : ""}
+          <PlugZap size={14} /> Reconnect{disconnectedCount ? ` (${int(disconnectedCount)})` : ""}
         </button>
         {tab === "warming" && warmStages.ready.length ? (() => {
           const ready = new Set(warmStages.ready);
@@ -885,8 +914,8 @@ export function InboxesView({ inboxes, setups = [], clients, plans, smartleadCon
       </div>
 
       {tab === "cleanup" ? (
-        <div className="cl-bar">
-          <span className="cl-bar-text">
+        <div className="cln-bar">
+          <span className="cln-bar-text">
             Domains with more than
             <input className="input num cl-limit" inputMode="numeric" value={limitText} aria-label="Inbox limit per domain"
               onChange={(e) => setLimitText(e.target.value)}
@@ -897,20 +926,8 @@ export function InboxesView({ inboxes, setups = [], clients, plans, smartleadCon
         </div>
       ) : null}
 
-      {tab === "warming" ? (
-        <div className="wu-summary" role="group" aria-label="Warm-up stages">
-          {STAGES.map((s) => (
-            <button key={s.key} type="button" className={`wu-stage is-${s.key}`} aria-pressed={stage === s.key} title={s.hint}
-              onClick={() => setStage((x) => (x === s.key ? null : s.key))}>
-              <span className="wu-stage-label"><i />{s.label}</span>
-              <span className="wu-stage-n">{int(warmStages[s.key].length)}</span>
-            </button>
-          ))}
-        </div>
-      ) : null}
-
       <div className="table-wrap">
-        <div className="table-scroll" style={{ maxHeight: "calc(100dvh - 270px)", minHeight: 260 }}>
+        <div className="table-scroll" style={{ maxHeight: "calc(100dvh - 210px)", minHeight: 260 }}>
           {tab === "warming" ? (
             <table className="data-table is-main wu-table">
               <thead>
@@ -943,8 +960,8 @@ export function InboxesView({ inboxes, setups = [], clients, plans, smartleadCon
                         <input type="checkbox" className="checkbox" checked={gSel} ref={(el) => { if (el) el.indeterminate = !gSel && gSome; }} onChange={() => {}} disabled={!ids.length} aria-label={`Select inboxes on ${g.domain}`} tabIndex={-1} />
                       </td>
                       <td className="col-first">
-                        <span className="flex flex-col gap-0.5">
-                          <span className="flex items-center gap-2">
+                        <span className="wu-name">
+                          <span className="flex items-center gap-1.5">
                             <DomainLink id={g.domainId} tab="inboxes" className="strong hover:underline">{g.domain}</DomainLink>
                             <TagList tags={g.domainTags} graceDaysLeft={g.graceDaysLeft} />
                           </span>
@@ -994,7 +1011,7 @@ export function InboxesView({ inboxes, setups = [], clients, plans, smartleadCon
                         <input type="checkbox" className="checkbox" checked={gSel} ref={(el) => { if (el) el.indeterminate = !gSel && gSome; }} onChange={() => {}} aria-label={`Select inboxes on ${g.domain}`} tabIndex={-1} />
                       </td>
                       <td className="col-first">
-                        <span className="flex flex-col gap-0.5">
+                        <span className="wu-name">
                           <DomainLink id={g.domainId} tab="inboxes" className="strong hover:underline">{g.domain}</DomainLink>
                           <span className="wu-sub">{g.clientName ?? "No client"}{g.esp ? ` · ${espLabel(g.esp)}` : ""}{g.setup ? ` · replacing ${g.setup.oldDomain}` : ""}</span>
                         </span>
