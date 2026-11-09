@@ -1,12 +1,14 @@
 import type { BounceReason } from "./bounces";
 import { isSendingDay } from "./client-sending";
 import { addDays, nice } from "./range";
+import type { ReplaceCall } from "./replace-list";
 import { slText } from "./smartlead-state";
 
 // The weekly review's call on each sending domain, with the numbers behind
-// it. Shared by server and client. Spam and blocklist rejections, a low
-// warmup reputation and days without any reply count against the domain;
-// addresses that don't exist count against the list.
+// it. Shared by server and client. Replace and Watch are the Replace list's
+// calls (replace-list.ts): this week against the other domains on its tag, so
+// both pages always agree. The tags beside a domain (spam, low reputation, days
+// without a reply) say what's going on, but they don't decide the call.
 
 export type Verdict = "fix" | "rest" | "grace" | "drop" | "dead" | "ended" | "watch" | "idle" | "warming" | "low" | "ok" | "gone";
 
@@ -31,12 +33,12 @@ export const isCurrent = (s: Standing | null | undefined) => s === "active" || s
 
 export const VERDICT_META: Record<Verdict, { label: string; tone: "danger" | "warning" | "info" | "faint" | "success"; hint: string }> = {
   fix: { label: "Fix sender", tone: "danger", hint: "Our own setup is failing: tenant or mailbox blocked, DNS missing, or inboxes disconnected" },
-  rest: { label: "Replace", tone: "danger", hint: "Two strikes (spam, blocklisted, low rep, no reply for days), heavy spam with no replies, or no response at all on real volume: pull it and line up a replacement" },
+  rest: { label: "Replace", tone: "danger", hint: "Clearly worse than the other domains on its Smartlead tag over the last 7 days, or 14 if it sends little (spam, policy and block list bounces at three times theirs, or replies of any kind at half), or on a block list. The same call as the Replace list" },
   grace: { label: "In grace period", tone: "info", hint: "Replaced or cancelled, but its inboxes stay up for a while: it still counts until the grace period ends" },
   drop: { label: "Cancelled / replaced", tone: "danger", hint: "Every inbox is disconnected and the provider has cancelled the order or the domain was replaced: nothing to reconnect. Delete in one go" },
   dead: { label: "Disconnected", tone: "warning", hint: "Every inbox is disconnected, but the provider hasn't cancelled or replaced the domain: try reconnecting before replacing" },
   ended: { label: "Ended", tone: "faint", hint: "Not active any more: expired, retired, or its order has ended, though some inboxes still show connected" },
-  watch: { label: "Watch", tone: "warning", hint: "One strike so far: still worth sending, at lower volume" },
+  watch: { label: "Watch", tone: "warning", hint: "Spam, policy and block list bounces at twice the other domains on its tag. It moves to Replace if it repeats or gets worse" },
   idle: { label: "Idle", tone: "info", hint: "Active with inboxes connected, but nothing was sent in this range" },
   warming: { label: "Warming", tone: "info", hint: "Marked as still warming up, so it isn't expected to send yet" },
   low: { label: "Too little sent", tone: "faint", hint: "Not enough sent in this range to judge" },
@@ -85,8 +87,8 @@ const idleText = (d: ReviewDomain) => `${n(d.idleDays ?? 0)} ${d.sendWeekends ? 
 const lastSentText = (d: ReviewDomain) => (d.lastSentOn ? `last sent ${nice(d.lastSentOn)}` : "never sent");
 
 /**
- * The short tags beside each domain. Strikes count against the domain; the
- * rest explain the call. Ordered as they're shown.
+ * The short tags beside each domain: what was seen, not the call. Strikes are
+ * the ones that blame the sender, and only sort the worst first. Ordered as they're shown.
  */
 export type Signal = "ended" | "unlisted" | "tenant" | "dns" | "disconnected" | "nosend" | "spam" | "rising" | "blocklist" | "lowrep" | "quiet" | "silent" | "badlist";
 export const SIGNAL_META: Record<Signal, { label: string; hint: string; strike?: true }> = {
@@ -99,8 +101,8 @@ export const SIGNAL_META: Record<Signal, { label: string; hint: string; strike?:
   spam: { label: "Spam", hint: `Spam rejections: at least ${RULES.watchSpam} and ${RULES.watchSpamRate}% of sent`, strike: true },
   rising: { label: "Spam rising", hint: "Spam share at least doubled since the same days before" },
   blocklist: { label: "Blocklisted", hint: `On a blocklist in Smartlead's scan, or ${RULES.restBlocklist}+ blocklist bounces`, strike: true },
-  lowrep: { label: "Low rep", hint: `Average warmup reputation under ${RULES.lowRep}`, strike: true },
-  quiet: { label: "No reply", hint: `No reply of any kind (out of office included) for ${RULES.quietDays}+ days with ${RULES.quietSent}+ sent since`, strike: true },
+  lowrep: { label: "Low rep", hint: `Average warmup reputation under ${RULES.lowRep}. On its own it isn't a reason to replace: it didn't predict replies in this agency's data` },
+  quiet: { label: "No reply", hint: `No reply of any kind (out of office included) for ${RULES.quietDays}+ days with ${RULES.quietSent}+ sent since. Worth a look, not a reason to replace on its own` },
   silent: { label: "No response", hint: `${RULES.silentSent}+ sent in the range and not one reply, not even an out of office: the mail is likely landing in spam`, strike: true },
   badlist: { label: "Bad list", hint: "Most bounces are addresses that don't exist: the list's fault, not the domain's" },
 };
@@ -117,6 +119,8 @@ export type ReviewDomain = {
   ooo: number; auto: number; negative: number;
   causes: Partial<Record<BounceReason, number>>;
   prevSent: number; prevHuman: number; prevReplies: number; prevBounces: number; prevSpam: number;
+  /** What the replace rules made of it this week (replace-list.ts), when it's a live sending domain. */
+  call?: { call: ReplaceCall | "keep" | "early"; reasons: string[] } | null;
   /** Days since the domain was bought, and since its first inbox joined Smartlead. */
   ageDays: number | null; connectedDays: number | null;
   /** Where its inboxes come from (Hypertide for Outlook, Icemail for Google), where it stands today, and the grace days left. */
@@ -227,8 +231,6 @@ export function judge(d: ReviewDomain): Judged {
   const against = said(["spam", "rising", "blocklist", "lowrep", "quiet", "silent"]);
   const humans = s(d.human, "human reply", "human replies");
   const out = (verdict: Verdict, why: string): Judged => ({ ...d, verdict, why: why.charAt(0).toUpperCase() + why.slice(1), worse, spam, chips, strikes });
-  // A reply in the last few days, of any kind, says the domain still lands.
-  const replying = d.quietDays != null && d.quietDays < RULES.quietDays && !d.neverReplied;
 
   // Expired, or still connected after its order ended: history, whatever its numbers say.
   if (d.standing === "expired") return out("ended", "The domain has expired");
@@ -248,13 +250,16 @@ export function judge(d: ReviewDomain): Judged {
     return out("idle", [d.idleDays == null ? "Nothing sent yet" : `Nothing sent for ${idleText(d)}, ${lastSentText(d)}`, said(["disconnected", "lowrep"])].filter(Boolean).join("; "));
   }
   if (d.status === "warming" && d.sent === 0) return out("warming", ["Warming up, not sending yet", said(["disconnected", "lowrep"])].filter(Boolean).join("; "));
-  if (silent) return out("rest", against);
-  if (judged && d.human === 0 && (heavySpam || (c.blocklist ?? 0) >= RULES.restBlocklist)) return out("rest", chips.some((x) => x.key === "quiet") ? against : `${against}, no human replies`);
-  if (strikes >= 2 && !replying) return out("rest", `${against}; ${humans}`);
-  if (strikes >= 1) return out("watch", `${against}; ${humans}`);
+  // Replace and Watch are the replace rules' calls, so this page and the Replace list never disagree.
+  const because = d.call?.reasons.join("; ") ?? "";
+  if (d.call?.call === "replace_now" || d.call?.call === "replace") return out("rest", `${because}; ${humans}`);
+  if (d.call?.call === "fix") return out("fix", because);
+  if (d.call?.call === "watch") return out("watch", `${because}; ${humans}`);
   if (d.disconnected) return out("fix", said(["disconnected"]));
   if (d.sent > 0 && d.sent < RULES.minSent) return out("low", `Only ${n(d.sent)} sent`);
-  return out("ok", d.sent ? `${p(pct(d.human, d.sent))} human replies, ${p(pct(d.bounces, d.sent))} bounces` : "Not sending");
+  if (d.call?.call === "list") return out("ok", `The domain is fine, the list isn't: ${because.charAt(0).toLowerCase()}${because.slice(1)}`);
+  const rates = d.sent ? `${p(pct(d.human, d.sent))} human replies, ${p(pct(d.bounces, d.sent))} bounces` : "Not sending";
+  return out("ok", d.call?.call === "early" && d.sent ? `${rates}; too little sent in 14 days for the replace rules to judge it` : rates);
 }
 
 /** Campaigns whose bounces are mostly addresses that don't exist: the list needs re-verifying, not the domains. */
@@ -349,11 +354,12 @@ export function advise(d: Judged): Advice[] {
   if (tenant >= RULES.senderBounces) add("danger", `${s(tenant, "bounce")} say the tenant or mailbox is blocked or over its limit: pause it in campaigns, check the Microsoft tenant, then lower the daily limit`);
   if (dns >= RULES.senderBounces) add("danger", `${s(dns, "bounce")} say SPF, DKIM or DMARC failed: run Validate DNS and fix the records before sending more`);
   if (d.disconnected && d.inboxes) add("warning", `${n(d.disconnected)} of ${n(d.inboxes + d.disconnected)} inboxes disconnected: reconnect them`);
-  if (d.blacklisted || (c.blocklist ?? 0) >= RULES.restBlocklist) add("danger", `${d.blacklisted ? `On ${s(d.blacklisted, "blocklist")}` : `${n(c.blocklist ?? 0)} blocklist bounces`}: take it out of campaigns and replace it`);
+  if (d.blacklisted) add("danger", `On ${s(d.blacklisted, "blocklist")}: take it out of campaigns and replace it`);
+  else if ((c.blocklist ?? 0) >= RULES.restBlocklist && d.verdict !== "rest") add("warning", `${n(c.blocklist ?? 0)} blocklist bounces: often a shared sending IP, not the domain. It's replaced once they're three times the other domains on its tag`);
   if (d.verdict === "rest" && !out.some((a) => a.tone === "danger")) add("danger", "Replace it: line up a rested domain and move its campaigns over");
   const spamRate = pct(d.spam, d.sent) ?? 0;
   if (d.spam >= RULES.watchSpam && spamRate >= RULES.watchSpamRate && d.verdict !== "rest") {
-    add("warning", `${p(spamRate)} rejected as spam: lower the daily limit by about half and keep warmup on; replace it if it rises again next week`);
+    add("warning", `${p(spamRate)} rejected as spam: lower the daily limit by about half and keep warmup on. It's replaced once it's clearly worse than the other domains on its tag`);
   }
   if (br != null && br >= 2 && total) {
     if (share("missing") >= 0.5) add("info", `${p(br)} bounce, but ${Math.round(100 * share("missing"))}% are addresses that don't exist: re-verify the list, the domain is fine`);
@@ -361,7 +367,7 @@ export function advise(d: Judged): Advice[] {
     else if (share("other") + share("temporary") >= 0.5) add("info", `${p(br)} bounce with no clear reason in the notices: open the bounces to read them`);
   }
   if (d.rep != null && d.rep < RULES.lowRep) add("warning", `Warmup reputation ${d.rep.toFixed(0)}: keep warmup on and send less until it is back over ${RULES.lowRep}`);
-  if (d.chips.some((x) => x.key === "silent")) add("danger", `${n(d.sent)} sent and not one reply: it's likely landing in spam; rest or replace it`);
+  if (d.chips.some((x) => x.key === "silent")) add(d.verdict === "rest" ? "danger" : "warning", `${n(d.sent)} sent and not one reply: it may be landing in spam. ${d.verdict === "rest" ? "Replace it" : "Run a placement test: it's replaced once the gap against the other domains on its tag is clear"}`);
   else if (d.chips.some((x) => x.key === "quiet")) add("warning", `No reply for ${n(d.quietDays ?? 0)} days: check inbox placement and lower the volume`);
   if (d.verdict === "warming") add("info", "Warming up: mark it active once it joins a campaign");
   if (d.verdict === "idle") add("info", `${d.idleDays != null ? `Nothing sent for ${idleText(d)} (${lastSentText(d)})` : "Connected but never sent"}: add it to a campaign or check its Smartlead tag`);

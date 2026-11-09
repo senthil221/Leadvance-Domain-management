@@ -68,17 +68,35 @@ describe("weekly review calls", () => {
     expect(sheetRows([judge(domain({ inboxes: 0, disconnected: 0, removed: 14 }))]).split("\n")[1].split("\t").at(-4)).toBe("Deleted in Smartlead");
   });
 
-  it("rests a domain with spam rejections and no human replies", () => {
-    const j = judge(domain({ human: 0, causes: { spam: 30, blocklist: 4 } }));
+  it("takes Replace, Watch and Fix first from the replace rules, with their numbers as the reason", () => {
+    const bounces = "Spam, policy and block list bounces 2.2% of 1,239 sent in 7 days, 2.5× the other domains on its tag (0.85%)";
+    const j = judge(domain({ call: { call: "replace", reasons: [bounces, "The week before too: 3.0% against 0.88%"] } }));
     expect(j.verdict).toBe("rest");
-    expect(j.why).toBe("34 spam/blocklist rejections, 4.3% of 800 sent, up from 0.25%, no human replies");
-    expect(j.worse).toBe(true);
+    expect(j.why).toBe(`${bounces}; The week before too: 3.0% against 0.88%; 1 human reply`);
+    expect(judge(domain({ call: { call: "replace_now", reasons: ["On 2 block lists"] } })).verdict).toBe("rest");
+    const w = judge(domain({ human: 3, call: { call: "watch", reasons: [bounces] } }));
+    expect([w.verdict, w.why]).toEqual(["watch", `${bounces}; 3 human replies`]);
+    expect(judge(domain({ call: { call: "fix", reasons: ["DNS down: Its nameservers don't answer", bounces] } }))).toMatchObject({ verdict: "fix", why: `DNS down: Its nameservers don't answer; ${bounces}` });
   });
 
-  it("only watches it while it still gets human replies", () => {
-    const j = judge(domain({ human: 3, causes: { spam: 30 } }));
-    expect(j.verdict).toBe("watch");
-    expect(j.why).toContain("3 human replies");
+  it("leaves a domain alone when the rules have nothing against it, whatever its tags say", () => {
+    // Each of these used to be a strike. None of them singled out a bad domain in the agency's own data.
+    const spam = judge(domain({ human: 0, causes: { spam: 30, blocklist: 4 }, call: { call: "keep", reasons: [] } }));
+    expect(spam.verdict).toBe("ok");
+    expect(spam.chips.map((c) => c.key)).toEqual(["spam", "rising"]);
+    expect(spam.worse).toBe(true);
+    const rep = judge(domain({ human: 0, rep: 84, lowRepInboxes: 3, quietDays: 9, sentSinceReply: 1200, call: { call: "keep", reasons: [] } }));
+    expect(rep.verdict).toBe("ok");
+    expect(rep.chips.map((c) => c.text)).toEqual(["Rep 84", "No reply 9d"]);
+    expect(rep.strikes).toBe(0);
+  });
+
+  it("says so when the list is the problem, or the week was too thin to judge", () => {
+    const list = judge(domain({ call: { call: "list", reasons: ["30 bounces to addresses that don't exist, 3.0% of 1,000 sent against 0.20% for the other domains on its tag"] } }));
+    expect(list.verdict).toBe("ok");
+    expect(list.why).toBe("The domain is fine, the list isn't: 30 bounces to addresses that don't exist, 3.0% of 1,000 sent against 0.20% for the other domains on its tag");
+    expect(judge(domain({ call: { call: "early", reasons: [] } })).why).toBe("0.13% human replies, 2.5% bounces; too little sent in 14 days for the replace rules to judge it");
+    expect(judge(domain()).why).toBe("0.13% human replies, 2.5% bounces");
   });
 
   it("puts sender problems first, then idle and disconnected inboxes", () => {
@@ -95,33 +113,31 @@ describe("weekly review calls", () => {
     expect(judge(domain({ sent: 500, replies: 0, human: 0 })).verdict).toBe("ok");
   });
 
-  it("tags the evidence and replaces a domain with two strikes", () => {
-    const j = judge(domain({ human: 0, rep: 84, lowRepInboxes: 3, quietDays: 9, sentSinceReply: 1200 }));
-    expect(j.verdict).toBe("rest");
-    expect(j.chips.map((c) => c.text)).toEqual(["Rep 84", "No reply 9d"]);
-    expect(j.why).toBe("Warmup reputation 84.0 (3 inboxes under 90), no reply of any kind for 9 days (1,200 sent since); 0 human replies");
-    expect(judge(domain({ rep: 84 })).verdict).toBe("watch");
+  it("tags the evidence beside the domain", () => {
+    expect(judge(domain({ rep: 84 })).verdict).toBe("ok");
     expect(judge(domain({ quietDays: 4, sentSinceReply: 500 })).chips[0]).toMatchObject({ text: "No reply 4d", tone: "warning" });
     expect(judge(domain({ quietDays: 12, neverReplied: true, sentSinceReply: 900 })).chips[0].text).toBe("No reply 12+d");
     expect(judge(domain({ quietDays: 9, sentSinceReply: 120 })).chips).toEqual([]);
   });
 
-  it("replaces a domain that got not one reply, not even an out of office, on real volume", () => {
-    const j = judge(domain({ sent: 640, replies: 0, human: 0, quietDays: 5, sentSinceReply: 900 }));
-    expect(j.verdict).toBe("rest");
+  it("flags a domain that got not one reply, not even an out of office, and replaces it once the rules agree", () => {
+    const silent = { sent: 640, replies: 0, human: 0, quietDays: 5, sentSinceReply: 900 };
+    const j = judge(domain(silent));
+    expect(j.verdict).toBe("ok");
     expect(j.chips).toEqual([expect.objectContaining({ key: "silent", text: "No response · 640 sent", tone: "danger" })]);
-    expect(j.why).toBe("Not one reply on 640 sent, not even an out of office");
-    // Out-of-office replies alone show it lands: no strike at all.
+    const gap = "Replies of any kind 0.00% of 1,400 sent in 14 days, the other domains on its tag got 1.2%";
+    expect(judge(domain({ ...silent, call: { call: "replace", reasons: [gap] } }))).toMatchObject({ verdict: "rest", why: `${gap}; 0 human replies` });
+    // Out-of-office replies alone show it lands: no tag at all.
     expect(judge(domain({ sent: 640, replies: 3, human: 0, quietDays: 1, sentSinceReply: 80 })).verdict).toBe("ok");
     // Too few sent, or replies still due from the last day or two: not yet.
     expect(judge(domain({ sent: 250, replies: 0, human: 0, quietDays: 5, sentSinceReply: 250 })).chips).toEqual([]);
     expect(judge(domain({ sent: 640, replies: 0, human: 0, quietDays: 2, sentSinceReply: 640 })).verdict).toBe("ok");
   });
 
-  it("only watches two strikes while human replies still come in", () => {
+  it("counts only the tags that blame the sender as strikes, for sorting", () => {
     const j = judge(domain({ human: 2, rep: 86, causes: { spam: 6 }, prevSpam: 6, quietDays: 1 }));
     expect(j.chips.map((c) => c.key)).toEqual(["spam", "lowrep"]);
-    expect(j.verdict).toBe("watch");
+    expect([j.verdict, j.strikes]).toEqual(["ok", 1]);
   });
 
   it("tells tenant and DNS problems apart", () => {

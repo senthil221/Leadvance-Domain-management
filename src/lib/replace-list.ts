@@ -16,14 +16,14 @@ export type ReplaceCall = "replace_now" | "replace" | "watch" | "fix" | "list";
 export const CALLS: ReplaceCall[] = ["replace_now", "replace", "watch", "fix", "list"];
 export const CALL_META: Record<ReplaceCall, { label: string; tone: "danger" | "warning" | "info"; hint: string }> = {
   replace_now: { label: "Replace now", tone: "danger", hint: "On a block list: it won't recover while it's sending" },
-  replace: { label: "Replace", tone: "danger", hint: "Clearly worse this week than the other domains it sends with" },
-  watch: { label: "Watch", tone: "warning", hint: "Worse than the other domains it sends with, but not by enough to replace on one week. It moves to Replace if it repeats" },
+  replace: { label: "Replace", tone: "danger", hint: "Clearly worse than the other domains it sends with, over the last 7 days (14 for a domain that sends little)" },
+  watch: { label: "Watch", tone: "warning", hint: "Worse than the other domains it sends with, but not by enough to replace yet. It moves to Replace if it repeats or gets worse" },
   fix: { label: "Fix first", tone: "warning", hint: "Its numbers are bad, but its own setup is failing: fix that before spending a replacement" },
   list: { label: "List problem", tone: "info", hint: "Its bounces are addresses that don't exist: re-verify the list, the domain is fine" },
 };
 
 export const REPLACE_RULES = {
-  /** Sent in a week before the domain is judged at all. */
+  /** Sent in the week before the domain is judged on it. With less, the last 14 days are judged as one, and under this in 14 days it isn't judged at all. */
   minSent: 300,
   /** Bounces of a kind before their rate means anything. */
   minBounces: 5,
@@ -90,6 +90,9 @@ const minus = (a: Sums, s: ReplaceStat): Sums => { const out = { ...a, domains: 
 /** The group a domain sends with: its client and its Smartlead tags. */
 const tagKey = (f: FixFact, s: ReplaceStat) => (f.clientId && s.tags ? `${f.clientId}|${s.tags}` : null);
 
+/** Sent enough to judge: in the week, or failing that across the fortnight. Half the fleet sends too little for a week alone. */
+const judgeable = (s: ReplaceStat | undefined): s is ReplaceStat => !!s && (s.sent7 >= R.minSent || s.sent14 >= R.minSent);
+
 /** A domain that's meant to be sending: connected, with a live order, and not already on its way out. */
 const isLive = (f: FixFact) => f.standing === "active" && f.orderLive && (f.status === "active" || f.status === "warming") && f.connected > 0;
 
@@ -135,11 +138,11 @@ export function replaceList(facts: FixFact[], stats: ReplaceStat[], passes: 1 | 
   // What a domain's own numbers say, set against the others. Run twice: the
   // second time the others leave out every domain the first pass flagged, so
   // two bad domains in one client can't make each other look normal.
-  type Perf = { perf: { call: "replace" | "watch"; reasons: string[] } | null; badList: string | null };
+  type Perf = { perf: { call: "replace" | "watch"; reasons: string[]; weekly: boolean } | null; badList: string | null };
   const measure = (f: FixFact, s: ReplaceStat | undefined, sums: ReturnType<typeof totals>, skip: ReadonlySet<string>): Perf => {
     let perf: Perf["perf"] = null;
     let badList: string | null = null;
-    if (s && s.sent7 >= R.minSent) {
+    if (judgeable(s)) {
       const without = (g: Sums) => (skip.has(f.domainId) ? g : minus(g, s));
       // Like with like: the same tag first, then the client, then everyone.
       const enough = (g: Sums | undefined) => { const peers = g ? without(g) : null; return peers && peers.sent7 >= R.peerSent ? peers : null; };
@@ -151,11 +154,16 @@ export function replaceList(facts: FixFact[], stats: ReplaceStat[], passes: 1 | 
 
       const reasons: string[] = [];
       const bounces = (text: string) => `Spam, policy and block list bounces ${text}`;
-      const thisWeek = over(s.sender7, s.sent7, peers.sender7, peers.sent7, R.watchRatio);
-      const lastWeek = over(s.senderPrev, s.sentPrev, peers.senderPrev, peers.sentPrev, R.watchRatio);
-      const heavy = over(s.sender7, s.sent7, peers.sender7, peers.sent7, R.replaceRatio);
+      // Too little in a week to say anything: the fortnight is judged as one window, by the same test.
+      const weekly = s.sent7 >= R.minSent;
+      const k = weekly ? s.sender7 : s.sender7 + s.senderPrev, of = weekly ? s.sent7 : s.sent14;
+      const peerK = weekly ? peers.sender7 : peers.sender7 + peers.senderPrev, peerOf = weekly ? peers.sent7 : peers.sent14;
+      const thisWeek = over(k, of, peerK, peerOf, R.watchRatio);
+      const lastWeek = weekly && over(s.senderPrev, s.sentPrev, peers.senderPrev, peers.sentPrev, R.watchRatio);
+      // On a thin fortnight a handful of bounces can be one strict company refusing five people, so it takes twice as many to replace.
+      const heavy = over(k, of, peerK, peerOf, R.replaceRatio) && (weekly || k >= 2 * R.minBounces);
       if (thisWeek) {
-        reasons.push(bounces(`${p(s.sender7, s.sent7)} of ${n(s.sent7)} sent in 7 days, ${times(s.sender7, s.sent7, peers.sender7, peers.sent7)} ${who} (${p(peers.sender7, peers.sent7)})`));
+        reasons.push(bounces(`${p(k, of)} of ${n(of)} sent in ${weekly ? 7 : 14} days, ${times(k, of, peerK, peerOf)} ${who} (${p(peerK, peerOf)})`));
         if (lastWeek) reasons.push(`The week before too: ${p(s.senderPrev, s.sentPrev)} against ${p(peers.senderPrev, peers.sentPrev)}`);
       }
 
@@ -163,13 +171,13 @@ export function replaceList(facts: FixFact[], stats: ReplaceStat[], passes: 1 | 
       const quiet = (k: number, of: number, peerK: number, peerOf: number, days: number) =>
         of >= R.minSent && peerOf >= R.minSent && peerK > 0 && s.sendingDays != null && s.sendingDays >= days + R.settledDays
         && k / of <= R.replyRatio * (peerK / peerOf) && zScore(k, of, peerK, peerOf) <= -R.z;
-      const quiet7 = quiet(s.replies7, s.sent7, peers.replies7, peers.sent7, 7);
+      const quiet7 = weekly && quiet(s.replies7, s.sent7, peers.replies7, peers.sent7, 7);
       const quiet14 = !quiet7 && quiet(s.replies14, s.sent14, peers.replies14, peers.sent14, 14);
       if (quiet7) reasons.push(`Replies of any kind ${p(s.replies7, s.sent7)} of ${n(s.sent7)} sent in 7 days, ${who} got ${p(peers.replies7, peers.sent7)}`);
       if (quiet14) reasons.push(`Replies of any kind ${p(s.replies14, s.sent14)} of ${n(s.sent14)} sent in 14 days, ${who} got ${p(peers.replies14, peers.sent14)}`);
 
-      if (heavy || (thisWeek && lastWeek) || quiet7 || quiet14) perf = { call: "replace", reasons };
-      else if (thisWeek) perf = { call: "watch", reasons };
+      if (heavy || (thisWeek && lastWeek) || quiet7 || quiet14) perf = { call: "replace", reasons, weekly };
+      else if (thisWeek) perf = { call: "watch", reasons, weekly };
 
       if (over(s.missing7, s.sent7, peers.missing7, peers.sent7, R.watchRatio) && s.missing7 >= 0.5 * s.bounces7) {
         badList = `${plural(s.missing7, "bounce")} to addresses that don't exist, ${p(s.missing7, s.sent7)} of ${n(s.sent7)} sent against ${p(peers.missing7, peers.sent7)} for ${who}`;
@@ -199,7 +207,8 @@ export function replaceList(facts: FixFact[], stats: ReplaceStat[], passes: 1 | 
     };
 
     const { perf, badList } = measure(f, s, rest, worst);
-    if (f.clientId && s && s.sent7 >= R.minSent) {
+    const fortnight = s?.sent14 ?? 0;
+    if (f.clientId && judgeable(s)) {
       const t = tally.get(f.clientId) ?? { judged: 0, flagged: 0 };
       t.judged++;
       if (perf) t.flagged++;
@@ -208,7 +217,10 @@ export function replaceList(facts: FixFact[], stats: ReplaceStat[], passes: 1 | 
 
     const problems = problemsOf(f);
     const blocking = problems.filter((x) => BLOCKING.includes(x.kind) && x.tier !== "watch");
-    const minor = problems.filter((x) => !blocking.includes(x)).map((x) => FIX_META[x.kind].label);
+    // The fix queue's "Block listed" also covers a handful of block list bounces. Here that would read as
+    // being on a block list, which is Replace now, so it's named for what it is.
+    const minor = problems.filter((x) => !blocking.includes(x) && !(x.kind === "blocklisted" && f.listed > 0))
+      .map((x) => (x.kind === "blocklisted" ? "Block list bounces" : FIX_META[x.kind].label));
     const also = [...(badList && perf ? ["Bad list too"] : []), ...minor];
 
     if (f.listed > 0) {
@@ -218,15 +230,15 @@ export function replaceList(facts: FixFact[], stats: ReplaceStat[], passes: 1 | 
     } else if (perf?.call === "replace") {
       put("replace", perf.reasons, "Replace it this week", also);
     } else if (perf) {
-      put("watch", perf.reasons, "Leave it sending. It moves to Replace if next week is the same", also);
+      put("watch", perf.reasons, perf.weekly ? "Leave it sending. It moves to Replace if next week is the same" : "Leave it sending. It sends too little to be sure yet, and moves to Replace if the bounces keep coming", also);
     } else if (badList) {
       put("list", [badList], "Re-verify the list it's sending to. The domain itself looks fine", minor);
-    } else if (!s || s.sent7 < R.minSent) {
+    } else if (!judgeable(s)) {
       early++;
-      calls.set(f.domainId, { call: "early", reasons: [`${n(s?.sent7 ?? 0)} sent in 7 days, under the ${n(R.minSent)} needed to judge it`] });
+      calls.set(f.domainId, { call: "early", reasons: [`${n(fortnight)} sent in 14 days, under the ${n(R.minSent)} needed to judge it`] });
     } else {
       healthy++;
-      calls.set(f.domainId, { call: "keep", reasons: [`Nothing against it on ${n(s.sent7)} sent in 7 days`] });
+      calls.set(f.domainId, { call: "keep", reasons: [s.sent7 >= R.minSent ? `Nothing against it on ${n(s.sent7)} sent in 7 days` : `Nothing against it on ${n(s.sent14)} sent in 14 days`] });
     }
   }
 

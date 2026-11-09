@@ -35,10 +35,11 @@ describe("leaving good domains alone", () => {
   });
 
   it("won't judge a domain on too little mail", () => {
-    const { list, call } = callOf(fleet({ sent7: 250, sender7: 20, replies7: 0 }));
+    const { list, call } = callOf(fleet({ sent7: 150, sentPrev: 100, sent14: 250, sender7: 20, replies7: 0, replies14: 0 }));
     expect(list.items).toEqual([]);
     expect(call).toBe("early");
     expect(list.early).toBe(1);
+    expect(list.calls.get(list.calls.keys().next().value!)?.reasons[0]).toBe("Nothing against it on 1,000 sent in 7 days");
   });
 
   it("never lists a domain for warm-up reputation, age or a few quiet days", () => {
@@ -103,6 +104,23 @@ describe("catching bad domains", () => {
     const { item } = callOf(fleet({ sent7: 700, replies7: 2, sent14: 1400, replies14: 4, sender7: 2 }));
     expect(item).toMatchObject({ call: "replace" });
     expect(item!.reasons[0]).toContain("sent in 14 days");
+  });
+
+  it("judges a domain that sends little on its last 14 days as one", () => {
+    // 200 a week is too thin for a week alone. Twelve sender bounces on 400 in a fortnight is ten times the others.
+    const thin = { sent7: 200, sentPrev: 200, sent14: 400, replies7: 2, repliesPrev: 2, replies14: 4 };
+    const bad = callOf(fleet({ ...thin, sender7: 7, senderPrev: 5 }));
+    expect(bad.item).toMatchObject({ call: "replace" });
+    expect(bad.item!.reasons[0]).toBe("Spam, policy and block list bounces 3.0% of 400 sent in 14 days, 10.0× the client's other domains (0.30%)");
+    expect(callOf(fleet({ ...thin, sender7: 1, senderPrev: 0 })).call).toBe("keep");
+    // Six bounces is five times the others, but too few to replace on: one strict company can refuse that many at once.
+    const few = callOf(fleet({ ...thin, sender7: 3, senderPrev: 3 }));
+    expect(few.item).toMatchObject({ call: "watch" });
+    expect(few.item!.next).toContain("sends too little to be sure yet");
+    // Silent on real volume across the fortnight.
+    const silent = callOf(fleet({ sent7: 250, sentPrev: 750, sent14: 1000, replies7: 0, repliesPrev: 0, replies14: 0 }));
+    expect(silent.item).toMatchObject({ call: "replace" });
+    expect(silent.item!.reasons[0]).toContain("sent in 14 days");
   });
 
   it("doesn't read a domain that has only just started as quiet", () => {
@@ -179,6 +197,11 @@ describe("not wasting a replacement", () => {
   it("mentions smaller problems without letting them decide", () => {
     const { item } = callOf(fleet({ sender7: 12, missing7: 30, bounces7: 45 }, { warmupOff: 2, rep: 70 }));
     expect(item).toMatchObject({ call: "replace", also: ["Bad list too", "Low reputation", "Warm-up off"] });
+  });
+
+  it("doesn't call a few block list bounces being block listed", () => {
+    expect(callOf(fleet({ sender7: 12 }, { blockBounces: 6 })).item).toMatchObject({ call: "replace", also: ["Block list bounces"] });
+    expect(callOf(fleet({}, { listed: 1, blockBounces: 6 })).item).toMatchObject({ call: "replace_now", also: [] });
   });
 
   it("won't offer a domain that's already being replaced", () => {

@@ -149,8 +149,8 @@ export function ReplaceList({ data }: { data: ReplaceListData }) {
         </div>
 
         <p className="rp-meta">
-          Looked at {int(data.judged)} live sending domains over the last 7 days, each against the other domains on its own Smartlead tag.{" "}
-          <b>{int(data.healthy)}</b> have nothing against them and <b>{int(data.early)}</b> sent under {int(REPLACE_RULES.minSent)}, too few to judge.
+          Looked at {int(data.judged)} live sending domains over the last 7 days (14 for those that send little), each against the other domains on its own Smartlead tag.{" "}
+          <b>{int(data.healthy)}</b> have nothing against them and <b>{int(data.early)}</b> sent under {int(REPLACE_RULES.minSent)} in 14 days, too few to judge.
         </p>
 
         <h2 id="rp-title" className="sr-only">Domains to replace or watch</h2>

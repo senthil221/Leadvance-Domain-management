@@ -1177,7 +1177,12 @@ export async function getReview(from: string, to: string): Promise<import("./rev
       group by e.campaign_id`,
   ]);
   const { idleDays } = await import("./review");
-  for (const d of domains) d.idleDays = idleDays(d, to, t.today);
+  // The same calls the Replace list shows, so Replace and Watch agree on both pages.
+  const { calls } = await getReplaceCalls();
+  for (const d of domains) {
+    d.idleDays = idleDays(d, to, t.today);
+    d.call = calls.get(d.id) ?? null;
+  }
   return { from, to, today: t.today, slSyncedAt: t.slSyncedAt, domains, campaigns };
 }
 
