@@ -231,6 +231,7 @@ describe("replacement through Hypertide's replace queue", () => {
   });
 
   it("submits the swap, sets the nameservers it returns, follows Hypertide, then sets up Smartlead and stops the old domain", async () => {
+    await sql`update replacement_batches set stop_old_sending = true`;
     const ht = fakeHypertide();
     const pb = fakePorkbun({ getNs: vi.fn(async () => pair) } as Partial<Porkbun>);
     const sl = fakeSmartlead();
@@ -285,6 +286,11 @@ describe("replacement through Hypertide's replace queue", () => {
     expect(await status(newId)).toBe("warming");
     expect(await status(oldId)).toBe("draining");
     expect((await sql`select completed_at from replacement_items where id = ${itemId}`)[0].completed_at).not.toBeNull();
+    // By default the old domain keeps sending through its grace period: no limit
+    // change, still in its campaign.
+    expect((await sql`select stop_old_sending from replacement_batches`)[0].stop_old_sending).toBe(false);
+    expect((await sql`select count(*)::int as n from inbox_setting_changes c join inboxes i on i.id = c.inbox_id where i.domain_id = ${oldId}`)[0].n).toBe(0);
+    expect((await sql`select count(*)::int as n from campaign_inboxes ci join inboxes i on i.id = ci.inbox_id where i.domain_id = ${oldId}`)[0].n).toBe(3);
 
     const r = await addReplacementToCampaigns(sql, sl, itemId, "me");
     expect(r).toEqual({ inboxes: 3, campaigns: 1 });

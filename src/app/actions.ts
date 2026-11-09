@@ -164,7 +164,7 @@ const replacementInput = z
     usernames: z
       .array(z.object({ firstName: z.string().trim().min(1).max(60), lastName: z.string().trim().min(1).max(60) }))
       .min(1).max(25).optional(),
-    stopOldSending: z.boolean().default(true),
+    stopOldSending: z.boolean().default(false),
     addToCampaigns: z.boolean().default(false),
     autoWarmup: z.boolean().default(true),
   })
