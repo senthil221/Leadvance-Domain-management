@@ -1981,6 +1981,13 @@ body.is-col-resizing { cursor: col-resize; user-select: none; }
 .dd-panel .dd-item { height: auto; }
 .dd-item .dd-check, .dd-item[data-selected="true"] .dd-check { color: var(--brand-solid, var(--info-solid)); }
 .dd-empty { padding: 16px 10px; text-align: center; font-size: 12.5px; color: var(--faint); }
+/* MultiSelect: a tick box in front of each row */
+.dd-box {
+  flex: none; display: inline-grid; place-items: center; width: 15px; height: 15px; border-radius: 4px;
+  border: 1px solid var(--line-strong); background: var(--surface); color: #fff;
+}
+.dd-box[data-on] { border-color: var(--brand-solid, var(--info-solid)); background: var(--brand-solid, var(--info-solid)); }
+.dd-panel .dd-box svg { color: #fff; }
 
 /* Performance: Clear all sits with the filters, stronger once anything is set */
 .btn.clear-all[data-on] { border-color: var(--brand-line); background: var(--brand-soft); color: var(--brand-ink); font-weight: 500; }
@@ -2099,6 +2106,8 @@ body.is-col-resizing { cursor: col-resize; user-select: none; }
 .ur-bar .search-input { width: 260px; max-width: 100%; }
 .ur-bar .search-input .input, .ur-bar .select { height: 30px; }
 .ur-bar .select { width: auto; flex: none; }
+.ur-date { display: inline-flex; align-items: center; gap: 6px; }
+.ur-date input[type="date"] { width: 136px; height: 30px; }
 .ur-kind { margin-right: 6px; vertical-align: 1px; }
 .ur-more { margin: 0; padding: 10px 14px; color: var(--muted); font-size: 12px; border-top: 1px solid var(--line); }
 .ur-sync { color: var(--muted); font-size: 12px; white-space: nowrap; }

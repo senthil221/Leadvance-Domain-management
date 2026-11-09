@@ -10,7 +10,7 @@ export const metadata: Metadata = { title: "Untracked replies" };
 const HANDLED_DAYS = 14;
 /** Bounces and warm-up mail can run to thousands: the page shows the latest only. */
 const OTHER_SHOWN = 300;
-/** Text sent to the page for each reply; the sheet gets it whole. */
+/** Text sent to the page for each bounce or other mail. Campaign replies come whole, for Copy for Sheets. */
 const BODY_SHOWN = 6000;
 
 export default function UntrackedPage() {
@@ -32,7 +32,7 @@ function item(r: UntrackedRow): UntrackedItem {
   return {
     id: r.id, kind: r.kind, subject: r.subject, senderName: r.senderName, senderEmail: r.senderEmail,
     recipientName: r.recipientName, recipientEmail: r.recipientEmail,
-    body: r.body && r.body.length > BODY_SHOWN ? `${r.body.slice(0, BODY_SHOWN)}…` : r.body,
+    body: r.kind !== "reply" && r.body && r.body.length > BODY_SHOWN ? `${r.body.slice(0, BODY_SHOWN)}…` : r.body,
     receivedAt: iso(r.receivedAt), firstSeenAt: iso(r.firstSeenAt)!, handledAt: iso(r.handledAt),
     client: r.client, domain: r.domain,
   };
@@ -40,10 +40,10 @@ function item(r: UntrackedRow): UntrackedItem {
 
 async function UntrackedData() {
   await getCurrentUser();
-  const [replies, other, handled, counts, sync] = await Promise.all([
-    listUntrackedReplies({ view: "replies" }),
+  // Every campaign reply, waiting or handled: the view cuts Waiting and Handled from it.
+  const [all, other, counts, sync] = await Promise.all([
+    listUntrackedReplies({ view: "all" }),
     listUntrackedReplies({ view: "other", limit: OTHER_SHOWN }),
-    listUntrackedReplies({ view: "handled", handledDays: HANDLED_DAYS, limit: 1000 }),
     countUntracked(HANDLED_DAYS),
     lastUntrackedSync(),
   ]);
@@ -52,6 +52,7 @@ async function UntrackedData() {
       handledDays={HANDLED_DAYS}
       counts={counts}
       lastSync={sync ? { ...sync, finishedAt: iso(sync.finishedAt) } : null}
-      replies={replies.map(item)} other={other.map(item)} handled={handled.map(item)} />
+      all={all.map(item)}
+      other={other.map(item)} />
   );
 }
