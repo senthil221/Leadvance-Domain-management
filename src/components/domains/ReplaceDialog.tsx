@@ -8,13 +8,14 @@ import { toast } from "sonner";
 import { loadReplaceOptions, startReplacement } from "@/app/actions";
 import { ClientCell, Skeleton } from "@/components/ui";
 import { hypertideAcceptsDomain } from "@/integrations/hypertide";
+import { ageLabel, daysSince } from "@/lib/format";
 import type { StorageCandidate } from "@/lib/queries";
 import { REPLACEMENT_REASONS, type ReplacementReason } from "@/lib/status";
 
 export type ReplaceTarget = { id: string; name: string; tld: string | null; clientName: string | null; clientHue: number | null };
 
 // One storage domain per old domain: same TLD first, otherwise the first rested
-// candidate (never-used domains come first, then the oldest purchase).
+// candidate (never-used domains come first, then the oldest).
 // Domains Hypertide refuses (hyphens, over 35 characters) are never auto-picked.
 function autoAssign(targets: ReplaceTarget[], candidates: StorageCandidate[]) {
   const free = candidates.filter((c) => hypertideAcceptsDomain(c.name));
@@ -102,7 +103,7 @@ function FreeDomains({ candidates, assign, targets, hypertide, onPick }: {
                 <span className="rp-tick" aria-hidden>{by ? <CheckIcon size={11} strokeWidth={2.5} /> : null}</span>
                 <span className="rp-side">
                   <span className="list-title">{c.name}</span>
-                  <span className="list-meta">{by ? <>for {by}</> : <>{c.registrar ?? "no registrar account"} · {lastUsed(c.lastUsedOn)}</>}</span>
+                  <span className="list-meta">{by ? <>for {by}</> : <>{c.bornAt ? `${ageLabel(daysSince(c.bornAt))} old · ` : null}{c.registrar ?? "no registrar account"} · {lastUsed(c.lastUsedOn)}</>}</span>
                 </span>
                 {hypertide && !hypertideAcceptsDomain(c.name) ? <span className="badge tone-warning" title="Hypertide takes no hyphens and 35 characters at most">Hypertide won&apos;t accept</span> : null}
               </button>

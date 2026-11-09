@@ -9,6 +9,7 @@ import { senderOverview, tagOverview } from "./tag-list";
 import { sql } from "./db";
 import type { ConnectionProblem } from "@/lib/connections";
 import type { DomainStatus, ReplacementReason, StepStatus } from "./status";
+import { REPLACEMENT_TLDS } from "./tlds";
 
 // ---------------------------------------------------------------------------
 // Shared lookups
@@ -497,14 +498,20 @@ export async function getDomainDetail(id: string): Promise<DomainDetail | null> 
 // locked here: start_replacement re-checks each pick inside its transaction.
 // Domains used within the reuse window (Settings → Lifecycle) are left out;
 // never-used ones come first, then those at a known registrar.
-export type StorageCandidate = { id: string; name: string; tld: string | null; registrar: string | null; purchasedAt: Date | null; lastUsedOn: Date | null };
+export type StorageCandidate = { id: string; name: string; tld: string | null; registrar: string | null; purchasedAt: Date | null; bornAt: Date | null; lastUsedOn: Date | null };
 
+/**
+ * Storage domains a replacement can use: only the endings in REPLACEMENT_TLDS.
+ * Never-used domains first, then the oldest, since age helps reputation.
+ */
 export async function listStorageCandidates(limit = 200) {
   return sql<StorageCandidate[]>`
-    select d.id, d.name, d.tld, v.name as registrar, d.purchased_at, d.last_used_on
+    select d.id, d.name, d.tld, v.name as registrar, d.purchased_at,
+      coalesce(d.purchased_at, d.registered_at)::timestamptz as born_at, d.last_used_on
     from domains d left join vendors v on v.id = d.registrar_id
     where d.status = 'in_storage' and (d.expires_at is null or d.expires_at >= current_date) and (d.last_used_on is null or d.last_used_on + reuse_after_days() <= current_date)
-    order by domain_is_free(d) desc, (d.last_used_on is not null), (d.registrar_id is null), d.purchased_at nulls last, d.created_at, d.name
+      and lower(d.tld) = any(${[...REPLACEMENT_TLDS]}::text[])
+    order by domain_is_free(d) desc, (d.last_used_on is not null), (d.registrar_id is null), coalesce(d.purchased_at, d.registered_at) nulls last, d.created_at, d.name
     limit ${limit}`;
 }
 

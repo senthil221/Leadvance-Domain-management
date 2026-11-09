@@ -14,6 +14,7 @@ import { Empty } from "@/components/ui";
 import { ago, daysSince, fixedDate, int } from "@/lib/format";
 import { nsOf } from "@/lib/lifecycle";
 import { useSticky } from "@/lib/sticky";
+import { isReplacementTld, REPLACEMENT_TLDS } from "@/lib/tlds";
 import type { ClientRow, DomainRow } from "@/lib/queries";
 
 // Domains bought and never touched, laid out for picking which to use next:
@@ -64,17 +65,22 @@ const tableStyle = (custom: Record<string, number>, nameMin: number) => {
   return custom.name ? { width: total, minWidth: total } : { minWidth: total };
 };
 
-export function FreeDomainsView({ domains, clients, used, pointed }: { domains: DomainRow[]; clients: ClientRow[]; used: number; pointed: number }) {
+export function FreeDomainsView({ domains: all, clients, used, pointed }: { domains: DomainRow[]; clients: ClientRow[]; used: number; pointed: number }) {
   const params = useSearchParams();
+  // Only the endings used for replacements, unless you ask to see the rest.
+  const [showOther, setShowOther] = useSticky("free:other-tlds", false);
+  const otherCount = useMemo(() => all.filter((d) => !isReplacementTld(d.tld)).length, [all]);
+  const domains = useMemo(() => (showOther ? all : all.filter((d) => isReplacementTld(d.tld))), [all, showOther]);
   const router = useRouter();
   // Filters stay while you move between tabs and pages; Clear resets them. ?tld= links win.
+  // Oldest first: an older domain usually carries a better sending reputation.
   const [tldList, setTldList] = useSticky("free:tlds", "", params.get("tld"));
   const tlds = useMemo(() => new Set(tldList.split(",").filter(Boolean)), [tldList]);
   const setTlds = (next: Set<string>) => setTldList([...next].join(","));
   const [q, setQ] = useSticky("free:q", "");
   const [registrar, setRegistrar] = useSticky("free:registrar", "");
   const [ns, setNs] = useSticky<NsState | "">("free:ns", "");
-  const [sort, setSort] = useSticky<{ key: SortKey; dir: 1 | -1 }>("free:sort", { key: "name", dir: 1 });
+  const [sort, setSort] = useSticky<{ key: SortKey; dir: 1 | -1 }>("free:sort", { key: "age", dir: -1 });
   const widths = useColumnWidths("free-domains", DEFAULT_WIDTHS);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [setupOpen, setSetupOpen] = useState(false);
@@ -203,6 +209,12 @@ export function FreeDomainsView({ domains, clients, used, pointed }: { domains: 
                 .{t} <span>{int(n)}</span>
               </button>
             ))}
+            {otherCount ? (
+              <button type="button" className="btn btn-ghost btn-sm" aria-pressed={showOther}
+                title={`Replacements use .${REPLACEMENT_TLDS.join(", .")} only`} onClick={() => { setShowOther(!showOther); if (showOther) setTlds(new Set([...tlds].filter(isReplacementTld))); }}>
+                {showOther ? "Hide other endings" : `${int(otherCount)} on other endings hidden · Show`}
+              </button>
+            ) : null}
           </div>
           <div className="table-bar">
             <label className="search-input">
