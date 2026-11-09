@@ -218,7 +218,8 @@ function Row({ r, now, graceDays, smartleadLive, isOpen, onToggle }: {
               {r.htNameservers?.length ? <div><dt>Nameservers</dt><dd>{r.htNameservers.join(", ")}</dd></div> : null}
               {r.hypertideReplace ? <div><dt>Hypertide</dt><dd>{r.htOperation ? r.htOperation.replace(/_/g, " ") : "not sent yet"}</dd></div> : null}
               <div><dt>Old domain</dt><dd>{STATUS_META[r.oldStatus]?.label ?? r.oldStatus}{r.stopOldSending ? ", stops sending once the new inboxes are in" : ", keeps sending"}</dd></div>
-              <div><dt>Campaigns</dt><dd>{r.oldCampaigns.length ? r.oldCampaigns.join("; ") : "none"}</dd></div>
+              {/* The full width: a domain can be in 25+ campaigns. */}
+              <div className="col-span-full"><dt>Campaigns</dt><dd>{r.oldCampaigns.length ? r.oldCampaigns.join("; ") : "none"}</dd></div>
             </dl>
             {step === "inboxes" && r.htOrderId && !r.htPaidAt ? <div className="mt-2"><ApprovePayment itemIds={[r.id]} domains={[r.newDomain]} /></div> : null}
           </td>

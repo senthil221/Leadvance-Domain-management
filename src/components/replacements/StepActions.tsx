@@ -28,7 +28,9 @@ export function StepActions({ itemId, step, status, compact = false, canSwap = f
       toast.success(`Swapped ${r.data.from} for ${r.data.to}`, { description: `${r.data.from} is back in storage. The replacement starts again with ${r.data.to}.` });
     });
 
-  const canRetry = status === "failed" || (status === "manual" && step === "nameservers");
+  // A manual inboxes step re-checks the Hypertide order settings on Retry; an
+  // order already placed is never placed twice.
+  const canRetry = status === "failed" || (status === "manual" && (step === "nameservers" || step === "inboxes"));
   return (
     <span className="flex items-center gap-1.5">
       {canRetry ? (
