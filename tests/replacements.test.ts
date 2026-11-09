@@ -6,7 +6,7 @@ import type { Porkbun } from "../src/integrations/porkbun";
 import type { Hypertide } from "../src/integrations/hypertide";
 import type { Smartlead } from "../src/integrations/smartlead";
 import type { SmartleadApp } from "../src/integrations/smartlead-app";
-import { actOnStep, addReplacementToCampaigns, advanceItem, advanceReplacements, approveHypertidePayment, syncSmartleadTags, trackHypertideOrders } from "../src/jobs/replacements";
+import { actOnStep, addReplacementToCampaigns, advanceItem, advanceReplacements, approveHypertidePayment, swapNewDomain, syncSmartleadTags, trackHypertideOrders } from "../src/jobs/replacements";
 import { loadMigrations } from "../scripts/migrations";
 
 // The step runner uses the same Postgres client as production, so it runs
@@ -318,6 +318,31 @@ describe("replacement through Hypertide's replace queue", () => {
     await advanceItem(sql, { porkbun: null, smartlead: fakeSmartlead() }, itemId);
     expect(await status(newId)).toBe("warming");
     expect((await sql`select warmup_started_at from domains where id = ${newId}`)[0].warmup_started_at).toBeNull();
+  });
+
+  it("swaps a new domain Hypertide refused for the next free one, same ending first, and starts again", async () => {
+    await sql`insert into domains (name, purchased_at) values ('otherpick.net', '2025-01-01'), ('laterpick.com', '2025-06-01'), ('earlypick.com', '2025-02-01')`;
+    await sql`update domains set tags = '{New}' where id = ${newId}`;
+    await sql`update replacement_items set step_nameservers = 'failed', last_error = 'Replacement conflicts with an existing request' where id = ${itemId}`;
+    const r = await swapNewDomain(sql, itemId, "me");
+    expect(r).toEqual({ from: "freshsend.com", to: "earlypick.com" });
+
+    const [item] = await sql`select new_domain_id, step_nameservers, step_inboxes, last_error, ht_operation_id from replacement_items where id = ${itemId}`;
+    const [pick] = await sql`select id, status, tags, client_id from domains where name = 'earlypick.com'`;
+    expect(item).toMatchObject({ new_domain_id: pick.id, step_nameservers: "pending", step_inboxes: "pending", last_error: null, ht_operation_id: null });
+    expect(pick.status).toBe("provisioning");
+    expect(pick.tags).toEqual(["New"]);
+    expect(pick.client_id).toBe((await sql`select client_id from domains where id = ${oldId}`)[0].client_id);
+    const [refused] = await sql`select status, tags, client_id from domains where id = ${newId}`;
+    expect(refused).toEqual({ status: "in_storage", tags: [], client_id: null });
+  });
+
+  it("won't swap once Hypertide has accepted the new domain, or when no free domain is left", async () => {
+    await expect(swapNewDomain(sql, itemId, "me")).rejects.toThrow(/No free domain/);
+    await sql`insert into domains (name) values ('spare.com')`;
+    await sql`update replacement_items set ht_operation_id = 'op_1' where id = ${itemId}`;
+    await expect(swapNewDomain(sql, itemId, "me")).rejects.toThrow(/can't be swapped/);
+    expect(await status(newId)).toBe("provisioning");
   });
 
   it("tags the domains, starts the old domain's grace when Hypertide has the swap, and mirrors the tags in Smartlead", async () => {

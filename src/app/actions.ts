@@ -621,6 +621,22 @@ export async function actOnReplacementStep(input: z.input<typeof stepInput>): Pr
   }
 }
 
+/** When Hypertide refuses a replacement's new domain: swap in the next free one and start again. */
+export async function swapReplacementDomain(itemId: string): Promise<ActionResult<{ from: string; to: string }>> {
+  try {
+    const actor = await requireActor();
+    const id = z.uuid().parse(itemId);
+    const { swapNewDomain } = await import("@/jobs/replacements");
+    const r = await swapNewDomain(jobSql, id, actor);
+    kickJob("replacement-steps");
+    refresh();
+    return { ok: true, data: r };
+  } catch (e) {
+    if (e instanceof Error && /can't be swapped|No free domain|not found/.test(e.message)) return { ok: false, error: e.message };
+    return fail(e);
+  }
+}
+
 /** Once a replacement's new inboxes have warmed up: add them to the old domain's campaigns. */
 export async function addReplacementToCampaigns(itemId: string): Promise<ActionResult<{ inboxes: number; campaigns: number }>> {
   try {

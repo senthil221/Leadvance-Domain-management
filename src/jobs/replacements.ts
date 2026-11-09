@@ -4,6 +4,7 @@ import type { Porkbun } from "../integrations/porkbun";
 import { accountName, applyNameservers, registrarFor, type RegistrarAccount } from "../integrations/registrars";
 import { API_REGISTRARS } from "../lib/registrar-providers";
 import { isStepFinished, stepWaitsOnPerson } from "../lib/status";
+import { REPLACEMENT_TLDS } from "../lib/tlds";
 import type { Smartlead } from "../integrations/smartlead";
 import type { SmartleadApp, SmartleadTag } from "../integrations/smartlead-app";
 
@@ -399,6 +400,45 @@ export async function advanceReplacements(sql: postgres.Sql, ctx: StepContext) {
 }
 
 /** A person acting on a pair's current step from the Replacements page. */
+/**
+ * Swaps a replacement's new domain for another free one, for when Hypertide
+ * refuses the domain. Only before Hypertide has accepted the swap. The refused
+ * domain goes back to storage, the next free domain takes its place (same
+ * ending first, never used before first, then oldest), and the steps start again.
+ */
+export async function swapNewDomain(sql: postgres.Sql, id: string, actor: string) {
+  const item = await loadItem(sql, id);
+  if (!item) throw new Error("Replacement not found");
+  if (item.completed || item.htop || finished(item.inboxes) || finished(item.smartlead)) {
+    throw new Error(`${item.newname} is already being set up, so it can't be swapped`);
+  }
+  return sql.begin(async (tx) => {
+    const [pick] = await tx`
+      select d.id, d.name from domains d
+      where d.status = 'in_storage' and domain_is_free(d) and d.id <> ${item.newid}
+        and lower(d.tld) = any(${[...REPLACEMENT_TLDS]}::text[])
+      order by lower(d.tld) = (select lower(tld) from domains where id = ${item.newid}) desc,
+        (d.last_used_on is not null), coalesce(d.purchased_at, d.registered_at) nulls last, d.name
+      limit 1 for update skip locked`;
+    if (!pick) throw new Error("No free domain left to swap in");
+    const [old] = await tx`select client_id, inbox_provider_id from domains where id = ${item.oldid}`;
+    // The refused domain goes back to storage, as it was.
+    await tx`select transition_domain(${item.newid}, 'in_storage', ${`swapped for ${pick.name} in the replacement of ${item.oldname}`}, ${actor})`;
+    await tx`update domains set client_id = null, tags = array(select t from unnest(tags) t where lower(t) <> 'new' order by 1) where id = ${item.newid}`;
+    // The new one takes its place.
+    await tx`update domains set client_id = ${old.client_id}, inbox_provider_id = coalesce(inbox_provider_id, ${old.inbox_provider_id}),
+        tags = array(select distinct t from unnest(tags || array['New']) t order by 1)
+      where id = ${pick.id}`;
+    await tx`select transition_domain(${pick.id}, 'provisioning', ${`replacing ${item.oldname}, instead of ${item.newname}`}, ${actor})`;
+    await tx`update replacement_items set new_domain_id = ${pick.id},
+        step_nameservers = 'pending', step_inboxes = 'pending', note = null, last_error = null,
+        hypertide_ns = null, hypertide_ns_verified_at = null, hypertide_order_id = null, hypertide_status = null,
+        ht_operation_id = null, ht_operation = null, ht_response = null, ht_checked_at = null
+      where id = ${id}`;
+    return { from: item.newname, to: pick.name as string };
+  });
+}
+
 export async function actOnStep(sql: Sql, ctx: StepContext, id: string, step: StepName, action: "done" | "retry" | "skip", actor: string) {
   const item = await loadItem(sql, id);
   if (!item) throw new Error("Replacement not found");
