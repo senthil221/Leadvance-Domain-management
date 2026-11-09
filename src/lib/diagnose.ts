@@ -72,7 +72,7 @@ export type DiagnosisFacts = {
   bounces28: Record<string, number>;
   peers: { client: PeerGroup | null; tag: PeerGroup | null; all: PeerGroup | null };
   gaps: Record<GapKey, Gap>;
-  rules: { problems: string[] };
+  rules: { problems: string[]; replaceCall: string | null; replaceReasons: string[] };
   statusChanges: { from: string | null; to: string; daysAgo: number }[];
 };
 
@@ -81,6 +81,8 @@ export type CauseRow = { cause: string; last7: number; last28: number };
 export type PeerRow = { grp: "client" | "tag" | "all"; week: number; domains: number; sent: number; humanReplies: number; bounces: number };
 export type DiagnosisInput = {
   fact: FixFact | null;
+  /** What the replace rules made of it this week, when it's a live sending domain. */
+  replace?: { call: string; reasons: string[] } | null;
   own: { tld: string | null; ageDays: number | null; daysInSmartlead: number | null };
   weeks: WeekRow[];
   causes: CauseRow[];
@@ -146,7 +148,10 @@ export function buildFacts(input: DiagnosisInput, fact: FixFact): DiagnosisFacts
       humanRepliesThisWeekVsBefore: gapBetween(weeks[0].humanReplies, weeks[0].sent, before.human, before.sent),
       bouncesThisWeekVsBefore: gapBetween(weeks[0].bounces, weeks[0].sent, before.bounces, before.sent),
     },
-    rules: { problems: (queue?.problems ?? []).map((p) => `${FIX_META[p.kind].label}: ${p.evidence}`) },
+    rules: {
+      problems: (queue?.problems ?? []).map((p) => `${FIX_META[p.kind].label}: ${p.evidence}`),
+      replaceCall: input.replace?.call ?? null, replaceReasons: input.replace?.reasons ?? [],
+    },
     statusChanges: input.changes,
   };
 }
@@ -194,7 +199,7 @@ const words = (s: string) => { const w = s.replace(/_/g, " ").replace(/([a-z])([
 
 export function factLabel(path: string) {
   const parts = path.split(".");
-  if (parts[0] === "rules") return "Rule check";
+  if (parts[0] === "rules") return parts[1] === "replaceCall" ? "Replace rules: call" : parts[1] === "replaceReasons" ? "Replace rules" : "Rule check";
   if (parts[0] === "statusChanges") return "Status change";
   const group = parts[0] === "peers" ? `peers.${parts[1]}` : parts[0];
   const key = parts[parts.length - 1];
@@ -266,6 +271,8 @@ How to read the facts:
 - peers.client is the client's other live domains, peers.tag is those sharing a tag with this one, and peers.all is every live domain.
 - gaps says whether a difference is too big to be chance: below, same, above, or too_little_data. These were calculated with a statistical test. Trust them over your own reading of the rates. Never call a gap real when it says same or too_little_data.
 - rules.problems are problems the agency's rule checks have already raised.
+- rules.replaceCall is what the agency's replace rules decided from the last 7 days against the other domains it sends with (the same Smartlead tag, or the client's others): Replace now, Replace, Watch, Fix first, List problem, Keep, or Too early to judge. rules.replaceReasons are the numbers behind it. Those rules act only on spam, policy and block list bounces, on replies of any kind, and on block lists. They leave out warm-up reputation, domain age and one domain's human reply rate on purpose: in this agency's own data those did not single out a bad domain, so don't call for a replacement on them alone.
+- Say whether the facts support the replace call. Choose the action replace only when they do. If you disagree with the call, cite the fact that contradicts it.
 - setup values of null mean not checked, which is not the same as missing.
 
 What makes this useful is telling apart a problem with this domain from a problem with the client, its lists or its copy. If the client's other domains or the same tag fell in the same way, it is probably not this domain, so say so and prefer check_lists over rest or replace.

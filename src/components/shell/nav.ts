@@ -1,4 +1,4 @@
-import { Activity, ArrowLeftRight, BarChart3, CalendarClock, CircleCheck, ClipboardCheck, Columns2, Globe, Inbox, LayoutGrid, MailQuestion, MailX, MessageSquareText, Settings2, Tags, Users, Wrench, type LucideIcon } from "lucide-react";
+import { Activity, ArrowLeftRight, BarChart3, CalendarClock, CircleCheck, ClipboardCheck, Columns2, Globe, Inbox, LayoutGrid, ListChecks, MailQuestion, MailX, MessageSquareText, Settings2, Tags, Users, Wrench, type LucideIcon } from "lucide-react";
 
 export type NavItem = { href: string; label: string; icon: LucideIcon; key: string };
 export type NavGroup = NavItem & { pages: NavItem[] };
@@ -9,6 +9,7 @@ export const PAGES = {
   overview: { href: "/", label: "Overview", icon: LayoutGrid, key: "o" },
   clients: { href: "/clients", label: "Clients", icon: Users, key: "l" },
   fix: { href: "/fix", label: "Fix queue", icon: Wrench, key: "x" },
+  replace: { href: "/replace", label: "Replace list", icon: ListChecks, key: "p" },
   inventory: { href: "/inventory", label: "Domains", icon: Globe, key: "d" },
   replacements: { href: "/replacements", label: "Replacements", icon: ArrowLeftRight, key: "r" },
   freeDomains: { href: "/free-domains", label: "Free domains", icon: CircleCheck, key: "f" },
@@ -36,6 +37,7 @@ export const NAV: { label: string; items: NavGroup[] }[] = [
     items: [
       { ...P.overview, pages: [] },
       { ...P.fix, pages: [] },
+      { ...P.replace, pages: [] },
       { ...P.clients, pages: [] },
       { ...P.inboxes, pages: [{ ...P.inboxes, label: "Inboxes" }, P.tags, P.untracked] },
       { ...P.inventory, pages: [{ ...P.inventory, label: "Inventory" }, P.replacements, P.freeDomains, P.expiring] },

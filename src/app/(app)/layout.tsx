@@ -37,6 +37,7 @@ async function NavWithCounts() {
       badges={{
         "/": { value: c.connectionProblems, warning: true },
         "/fix": { value: c.fixToday, warning: true },
+        "/replace": { value: c.toReplace, warning: true },
         "/inventory": { value: c.byStatus.active ?? 0 },
         "/replacements": { value: c.runningBatches, warning: true },
         "/expiring": { value: c.expiringUrgent, warning: true },

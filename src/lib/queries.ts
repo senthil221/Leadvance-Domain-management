@@ -2,8 +2,9 @@ import { parseSavedPairs } from "@/lib/tag-map";
 import { parseWarmupProgram } from "@/lib/warmup-program";
 import "server-only";
 import { attentionDomainCount } from "./attention";
-import type { DiagnosisInput, CauseRow, PeerRow, StoredDiagnosis, WeekRow } from "./diagnose";
+import type { DiagnosisAction, DiagnosisInput, DiagnosisVerdict, CauseRow, PeerRow, StoredDiagnosis, WeekRow } from "./diagnose";
 import { FIX_FACTS_SQL, fixQueue, type FixFact, type FixItem, type FixSnooze } from "./fix-queue";
+import { CALL_META, REPLACE_OUTCOMES_SQL, REPLACE_STATS_SQL, replaceList, type OutcomeRow, type ReplaceList, type ReplaceStat } from "./replace-list";
 import { addDays, monday, previousRange } from "./range";
 import { senderOverview, tagOverview } from "./tag-list";
 import { sql } from "./db";
@@ -45,22 +46,52 @@ export async function listVendors() {
   return sql<VendorRow[]>`select id, name, kind, api_supported from vendors order by kind, name`;
 }
 
-export type NavCounts = { byStatus: Record<DomainStatus, number>; openAlerts: number; runningBatches: number; connectionProblems: number; expiringUrgent: number; attention: number; fixToday: number };
+export type NavCounts = { byStatus: Record<DomainStatus, number>; openAlerts: number; runningBatches: number; connectionProblems: number; expiringUrgent: number; attention: number; fixToday: number; toReplace: number };
 
 export type FixQueueData = { items: FixItem[]; snoozed: (FixItem & { until: string })[]; slSyncedAt: Date | null };
 
+// The facts take about half a second, so pages that need them twice load them once.
+const fixFacts = async () => [...(await sql.unsafe<FixFact[]>(FIX_FACTS_SQL))];
+
+/** The call on every live sending domain: replace, watch, fix first, or leave alone. */
+export async function getReplaceCalls(facts: Promise<FixFact[]> = fixFacts()): Promise<ReplaceList> {
+  const [f, stats] = await Promise.all([facts, sql.unsafe<ReplaceStat[]>(REPLACE_STATS_SQL)]);
+  return replaceList(f, [...stats]);
+}
+
+/** What the AI last said about a domain, cut down to what the list shows. */
+export type AiOpinion = { domainId: string; id: number; createdAt: Date; action: DiagnosisAction; verdict: DiagnosisVerdict; headline: string };
+export type ReplaceListData = Omit<ReplaceList, "calls"> & { opinions: AiOpinion[]; outcomes: OutcomeRow[]; aiReady: boolean; slSyncedAt: Date | null };
+
+/** The replace list, with the AI's last word on each domain on it and how past replacements turned out. */
+export async function getReplaceList(): Promise<ReplaceListData> {
+  const [{ calls: _calls, ...list }, outcomes, [sync]] = await Promise.all([
+    getReplaceCalls(),
+    sql.unsafe<OutcomeRow[]>(REPLACE_OUTCOMES_SQL),
+    sql<{ at: Date | null }[]>`select last_finished_at as at from job_state where job = 'smartlead-accounts'`,
+  ]);
+  void _calls;
+  const ids = list.items.map((i) => i.domainId);
+  const opinions = ids.length ? await sql<AiOpinion[]>`
+    select distinct on (domain_id) domain_id, id, created_at, result->>'action' as action, result->>'verdict' as verdict, result->>'headline' as headline
+    from domain_diagnoses where domain_id in ${sql(ids)} and model is not null
+    order by domain_id, id desc` : [];
+  return { ...list, opinions: [...opinions], outcomes: [...outcomes], aiReady: !!process.env.OPENROUTER_API_KEY, slSyncedAt: sync?.at ?? null };
+}
+
 /** Every problem on the live domains, worst first. */
-export async function getFixQueue(): Promise<FixQueueData> {
-  const [facts, snoozes, [sync]] = await Promise.all([
-    sql.unsafe<FixFact[]>(FIX_FACTS_SQL),
+export async function getFixQueue(facts: Promise<FixFact[]> = fixFacts()): Promise<FixQueueData> {
+  const [loaded, snoozes, [sync]] = await Promise.all([
+    facts,
     sql<FixSnooze[]>`select domain_name as name, kind, to_char(until at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"') as until from fix_snoozes where until > now()`,
     sql<{ at: Date | null }[]>`select last_finished_at as at from job_state where job = 'smartlead-accounts'`,
   ]);
-  return { ...fixQueue([...facts], [...snoozes]), slSyncedAt: sync?.at ?? null };
+  return { ...fixQueue(loaded, [...snoozes]), slSyncedAt: sync?.at ?? null };
 }
 
 export async function getNavCounts(): Promise<NavCounts> {
-  const [statusRows, [extra], attention, fix] = await Promise.all([
+  const facts = fixFacts();
+  const [statusRows, [extra], attention, fix, replace] = await Promise.all([
     sql<{ status: DomainStatus; n: number }[]>`select status, count(*)::int as n from domains group by status`,
     sql<{ openAlerts: number; runningBatches: number; connectionProblems: number; expiringUrgent: number }[]>`
       select
@@ -70,10 +101,14 @@ export async function getNavCounts(): Promise<NavCounts> {
         (select count(*)::int from replacement_batches where status = 'running') as running_batches,
         (select count(*)::int from order_connections where problem) as connection_problems`,
     attentionDomainCount(sql),
-    getFixQueue(),
+    getFixQueue(facts),
+    getReplaceCalls(facts),
   ]);
   const byStatus = Object.fromEntries(statusRows.map((r) => [r.status, r.n])) as Record<DomainStatus, number>;
-  return { byStatus, ...extra, attention, fixToday: fix.items.filter((i) => i.tier === "urgent").length };
+  return {
+    byStatus, ...extra, attention, fixToday: fix.items.filter((i) => i.tier === "urgent").length,
+    toReplace: replace.items.filter((i) => i.call === "replace_now" || i.call === "replace").length,
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -374,8 +409,9 @@ export async function getDiagnosisInput(id: string): Promise<DiagnosisInput | nu
     from domains d cross join t where d.id = ${id}`;
   if (!own) return null;
   const today = own.today;
-  const [facts, weeks, causes, peers, changes] = await Promise.all([
+  const [facts, stats, weeks, causes, peers, changes] = await Promise.all([
     sql.unsafe<FixFact[]>(FIX_FACTS_SQL),
+    sql.unsafe<ReplaceStat[]>(REPLACE_STATS_SQL),
     sql<WeekRow[]>`
       select ((${today}::date - s.day) / 7)::int as week, sum(s.sent)::int as sent, (count(*) filter (where s.sent > 0))::int as days_sent,
         sum(s.human_replies)::int as human_replies, sum(s.replies)::int as all_replies, sum(s.ooo)::int as ooo, sum(s.bounces)::int as bounces
@@ -401,8 +437,10 @@ export async function getDiagnosisInput(id: string): Promise<DiagnosisInput | nu
       select from_status as "from", to_status as "to", (${today}::date - at::date)::int as days_ago
       from domain_status_history where domain_id = ${id} and at >= ${today}::date - 60 order by at desc, id desc limit 8`,
   ]);
+  const call = replaceList([...facts], [...stats]).calls.get(id);
   return {
     fact: facts.find((f) => f.domainId === id) ?? null,
+    replace: call ? { call: call.call === "keep" ? "Keep" : call.call === "early" ? "Too early to judge" : CALL_META[call.call].label, reasons: call.reasons } : null,
     own: { tld: own.tld, ageDays: own.ageDays, daysInSmartlead: own.daysInSmartlead },
     weeks: [...weeks], causes: [...causes], peers: [...peers], changes: [...changes],
   };
