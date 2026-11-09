@@ -37,6 +37,12 @@ function textOf(node: ReactNode): string {
   return "";
 }
 
+/** "Amelia Wren (24)" → the name and a count shown apart, muted; anything else as is. */
+function splitCount(text: string): { label: string; count: string | null } {
+  const m = /^(.*\S)\s+\((\d[\d,.]*)\)$/.exec(text);
+  return m ? { label: m[1], count: m[2] } : { label: text, count: null };
+}
+
 /** Past this many options the list gets a search box. */
 const SEARCH_FROM = 8;
 
@@ -89,7 +95,7 @@ export function Select({ value, onChange, children, className = "select", style,
       <Popover.Trigger asChild disabled={disabled}>
         <button type="button" id={id} className={`${className} dd-trigger`} style={triggerStyle} title={title ?? chosen?.text} aria-label={ariaLabel}
           data-on={dataOn || undefined} data-empty={chosen ? undefined : true} disabled={disabled}>
-          <span className="dd-value">{chosen?.text ?? ""}</span>
+          <span className="dd-value">{chosen ? <Label text={chosen.text} /> : null}</span>
           <ChevronDown size={14} strokeWidth={1.75} className="dd-chevron" aria-hidden />
         </button>
       </Popover.Trigger>
@@ -109,7 +115,7 @@ export function Select({ value, onChange, children, className = "select", style,
             {searchable ? (
               <label className="dd-search">
                 <Search size={13} strokeWidth={1.75} aria-hidden />
-                <Command.Input placeholder="Search" aria-label={ariaLabel ? `Search ${ariaLabel.toLowerCase()}` : "Search"} />
+                <Command.Input placeholder="Search…" aria-label={ariaLabel ? `Search ${ariaLabel.toLowerCase()}` : "Search"} />
               </label>
             ) : null}
             <Command.List ref={listRef} className="dd-list">
@@ -118,8 +124,8 @@ export function Select({ value, onChange, children, className = "select", style,
                 const items = g.opts.map((o) => (
                   <Command.Item key={o.i} value={`o${o.i}`} keywords={[o.text, g.name ?? ""]} disabled={o.disabled}
                     className="dd-item" data-current={o.value === current} onSelect={() => pick(o.value)}>
-                    <span className="dd-item-text">{o.text}</span>
-                    {o.value === current ? <Check size={14} strokeWidth={2} className="dd-check" aria-hidden /> : null}
+                    <Label text={o.text} itemClass="dd-item-text" />
+                    <span className="dd-tick" aria-hidden>{o.value === current ? <Check size={14} strokeWidth={2.25} className="dd-check" /> : null}</span>
                   </Command.Item>
                 ));
                 return g.name ? <Command.Group key={gi} heading={g.name} className="dd-group">{items}</Command.Group> : <Fragment key={gi}>{items}</Fragment>;
@@ -129,5 +135,16 @@ export function Select({ value, onChange, children, className = "select", style,
         </Popover.Content>
       </Popover.Portal>
     </Popover.Root>
+  );
+}
+
+/** An option's text, with a trailing "(24)" shown as a separate muted count. */
+function Label({ text, itemClass = "dd-value-text" }: { text: string; itemClass?: string }) {
+  const { label, count } = splitCount(text);
+  return (
+    <>
+      <span className={itemClass}>{label}</span>
+      {count ? <span className="dd-count">{count}</span> : null}
+    </>
   );
 }

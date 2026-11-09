@@ -1246,20 +1246,27 @@ a.kpi:hover { border-color: var(--accent-line, var(--line-strong)); }
 
 /* ---------- Menus (Radix dropdown) ---------- */
 
+/* Same raised panel as the dropdowns below (--dd-* tokens). */
 .menu {
-  z-index: 80; min-width: 200px; padding: 4px; border-radius: 10px; background: var(--surface);
-  box-shadow: 0 0 0 1px var(--line), var(--shadow-md); animation: menu-in 140ms var(--t-ease);
+  z-index: 80; min-width: 200px; padding: 5px; border: 1px solid var(--dd-line); border-radius: 12px;
+  background: var(--dd-bg); box-shadow: var(--dd-shadow);
+  transform-origin: var(--radix-dropdown-menu-content-transform-origin); animation: dd-in 160ms var(--t-ease);
+  scrollbar-width: thin; scrollbar-color: var(--line-strong) transparent;
 }
-.menu-label { padding: 6px 8px 4px; font-size: 11px; font-weight: 500; color: var(--faint); }
+.menu::-webkit-scrollbar { width: 10px; }
+.menu::-webkit-scrollbar-thumb { background: var(--line-strong); border: 3px solid transparent; border-radius: 10px; background-clip: padding-box; }
+.menu::-webkit-scrollbar-track { background: transparent; }
+.menu-label { padding: 7px 9px 4px; font-size: 10.5px; font-weight: 600; letter-spacing: .04em; text-transform: uppercase; color: var(--faint); }
 .menu-item {
-  display: flex; align-items: center; gap: 9px; height: 30px; padding: 0 8px; border-radius: 6px;
+  display: flex; align-items: center; gap: 9px; height: 32px; padding: 0 10px; border-radius: 8px;
   color: var(--ink-soft); font-size: 13px; cursor: pointer; outline: none; user-select: none;
 }
 .menu-item svg { color: var(--faint); }
-.menu-item[data-highlighted] { background: var(--surface-3); color: var(--ink); }
+.menu-item[data-highlighted] { background: var(--dd-hover); color: var(--ink); }
+.menu-item[data-highlighted] svg { color: var(--muted); }
 .menu-item[data-disabled] { opacity: .45; cursor: default; }
 .menu-item .menu-hint { margin-left: auto; color: var(--faint); font-size: 12px; }
-.menu-sep { height: 1px; margin: 4px 0; background: var(--line); }
+.menu-sep { height: 1px; margin: 5px -5px; background: var(--line); }
 .bulk-bar .menu-trigger[data-state="open"] { background: color-mix(in srgb, var(--bg) 14%, transparent); }
 @keyframes menu-in { from { opacity: 0; transform: translateY(-3px) scale(.98); } }
 
@@ -1898,33 +1905,82 @@ body.is-col-resizing { cursor: col-resize; user-select: none; }
 /* Dropdowns (components/Select): a styled list in place of the browser's own.
    The trigger keeps the .select look; the list scrolls, and past 8 options it
    gets a search box. */
-.dd-trigger { display: inline-flex; align-items: center; gap: 6px; text-align: left; cursor: pointer; padding-right: 8px; }
+:root {
+  --dd-bg: var(--surface);
+  --dd-line: var(--line-strong);
+  --dd-hover: color-mix(in srgb, var(--ink) 5%, transparent);
+  --dd-shadow: 0 1px 2px rgb(15 23 42 / .05), 0 6px 14px -6px rgb(15 23 42 / .10), 0 18px 40px -12px rgb(15 23 42 / .18);
+}
+:root[data-theme="dark"] {
+  /* Raised a step above the page so an open list never melts into a table. */
+  --dd-bg: #18181b;
+  --dd-line: #2c2c31;
+  --dd-hover: rgb(255 255 255 / .065);
+  --dd-shadow: 0 1px 0 rgb(255 255 255 / .04) inset, 0 8px 18px -8px rgb(0 0 0 / .6), 0 22px 48px -12px rgb(0 0 0 / .75);
+}
+@keyframes dd-in { from { opacity: 0; transform: translateY(-3px) scale(.97); } }
+
+.dd-trigger {
+  display: inline-flex; align-items: center; gap: 8px; text-align: left; cursor: pointer;
+  padding: 0 8px 0 11px; box-shadow: 0 1px 1px rgb(15 23 42 / .03);
+}
+.dd-trigger:not([data-on]):hover { border-color: var(--line-strong); background: var(--surface-2); }
+.dd-trigger:not([data-on]):focus:not(:focus-visible) { box-shadow: 0 1px 1px rgb(15 23 42 / .03); border-color: var(--line); }
+.dd-trigger:focus-visible { border-color: var(--brand-line); box-shadow: var(--focus-ring); }
+.dd-trigger[data-state="open"]:not([data-on]) {
+  border-color: var(--line-strong); background: var(--surface-2);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--ink) 6%, transparent);
+}
 .dd-trigger:disabled { opacity: .55; cursor: default; }
-.dd-trigger[data-state="open"] { border-color: var(--brand-line); box-shadow: var(--focus-ring); }
-.dd-value { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.dd-chevron { flex: none; color: var(--faint); transition: transform .14s var(--t-ease); }
+.dd-value { display: flex; align-items: baseline; gap: 6px; flex: 1 1 auto; min-width: 0; overflow: hidden; white-space: nowrap; }
+.dd-value-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.dd-value .dd-count { margin-left: 0; }
+.dd-trigger[data-empty] .dd-value { color: var(--faint); }
+.dd-chevron { flex: none; color: var(--faint); transition: transform .18s var(--t-ease), color .15s; }
+.dd-trigger:hover .dd-chevron, .dd-trigger[data-state="open"] .dd-chevron { color: var(--muted); }
 .dd-trigger[data-state="open"] .dd-chevron { transform: rotate(180deg); }
+
 .dd-panel {
-  z-index: 90; min-width: max(var(--radix-popover-trigger-width), 180px); max-width: min(360px, calc(100vw - 24px));
-  padding: 4px; border-radius: 10px; background: var(--surface);
-  box-shadow: 0 0 0 1px var(--line), var(--shadow-md); animation: menu-in 140ms var(--t-ease);
+  z-index: 90; min-width: max(var(--radix-popover-trigger-width), 200px); max-width: min(380px, calc(100vw - 24px));
+  padding: 5px; border: 1px solid var(--dd-line); border-radius: 12px; background: var(--dd-bg);
+  box-shadow: var(--dd-shadow);
+  transform-origin: var(--radix-popover-content-transform-origin); animation: dd-in 160ms var(--t-ease);
 }
 .dd-panel [cmdk-root] { outline: none; }
-.dd-search { display: flex; align-items: center; gap: 7px; height: 32px; margin: 0 0 4px; padding: 0 9px; border-bottom: 1px solid var(--line); color: var(--faint); }
-.dd-search input { flex: 1; min-width: 0; height: 100%; border: 0; outline: none; background: transparent; color: var(--ink); font-size: 13px; }
-.dd-search input::placeholder { color: var(--faint); }
-.dd-list { max-height: min(320px, var(--radix-popover-content-available-height, 320px)); overflow-y: auto; overscroll-behavior: contain; scrollbar-width: thin; }
-.dd-group [cmdk-group-heading] { padding: 8px 8px 4px; font-size: 11px; font-weight: 500; color: var(--faint); text-transform: none; }
-.dd-item {
-  display: flex; align-items: center; gap: 8px; min-height: 30px; padding: 5px 8px; border-radius: 6px;
-  color: var(--ink-soft); font-size: 13px; line-height: 1.35; cursor: pointer; user-select: none;
+.dd-search {
+  display: flex; align-items: center; gap: 8px; height: 36px; margin: -5px -5px 5px; padding: 0 12px;
+  border-bottom: 1px solid var(--line); color: var(--faint); transition: color .15s;
 }
-.dd-item[data-selected="true"] { background: var(--surface-3); color: var(--ink); }
+.dd-search:focus-within { color: var(--muted); }
+.dd-search input { flex: 1; min-width: 0; height: 100%; border: 0; outline: none; background: transparent; color: var(--ink); font-size: 13px; }
+/* The app-wide focus ring would draw a box inside the panel. */
+.dd-search input:focus-visible { box-shadow: none; }
+.dd-search input::placeholder { color: var(--faint); }
+.dd-list {
+  max-height: min(320px, var(--radix-popover-content-available-height, 320px)); overflow-y: auto; overscroll-behavior: contain;
+  scrollbar-width: thin; scrollbar-color: var(--line-strong) transparent;
+}
+.dd-list::-webkit-scrollbar { width: 10px; }
+.dd-list::-webkit-scrollbar-thumb { background: var(--line-strong); border: 3px solid transparent; border-radius: 10px; background-clip: padding-box; }
+.dd-list::-webkit-scrollbar-track { background: transparent; }
+.dd-group + .dd-group, .dd-list [cmdk-item] + .dd-group, .dd-group + [cmdk-item] { margin-top: 5px; padding-top: 5px; border-top: 1px solid var(--line); }
+.dd-group [cmdk-group-heading] { padding: 7px 10px 4px; font-size: 10.5px; font-weight: 600; letter-spacing: .04em; text-transform: uppercase; color: var(--faint); }
+.dd-item {
+  display: flex; align-items: center; gap: 10px; min-height: 32px; padding: 6px 9px 6px 10px; border-radius: 8px;
+  color: var(--ink-soft); font-size: 13px; line-height: 18px; cursor: pointer; user-select: none;
+}
+.dd-item[data-selected="true"] { background: var(--dd-hover); color: var(--ink); }
 .dd-item[data-current="true"] { color: var(--ink); font-weight: 500; }
 .dd-item[data-disabled="true"] { opacity: .45; cursor: default; }
-.dd-item-text { flex: 1 1 auto; min-width: 0; }
-.dd-check { flex: none; color: var(--brand-solid, var(--info-solid)); }
-.dd-empty { padding: 10px 8px; font-size: 12.5px; color: var(--faint); }
+.dd-item-text { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dd-count { flex: none; margin-left: auto; font-size: 11.5px; font-weight: 400; color: var(--faint); font-variant-numeric: tabular-nums; }
+.dd-item[data-selected="true"] .dd-count { color: var(--muted); }
+/* The tick always keeps its place, so counts line up whether or not a row is picked. */
+.dd-tick { flex: none; display: inline-flex; width: 14px; justify-content: center; }
+/* The search palette's [cmdk-item] rules (a fixed 36px row, grey icons) aren't meant for these lists. */
+.dd-panel .dd-item { height: auto; }
+.dd-item .dd-check, .dd-item[data-selected="true"] .dd-check { color: var(--brand-solid, var(--info-solid)); }
+.dd-empty { padding: 16px 10px; text-align: center; font-size: 12.5px; color: var(--faint); }
 
 /* Performance: Clear all sits with the filters, stronger once anything is set */
 .btn.clear-all[data-on] { border-color: var(--brand-line); background: var(--brand-soft); color: var(--brand-ink); font-weight: 500; }
