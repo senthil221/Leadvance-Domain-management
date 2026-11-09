@@ -113,16 +113,27 @@ async function startGrace(sql: Sql, item: Item, actor: string) {
  * its DNS is valid (SPF, DKIM, DMARC and MX), counted from its first inbox in
  * Smartlead, for the days in Settings → Warming up. It stays there until it's
  * moved to active or added to campaigns.
+ *
+ * Without a domain id it sweeps every finished replacement whose new domain is
+ * still waiting: a pair finishes once its inboxes are in Smartlead, and its DNS
+ * can turn valid after that, when the pair is no longer advanced.
  */
-async function startWarmupClock(sql: Sql, domainId: string) {
-  await sql`
+async function startWarmupClock(sql: Sql, domainId?: string) {
+  const rows = await sql`
     update domains d set
       warmup_started_at = coalesce((select min(coalesce(i.smartlead_created_at, i.created_at)) from inboxes i
         where i.domain_id = d.id and i.status <> 'removed' and i.smartlead_account_id is not null), now()),
       warmup_days = coalesce((select (value ->> 'days')::int from settings where key = 'warmup_program'), 18),
       warmup_done_at = null, warmup_moved_to = null
-    where d.id = ${domainId} and d.warmup_started_at is null
-      and d.dns_spf and d.dns_dkim and d.dns_dmarc and d.dns_mx`;
+    where d.warmup_started_at is null
+      and d.dns_spf and d.dns_dkim and d.dns_dmarc and d.dns_mx
+      ${domainId ? sql`and d.id = ${domainId}` : sql`
+        and d.status = 'warming'
+        and exists (select 1 from inboxes i where i.domain_id = d.id and i.status = 'connected' and i.smartlead_account_id is not null)
+        and exists (select 1 from replacement_items ri join replacement_batches rb on rb.id = ri.batch_id
+          where ri.new_domain_id = d.id and ri.completed_at is not null and ri.step_campaigns <> 'done' and rb.status <> 'cancelled')`}
+    returning d.id`;
+  return rows.length;
 }
 
 /** In campaigns: the warm-up is over. */
@@ -390,13 +401,15 @@ export async function advanceReplacements(sql: postgres.Sql, ctx: StepContext) {
       await sql`update replacement_items set last_error = ${e instanceof Error ? e.message : String(e)} where id = ${r.id}`;
     }
   }
+  // Finished pairs whose DNS turned valid since: their warm-up starts now.
+  const warmupsStarted = await startWarmupClock(sql);
   const tagged = ctx.smartleadApp && !ctx.smartleadApp.dryRun ? await syncSmartleadTags(sql, ctx.smartleadApp).catch(() => ({ tagged: 0, errors: 1 })) : null;
   if (tagged) errors += tagged.errors;
   const closed = await sql`
     update replacement_batches b set status = 'completed', completed_at = now()
     where b.status = 'running' and not exists (select 1 from replacement_items i where i.batch_id = b.id and i.completed_at is null)
     returning id`;
-  return { open: open.length, batchesCompleted: closed.length, errors, tagged: tagged?.tagged ?? 0 };
+  return { open: open.length, batchesCompleted: closed.length, errors, tagged: tagged?.tagged ?? 0, warmupsStarted };
 }
 
 /** A person acting on a pair's current step from the Replacements page. */

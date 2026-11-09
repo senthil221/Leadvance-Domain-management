@@ -318,6 +318,18 @@ describe("replacement through Hypertide's replace queue", () => {
     await advanceItem(sql, { porkbun: null, smartlead: fakeSmartlead() }, itemId);
     expect(await status(newId)).toBe("warming");
     expect((await sql`select warmup_started_at from domains where id = ${newId}`)[0].warmup_started_at).toBeNull();
+
+    // The pair is finished, so it's no longer advanced; the runner's sweep
+    // starts the warm-up once the DNS turns valid.
+    expect((await sql`select completed_at from replacement_items where id = ${itemId}`)[0].completed_at).not.toBeNull();
+    expect((await advanceReplacements(sql, { porkbun: null })).warmupsStarted).toBe(0);
+    await sql`update domains set dns_dmarc = true where id = ${newId}`;
+    expect((await advanceReplacements(sql, { porkbun: null })).warmupsStarted).toBe(1);
+    const [warm] = await sql`select warmup_started_at, warmup_days from domains where id = ${newId}`;
+    expect(warm.warmup_started_at).not.toBeNull();
+    expect(warm.warmup_days).toBe(18);
+    // Started once: the next pass leaves it alone.
+    expect((await advanceReplacements(sql, { porkbun: null })).warmupsStarted).toBe(0);
   });
 
   it("swaps a new domain Hypertide refused for the next free one, same ending first, and starts again", async () => {

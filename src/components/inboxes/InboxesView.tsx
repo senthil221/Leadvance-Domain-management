@@ -74,6 +74,12 @@ function freshDomains(inboxes: InboxListRow[], maxAgeDays: number) {
   }
   return ids;
 }
+/**
+ * Shown on Warming up even when the domain is out of scope elsewhere: a
+ * replacement's new domain can still be filed under the old name at the inbox
+ * provider, yet it's warming and belongs here.
+ */
+const onWarmingTab = (i: InboxListRow, s: Sets) => s.setup.has(i.domainId) || warmingUp(i);
 type TabKey = (typeof TABS)[number]["key"];
 type Grouping = "none" | "client" | "tags";
 const GROUPING_KEY = "inboxes:grouping";
@@ -547,7 +553,7 @@ export function InboxesView({ inboxes, setups = [], clients, plans, smartleadCon
   const lowRepInboxes = useMemo(() => base.filter((i) => i.status === "connected" && i.warmupReputation != null && i.warmupReputation < 90).length, [base]);
   // Domains in every view but Disconnected, which counts inboxes.
   const counts = useMemo(() => {
-    const inView = (k: TabKey) => base.filter((i) => (k === "all" || i.domainInScope || (k === "warming" && fresh.setup.has(i.domainId))) && tabMatch(k, fresh)(i));
+    const inView = (k: TabKey) => base.filter((i) => (k === "all" || i.domainInScope || (k === "warming" && onWarmingTab(i, fresh))) && tabMatch(k, fresh)(i));
     const domains = (k: TabKey) => new Set(inView(k).map((i) => i.domainId)).size;
     return { active: domains("active"), warming: domains("warming") + bareSetups.length, attention: attentionCount, cleanup: domains("cleanup"), disconnected: inView("disconnected").length, all: domains("all") } as Record<TabKey, number>;
   }, [base, attentionCount, fresh, bareSetups]);
@@ -555,7 +561,7 @@ export function InboxesView({ inboxes, setups = [], clients, plans, smartleadCon
   const groups = useMemo(() => {
     const match = tabMatch(tab, fresh);
     const needle = q.trim().toLowerCase();
-    const shown = base.filter((i) => match(i) && (tab === "all" || i.domainInScope || (tab === "warming" && fresh.setup.has(i.domainId))) && (!needle || i.email.includes(needle) || i.domain.includes(needle) || i.senderName?.toLowerCase().includes(needle) || i.smartleadTags.some((t) => t.toLowerCase().includes(needle))));
+    const shown = base.filter((i) => match(i) && (tab === "all" || i.domainInScope || (tab === "warming" && onWarmingTab(i, fresh))) && (!needle || i.email.includes(needle) || i.domain.includes(needle) || i.senderName?.toLowerCase().includes(needle) || i.smartleadTags.some((t) => t.toLowerCase().includes(needle))));
     const grouped = group(shown).map((g) => ({ ...g, setup: fresh.setup.get(g.domainId) ?? null }));
     if (tab === "warming") grouped.push(...bareSetups.filter((s) => !needle || s.domain.includes(needle) || s.oldDomain.includes(needle)).map(setupGroup));
     return grouped.filter((g) => tab !== "attention" || reasonsOf(g).length > 0).sort((a, b) => {

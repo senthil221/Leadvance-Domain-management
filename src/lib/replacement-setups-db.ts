@@ -1,7 +1,7 @@
 import { sql } from "@/lib/db";
 import type { SetupRow } from "@/lib/replacement-setups";
 
-/** Replacement domains still being set up, for Smartlead → Warming up. */
+/** Replacement domains still being set up, or waiting for valid DNS to start warming, for Smartlead → Warming up. */
 export async function listReplacementSetups() {
   return sql<SetupRow[]>`
     select nd.id as domain_id, nd.name as domain, nd.status, c.name as client_name, c.hue as client_hue,
@@ -16,7 +16,8 @@ export async function listReplacementSetups() {
     join domains nd on nd.id = ri.new_domain_id
     join domains od on od.id = ri.old_domain_id
     left join clients c on c.id = nd.client_id
-    where ri.completed_at is null and rb.status <> 'cancelled'
+    -- Open pairs, and finished ones still waiting for their warm-up (DNS not valid yet).
+    where (ri.completed_at is null or ri.step_campaigns <> 'done') and rb.status <> 'cancelled'
       and nd.warmup_started_at is null and nd.status in ('provisioning', 'warming')
     order by ri.created_at desc, nd.name`;
 }
