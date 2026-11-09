@@ -953,6 +953,15 @@ export async function thisWeek() {
   return { from: monday(to), to };
 }
 
+/**
+ * Last week's Monday to today, in the stats timezone: what the pages open on,
+ * since this week alone is only today on a Monday, before anything has gone out.
+ */
+export async function thisAndLastWeek() {
+  const { to } = await lastDays(1);
+  return { from: addDays(monday(to), -7), to };
+}
+
 /** The last n days in the stats timezone, today included. */
 export async function lastDays(n: number) {
   const [r] = await sql<{ from: string; to: string }[]>`

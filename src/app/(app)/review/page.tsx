@@ -3,7 +3,7 @@ import { Suspense } from "react";
 import { ReviewView } from "@/components/review/ReviewView";
 import { PageHead, TableSkeleton } from "@/components/ui";
 import { getCurrentUser } from "@/lib/auth";
-import { getReview, listClients, thisWeek } from "@/lib/queries";
+import { getReview, listClients, thisAndLastWeek } from "@/lib/queries";
 
 export const metadata: Metadata = { title: "Weekly review" };
 
@@ -22,7 +22,7 @@ export default function ReviewPage() {
 
 async function ReviewData() {
   await getCurrentUser();
-  const { from, to } = await thisWeek(); // Monday to today; the date picker changes it
+  const { from, to } = await thisAndLastWeek(); // Last week's Monday to today; the date picker changes it
   const [data, clients] = await Promise.all([getReview(from, to), listClients()]);
   return <ReviewView initial={data} clients={clients} />;
 }

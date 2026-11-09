@@ -15,7 +15,7 @@ import { Dot, Empty, PageHead, Skeleton } from "@/components/ui";
 import { getCurrentUser } from "@/lib/auth";
 import { ago, int } from "@/lib/format";
 import { findings } from "@/lib/compare";
-import { getConnectionCheck, getInsights, getOverview, getReview, listDeadDomains, thisWeek, type Issues, type TrendDay } from "@/lib/queries";
+import { getConnectionCheck, getInsights, getOverview, getReview, listDeadDomains, thisAndLastWeek, type Issues, type TrendDay } from "@/lib/queries";
 import { isCurrent } from "@/lib/review";
 import { FLEET_STATUSES as FLEET_STATES, STATUS_META, type Tone } from "@/lib/status";
 
@@ -62,9 +62,9 @@ function actions(i: Issues, weeksLeft: number | null): { tone: Tone; n: number; 
 
 async function OverviewContent() {
   await getCurrentUser();
-  const week = await thisWeek();
+  const week = await thisAndLastWeek();
   const [o, ins, dead, connections, review] = await Promise.all([getOverview(), getInsights(), listDeadDomains(), getConnectionCheck(), getReview(week.from, week.to)]);
-  // The strongest differences across TLDs, providers, tags and ages this week, with what's behind them.
+  // The strongest differences across TLDs, providers, tags and ages over this and last week, with what's behind them.
   const standouts = findings(review.domains.filter((d) => isCurrent(d.standing)), undefined, 3);
   const todo = actions(ins.issues, o.weeksLeft);
   const t7 = ins.trend.slice(-7), p7 = ins.trend.slice(0, -7);
@@ -174,7 +174,7 @@ async function OverviewContent() {
 
         <section className="card ov-area-insights" aria-labelledby="insights-title">
           <div className="card-head">
-            <h2 id="insights-title" className="card-title inline-flex items-center gap-2"><Sparkles size={13} strokeWidth={1.75} className="text-faint" aria-hidden="true" />This week</h2>
+            <h2 id="insights-title" className="card-title inline-flex items-center gap-2"><Sparkles size={13} strokeWidth={1.75} className="text-faint" aria-hidden="true" />This and last week</h2>
           </div>
           <Insights lines={[
             ...standouts.map((f) => ({ key: f.id, tone: f.tone, icon: f.tone === "success" ? TrendingUp : TriangleAlert, text: `${f.title}. ${f.verdict}`, href: "/compare" })),
