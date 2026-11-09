@@ -335,7 +335,7 @@ export async function advanceItem(sql: Sql, ctx: StepContext, id: string, actor 
 }
 
 /** Adds a domain's connected inboxes to these Smartlead campaigns, and records it. */
-async function addInboxesToCampaigns(sql: Sql, sl: Smartlead, domainId: string, campaignIds: number[]) {
+export async function addInboxesToCampaigns(sql: Sql, sl: Smartlead, domainId: string, campaignIds: number[]) {
   const accounts = await sql`
     select id, smartlead_account_id as account from inboxes
     where domain_id = ${domainId} and status = 'connected' and smartlead_account_id is not null`;

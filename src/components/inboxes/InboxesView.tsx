@@ -23,8 +23,9 @@ import { MoveToTagDialog } from "./MoveToTagDialog";
 import { PlansCard } from "./PlansCard";
 import { ageLabel, ago, int } from "@/lib/format";
 import type { ClientRow, InboxListRow, OrderState, PlanRow } from "@/lib/queries";
-import { DOMAIN_STATUSES, canReplace, type DomainStatus } from "@/lib/status";
+import { DOMAIN_STATUSES, canReplace, isStepFinished, type DomainStatus } from "@/lib/status";
 import { Select } from "@/components/Select";
+import { setupLabel, type SetupRow } from "@/lib/replacement-setups";
 
 // Six views of the sending setup. Active and Disconnected list inboxes under
 // their client and domain; the others list one line per domain.
@@ -33,12 +34,14 @@ import { Select } from "@/components/Select";
 // Cleanup lists domains with too many inboxes or several sender names (`crowded`),
 // usually old inboxes left behind when a domain was renamed.
 const warmingUp = (i: InboxListRow) => i.domainWarmupStartedAt != null && i.domainWarmupDoneAt == null;
-type Sets = { fresh: Set<string>; crowded: Set<string> };
+// Replacement domains still being set up (`setup`) are on Warming up too, from
+// the day they're picked, even before any of their inboxes reach Smartlead.
+type Sets = { fresh: Set<string>; crowded: Set<string>; setup: Map<string, SetupRow> };
 type Match = (i: InboxListRow, s: Sets) => boolean;
 const TABS: readonly { key: "active" | "warming" | "attention" | "cleanup" | "disconnected" | "all"; label: string; match: Match }[] = [
-  { key: "active", label: "Active", match: (i, s) => i.status === "connected" && i.domainStatus === "active" && !warmingUp(i) && !s.fresh.has(i.domainId) },
-  { key: "warming", label: "Warming up", match: (i, s) => (warmingUp(i) || s.fresh.has(i.domainId)) && i.status !== "removed" },
-  { key: "attention", label: "Needs attention", match: (i, s) => (i.domainStatus === "active" || i.domainStatus === "warming") && !warmingUp(i) && !s.fresh.has(i.domainId) },
+  { key: "active", label: "Active", match: (i, s) => i.status === "connected" && i.domainStatus === "active" && !warmingUp(i) && !s.fresh.has(i.domainId) && !s.setup.has(i.domainId) },
+  { key: "warming", label: "Warming up", match: (i, s) => (warmingUp(i) || s.fresh.has(i.domainId) || s.setup.has(i.domainId)) && i.status !== "removed" },
+  { key: "attention", label: "Needs attention", match: (i, s) => (i.domainStatus === "active" || i.domainStatus === "warming") && !warmingUp(i) && !s.fresh.has(i.domainId) && !s.setup.has(i.domainId) },
   { key: "cleanup", label: "Cleanup", match: (i, s) => s.crowded.has(i.domainId) && i.status !== "removed" },
   { key: "disconnected", label: "Disconnected", match: (i) => i.status === "disconnected" },
   { key: "all", label: "All domains", match: () => true },
@@ -142,6 +145,8 @@ type Group = {
   all: { inboxes: number; disconnected: number };
   /** Inboxes by sender name, most first; `added` is the earliest inbox's age in days. */
   senders: { name: string; ids: string[]; added: number | null }[];
+  /** A replacement domain still being set up, on Warming up. */
+  setup: SetupRow | null;
 };
 
 const avg = (xs: number[]) => (xs.length ? xs.reduce((a, b) => a + b, 0) / xs.length : null);
@@ -204,8 +209,25 @@ function group(rows: InboxListRow[]): Group[] {
           .map((e) => ({ name: e.name, ids: e.ids, added: Number.isFinite(e.born) ? Math.floor((Date.now() - e.born) / 86_400_000) : null }));
       })(),
       esp: (() => { const t = [...new Set(list.map((i) => i.providerType).filter(Boolean))]; return t.length === 1 ? t[0] : t.length ? "MIXED" : null; })(),
+      setup: null,
     };
   });
+}
+
+/** A replacement domain with no inbox in Smartlead yet: one row on Warming up, nothing to add up. */
+function setupGroup(s: SetupRow): Group {
+  const checks: [string, boolean | null][] = [["SPF", s.dnsSpf], ["DKIM", s.dnsDkim], ["DMARC", s.dnsDmarc], ["MX", s.dnsMx]];
+  const missing = checks.filter(([, v]) => v === false).map(([k]) => k);
+  const dns: Dns = s.nsAnswering === false ? { state: "nozone", missing: [], checks: [] }
+    : checks.every(([, v]) => v == null) ? { state: "unknown", missing: [], checks } : { state: missing.length ? "missing" : "ok", missing, checks };
+  return {
+    domainId: s.domainId, domain: s.domain, status: s.status, clientName: s.clientName, clientHue: s.clientHue,
+    inboxes: [], count: 0, warmupOff: 0, avgWarmup: null, avgLimit: null, capacity: 0, avgRep: null, minRep: null, lowRep: 0, campaigns: 0,
+    sent7: 0, replies7: 0, human7: 0, bounces7: 0, sentToday: 0, avgWait: null, pending: 0, tags: [], esp: null,
+    domainTags: s.tags.filter((t) => MARK_TAGS.includes(t.toLowerCase())), graceDaysLeft: null, alerts: 0, warm: null, ageDays: null, dns,
+    bl: null, blListings: [], blocked: 0, paused: 0, disconnected: 0, order: null, orderStatus: null, provider: null,
+    all: { inboxes: 0, disconnected: 0 }, senders: [], setup: s,
+  };
 }
 
 /**
@@ -389,18 +411,29 @@ function BlacklistCell({ count, listings }: { count: number | null; listings: st
 
 /** Warming up: the day the domain is on, a bar, and when it is ready to move to a tag. */
 /** Where a domain is on the Warming up tab. */
-type Stage = "dns" | "ready" | "warming" | "done";
+type Stage = "setup" | "dns" | "ready" | "warming" | "done";
 const STAGES: { key: Stage; label: string; hint: string }[] = [
+  { key: "setup", label: "Setting up", hint: "Replacement domains whose inboxes are still being set up at Hypertide or reaching Smartlead. Warm-up starts by itself once they're in and DNS is valid." },
   { key: "dns", label: "Waiting for DNS", hint: "New domains whose SPF, DKIM, DMARC or MX isn't found yet. Warm-up starts once all four are." },
   { key: "ready", label: "Ready to start", hint: "DNS is valid. Starts by itself when automatic warm-up is on, or with Start warm-up." },
   { key: "warming", label: "Warming", hint: "Warm-up running: counting the days set in Settings → Warming up." },
   { key: "done", label: "Done", hint: "Warm-up days are up. Move them to a tag to put them to work." },
 ];
-const stageOf = (g: Group): Stage => (g.warm ? (g.warm.ready ? "done" : "warming") : g.dns.state === "ok" ? "ready" : "dns");
+/** Still being set up: its inboxes haven't all reached Smartlead yet. */
+const inSetup = (g: Group) => g.setup != null && !isStepFinished(g.setup.stepSmartlead);
+const stageOf = (g: Group): Stage => (g.warm ? (g.warm.ready ? "done" : "warming") : inSetup(g) ? "setup" : g.dns.state === "ok" ? "ready" : "dns");
 
 /** One segment per warm-up day: done days filled, today lit, the rest empty. */
 function WarmTrack({ g }: { g: Group }) {
   const stage = stageOf(g);
+  if (!g.warm && stage === "setup" && g.setup) {
+    const l = setupLabel(g.setup);
+    return (
+      <span className="wu-track is-idle">
+        <span className={`wu-state is-setup${l.attention ? " is-attention" : ""}`} title={g.setup.lastError ?? `Replacing ${g.setup.oldDomain}. Open Replacements for every step.`}>{l.text}</span>
+      </span>
+    );
+  }
   if (!g.warm) {
     return (
       <span className="wu-track is-idle">
@@ -433,8 +466,10 @@ function ChangeBadge({ change }: { change: InboxListRow["change"] }) {
   return null;
 }
 
-export function InboxesView({ inboxes, clients, plans, smartleadConnected, dryRun, timezone, appProblem, newMaxAgeDays, inboxLimit }: {
-  inboxes: InboxListRow[]; clients: ClientRow[]; plans: PlanRow[]; smartleadConnected: boolean; dryRun: boolean; timezone: string;
+export function InboxesView({ inboxes, setups = [], clients, plans, smartleadConnected, dryRun, timezone, appProblem, newMaxAgeDays, inboxLimit }: {
+  inboxes: InboxListRow[];
+  /** Replacement domains still being set up, for Warming up. */
+  setups?: SetupRow[]; clients: ClientRow[]; plans: PlanRow[]; smartleadConnected: boolean; dryRun: boolean; timezone: string;
   /** Settings → Warming up: how young a domain counts as new. */
   newMaxAgeDays: number;
   /** Domains with more inboxes than this are listed under Cleanup. */
@@ -501,32 +536,40 @@ export function InboxesView({ inboxes, clients, plans, smartleadConnected, dryRu
       && (!provider || (provider === "-" ? !i.domainProvider : i.domainProvider === provider)));
   }, [inboxes, clients, clientId, esp, provider]);
   const [limitText, setLimitText] = useState(String(inboxLimit));
-  const fresh = useMemo<Sets>(() => ({ fresh: freshDomains(inboxes, newMaxAgeDays), crowded: crowdedDomains(inboxes, inboxLimit) }), [inboxes, newMaxAgeDays, inboxLimit]);
+  const fresh = useMemo<Sets>(() => ({ fresh: freshDomains(inboxes, newMaxAgeDays), crowded: crowdedDomains(inboxes, inboxLimit), setup: new Map(setups.map((s) => [s.domainId, s])) }), [inboxes, newMaxAgeDays, inboxLimit, setups]);
+  // Setting-up domains with no inbox in Smartlead yet, under the same client filter and search.
+  const bareSetups = useMemo(() => {
+    const client = clients.find((c) => c.id === clientId)?.name;
+    const withInboxes = new Set(inboxes.map((i) => i.domainId));
+    return setups.filter((s) => !withInboxes.has(s.domainId) && (!client || s.clientName === client) && !esp && !provider);
+  }, [setups, inboxes, clients, clientId, esp, provider]);
   const attentionCount = useMemo(() => group(base.filter((i) => i.domainInScope && tabMatch("attention", fresh)(i))).filter((g) => reasonsOf(g).length > 0).length, [base, fresh]);
   const lowRepInboxes = useMemo(() => base.filter((i) => i.status === "connected" && i.warmupReputation != null && i.warmupReputation < 90).length, [base]);
   // Domains in every view but Disconnected, which counts inboxes.
   const counts = useMemo(() => {
-    const inView = (k: TabKey) => base.filter((i) => (k === "all" || i.domainInScope) && tabMatch(k, fresh)(i));
+    const inView = (k: TabKey) => base.filter((i) => (k === "all" || i.domainInScope || (k === "warming" && fresh.setup.has(i.domainId))) && tabMatch(k, fresh)(i));
     const domains = (k: TabKey) => new Set(inView(k).map((i) => i.domainId)).size;
-    return { active: domains("active"), warming: domains("warming"), attention: attentionCount, cleanup: domains("cleanup"), disconnected: inView("disconnected").length, all: domains("all") } as Record<TabKey, number>;
-  }, [base, attentionCount, fresh]);
+    return { active: domains("active"), warming: domains("warming") + bareSetups.length, attention: attentionCount, cleanup: domains("cleanup"), disconnected: inView("disconnected").length, all: domains("all") } as Record<TabKey, number>;
+  }, [base, attentionCount, fresh, bareSetups]);
 
   const groups = useMemo(() => {
     const match = tabMatch(tab, fresh);
     const needle = q.trim().toLowerCase();
-    const shown = base.filter((i) => match(i) && (tab === "all" || i.domainInScope) && (!needle || i.email.includes(needle) || i.domain.includes(needle) || i.senderName?.toLowerCase().includes(needle) || i.smartleadTags.some((t) => t.toLowerCase().includes(needle))));
-    return group(shown).filter((g) => tab !== "attention" || reasonsOf(g).length > 0).sort((a, b) => {
+    const shown = base.filter((i) => match(i) && (tab === "all" || i.domainInScope || (tab === "warming" && fresh.setup.has(i.domainId))) && (!needle || i.email.includes(needle) || i.domain.includes(needle) || i.senderName?.toLowerCase().includes(needle) || i.smartleadTags.some((t) => t.toLowerCase().includes(needle))));
+    const grouped = group(shown).map((g) => ({ ...g, setup: fresh.setup.get(g.domainId) ?? null }));
+    if (tab === "warming") grouped.push(...bareSetups.filter((s) => !needle || s.domain.includes(needle) || s.oldDomain.includes(needle)).map(setupGroup));
+    return grouped.filter((g) => tab !== "attention" || reasonsOf(g).length > 0).sort((a, b) => {
       const x = sortValue(a, sort.key), y = sortValue(b, sort.key);
       if (x === y) return a.domain.localeCompare(b.domain);
       if (x === null) return 1;
       if (y === null) return -1;
       return (x < y ? -1 : 1) * sort.dir;
     });
-  }, [base, tab, q, sort, fresh]);
+  }, [base, tab, q, sort, fresh, bareSetups]);
 
   // The Warming up tab's domains by stage, before the stage filter.
   const warmStages = useMemo(() => {
-    const by: Record<Stage, string[]> = { dns: [], ready: [], warming: [], done: [] };
+    const by: Record<Stage, string[]> = { setup: [], dns: [], ready: [], warming: [], done: [] };
     if (tab === "warming") for (const g of groups) by[stageOf(g)].push(g.domainId);
     return by;
   }, [groups, tab]);
@@ -886,12 +929,12 @@ export function InboxesView({ inboxes, clients, plans, smartleadConnected, dryRu
               <tbody>
                 {stageGroups.map((g) => {
                   const ids = g.inboxes.map((x) => x.id);
-                  const gSel = ids.every((id) => selected.has(id));
+                  const gSel = ids.length > 0 && ids.every((id) => selected.has(id));
                   const gSome = ids.some((id) => selected.has(id));
                   return (
                     <tr key={g.domainId} className="is-clickable" data-selected={gSel} onMouseDown={keepTextUnselected} onClick={(e) => pickGroup("warm", stageGroups, g, e)}>
                       <td className="col-check">
-                        <input type="checkbox" className="checkbox" checked={gSel} ref={(el) => { if (el) el.indeterminate = !gSel && gSome; }} onChange={() => {}} aria-label={`Select inboxes on ${g.domain}`} tabIndex={-1} />
+                        <input type="checkbox" className="checkbox" checked={gSel} ref={(el) => { if (el) el.indeterminate = !gSel && gSome; }} onChange={() => {}} disabled={!ids.length} aria-label={`Select inboxes on ${g.domain}`} tabIndex={-1} />
                       </td>
                       <td className="col-first">
                         <span className="flex flex-col gap-0.5">
@@ -899,13 +942,13 @@ export function InboxesView({ inboxes, clients, plans, smartleadConnected, dryRu
                             <DomainLink id={g.domainId} tab="inboxes" className="strong hover:underline">{g.domain}</DomainLink>
                             <TagList tags={g.domainTags} graceDaysLeft={g.graceDaysLeft} />
                           </span>
-                          <span className="wu-sub">{g.clientName ?? "No client"}{g.esp ? ` · ${espLabel(g.esp)}` : ""}</span>
+                          <span className="wu-sub">{g.clientName ?? "No client"}{g.esp ? ` · ${espLabel(g.esp)}` : ""}{g.setup ? ` · replacing ${g.setup.oldDomain}` : ""}</span>
                         </span>
                       </td>
                       <td className="wu-col-track"><WarmTrack g={g} /></td>
                       <td className="is-num" title={g.ageDays != null ? `${g.ageDays} days since the first inbox was added to Smartlead` : "Not known yet"}>{g.ageDays == null ? <span className="zero">—</span> : `${g.ageDays}d`}</td>
                       <td><DnsCell dns={g.dns} /></td>
-                      <td><WarmupCell blocked={g.blocked} paused={g.paused} total={g.count} /></td>
+                      <td>{g.count ? <WarmupCell blocked={g.blocked} paused={g.paused} total={g.count} /> : <span className="zero" title="No inbox in Smartlead yet">—</span>}</td>
                       <td className="is-num">{g.avgWarmup == null ? <span className="zero">—</span> : Math.round(g.avgWarmup)}</td>
                       <td className="is-num">{g.avgLimit == null ? <span className="zero">—</span> : Math.round(g.avgLimit)}</td>
                       <td className="is-num">{int(g.count)}</td>
@@ -947,7 +990,7 @@ export function InboxesView({ inboxes, clients, plans, smartleadConnected, dryRu
                       <td className="col-first">
                         <span className="flex flex-col gap-0.5">
                           <DomainLink id={g.domainId} tab="inboxes" className="strong hover:underline">{g.domain}</DomainLink>
-                          <span className="wu-sub">{g.clientName ?? "No client"}{g.esp ? ` · ${espLabel(g.esp)}` : ""}</span>
+                          <span className="wu-sub">{g.clientName ?? "No client"}{g.esp ? ` · ${espLabel(g.esp)}` : ""}{g.setup ? ` · replacing ${g.setup.oldDomain}` : ""}</span>
                         </span>
                       </td>
                       <td className="is-num">

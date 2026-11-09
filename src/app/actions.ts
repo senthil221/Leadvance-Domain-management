@@ -1763,3 +1763,79 @@ export async function removeIcemailAccount(id: string): Promise<ActionResult> {
     return fail(e);
   }
 }
+
+// ---------------------------------------------------------------------------
+// Smartlead → Tags
+
+/** The volume a tag should reach, in campaign emails a day. Empty or 0 clears it. */
+export async function saveTagTarget(tag: string, target: number | null): Promise<ActionResult<{ message: string }>> {
+  try {
+    await requireActor();
+    const v = z.object({ tag: z.string().trim().min(1).max(100), target: z.number().int().min(0).max(10_000_000).nullable() }).parse({ tag, target });
+    const { normTag } = await import("@/lib/tag-map");
+    const key = normTag(v.tag);
+    if (v.target) {
+      await sql`insert into settings (key, value) values ('tag_targets', jsonb_build_object(${key}::text, ${v.target}::int))
+        on conflict (key) do update set value = coalesce(settings.value, '{}'::jsonb) || excluded.value`;
+    } else {
+      await sql`update settings set value = value - ${key}::text where key = 'tag_targets'`;
+    }
+    refresh();
+    return { ok: true, data: { message: v.target ? `${v.tag}: aiming for ${v.target.toLocaleString("en-US")} a day` : `${v.tag}: target cleared` } };
+  } catch (e) {
+    return fail(e);
+  }
+}
+
+/**
+ * Puts domains on a tag (as Move to tag does: its old tag and New come off,
+ * the tag's sending limits are copied, the domain goes Active), then adds
+ * their connected inboxes to the chosen campaigns.
+ */
+export async function addDomainsToTag(input: { domainIds: string[]; tag: string; campaignIds: number[] }): Promise<ActionResult<{ message: string }>> {
+  try {
+    await requireActor();
+    const v = z.object({
+      domainIds: ids, tag: z.string().trim().min(1, "Choose a tag").max(100),
+      campaignIds: z.array(z.number().int().positive()).max(50),
+    }).parse(input);
+    const moved = await moveDomainsToTag({ domainIds: v.domainIds, tag: v.tag });
+    if (!moved.ok || !v.campaignIds.length) return moved;
+    const { jobContext } = await import("@/jobs");
+    const ctx = await jobContext(jobSql);
+    if (!ctx.smartlead) return { ok: true, data: { message: `${moved.data.message}. Smartlead isn't connected, so no campaigns were added` } };
+    if (ctx.smartlead.dryRun) return { ok: true, data: { message: `${moved.data.message}. Dry run: not added to campaigns` } };
+    const { addInboxesToCampaigns } = await import("@/jobs/replacements");
+    let inboxes = 0;
+    const skipped: string[] = [];
+    for (const id of v.domainIds) {
+      try {
+        inboxes += await addInboxesToCampaigns(jobSql, ctx.smartlead, id, v.campaignIds);
+      } catch {
+        skipped.push(id);
+      }
+    }
+    refresh();
+    const c = `${v.campaignIds.length} campaign${v.campaignIds.length === 1 ? "" : "s"}`;
+    return { ok: true, data: { message: `${moved.data.message}. Added ${inboxes} inboxes to ${c}${skipped.length ? ` (${skipped.length} domain${skipped.length === 1 ? "" : "s"} skipped: no connected inbox)` : ""}` } };
+  } catch (e) {
+    return appError(e);
+  }
+}
+
+/** Takes a tag off every inbox of these domains, in Smartlead and here. Campaigns are left as they are. */
+export async function removeDomainsFromTag(input: { domainIds: string[]; tag: string }): Promise<ActionResult<{ message: string }>> {
+  try {
+    await requireActor();
+    const v = z.object({ domainIds: ids, tag: z.string().trim().min(1).max(100) }).parse(input);
+    const { normTag } = await import("@/lib/tag-map");
+    const rows = await sql<{ id: string }[]>`
+      select id from inboxes
+      where domain_id in ${sql(v.domainIds)} and status <> 'removed' and smartlead_account_id is not null
+        and exists (select 1 from unnest(smartlead_tags) t where lower(trim(t)) = ${normTag(v.tag)})`;
+    if (!rows.length) return { ok: false, error: `None of these domains has an inbox tagged ${v.tag}` };
+    return updateInboxTags({ inboxIds: rows.map((r) => r.id), tags: [v.tag], mode: "remove" });
+  } catch (e) {
+    return appError(e);
+  }
+}

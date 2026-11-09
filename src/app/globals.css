@@ -1441,6 +1441,7 @@ a.kpi:hover { border-color: var(--accent-line, var(--line-strong)); }
 .wu-stage-label i { width: 7px; height: 7px; border-radius: 50%; background: var(--faint); }
 .wu-stage.is-dns i { background: var(--warning-solid); }
 .wu-stage.is-ready i { background: var(--info-solid); }
+.wu-stage.is-setup i { background: var(--faint); }
 .wu-stage.is-warming i { background: var(--violet-solid); box-shadow: 0 0 0 3px color-mix(in srgb, var(--violet-solid) 22%, transparent); }
 .wu-stage.is-done i { background: var(--success-solid); }
 .wu-stage-n { font-size: 18px; font-weight: 600; color: var(--ink); font-variant-numeric: tabular-nums; letter-spacing: -.01em; }
@@ -1465,6 +1466,8 @@ a.kpi:hover { border-color: var(--accent-line, var(--line-strong)); }
 .wu-state::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
 .wu-state.is-dns { background: var(--warning-soft-2); color: var(--warning-ink); }
 .wu-state.is-ready { background: var(--info-soft-2); color: var(--info-ink); }
+.wu-state.is-setup { background: var(--surface-2); color: var(--muted); }
+.wu-state.is-setup.is-attention { background: var(--warning-soft-2); color: var(--warning-ink); }
 
 /* Smartlead → Cleanup: domains with too many inboxes or several sender names. */
 .cl-bar { display: flex; align-items: center; gap: 10px; padding: 10px 14px; margin-bottom: 10px; border-radius: 10px; background: var(--surface); box-shadow: 0 0 0 1px var(--line); }
@@ -1877,3 +1880,48 @@ body.is-col-resizing { cursor: col-resize; user-select: none; }
 .btn.clear-all[data-on]:hover { background: var(--brand-soft-2); }
 .btn.clear-all:disabled { opacity: .55; cursor: default; }
 .clear-all-n { display: inline-grid; place-items: center; min-width: 17px; height: 17px; padding: 0 4px; border-radius: 999px; background: var(--brand-solid); color: #fff; font-size: 10.5px; font-weight: 600; font-variant-numeric: tabular-nums; }
+
+/* Smartlead → Tags */
+.tg { display: flex; flex-direction: column; gap: 10px; }
+.tg-total { color: var(--muted); font-size: 12.5px; }
+.tg-total b { color: var(--ink); font-weight: 500; }
+.tg-note { margin: 0; color: var(--muted); font-size: 12.5px; }
+.tg-note.is-warn { color: var(--warning-ink); }
+.tg-layout { display: grid; grid-template-columns: minmax(0, 1fr); gap: 12px; align-items: start; }
+.tg-layout.has-detail { grid-template-columns: minmax(0, 5fr) minmax(0, 7fr); }
+@media (max-width: 1100px) { .tg-layout.has-detail { grid-template-columns: minmax(0, 1fr); } }
+.tg-table tbody tr[data-selected="true"] td { background: var(--row-selected); }
+.tg-ellipsis { max-width: 180px; overflow: hidden; text-overflow: ellipsis; }
+.tg-disc { color: var(--danger-ink); }
+.tg-vol { display: inline-flex; flex-direction: column; align-items: flex-end; gap: 3px; }
+.tg-bar { display: block; width: 64px; height: 4px; border-radius: 2px; background: var(--surface-3); overflow: hidden; }
+.tg-bar > span { display: block; height: 100%; background: var(--warning-solid); }
+.tg-bar.is-met > span { background: var(--success-solid); }
+.tg-met { color: var(--success-ink); }
+.tg-gap { color: var(--warning-ink); }
+.tg-detail { display: flex; flex-direction: column; max-height: calc(100dvh - 210px); }
+.tg-sum { display: flex; align-items: flex-end; gap: 16px; padding: 12px 14px; border-bottom: 1px solid var(--line); }
+.tg-sum-vol { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.tg-sum-vol .tg-bar { width: 220px; height: 6px; border-radius: 3px; }
+.tg-big { font-size: 22px; font-weight: 600; color: var(--ink); font-variant-numeric: tabular-nums; line-height: 1; }
+.tg-of { color: var(--muted); font-size: 13px; }
+.tg-sub { color: var(--faint); font-size: 12px; }
+.tg-target { margin-left: auto; display: inline-flex; align-items: center; gap: 6px; color: var(--muted); font-size: 12.5px; white-space: nowrap; }
+.tg-target .input { width: 96px; text-align: right; }
+.tg-panes { margin: 10px 14px 0; align-self: flex-start; }
+.tg-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 10px 14px; }
+.tg-sel { color: var(--muted); font-size: 12.5px; }
+.tg-sel b { color: var(--ink); font-weight: 600; }
+.tg-move { display: inline-flex; align-items: center; gap: 6px; }
+.tg-move .input { width: 170px; }
+.tg-check { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); font-size: 12.5px; }
+.tg-camps { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; padding: 0 14px 10px; font-size: 12.5px; color: var(--ink-soft); }
+.tg-camps-label { color: var(--muted); }
+.tg-camp { display: inline-flex; align-items: center; gap: 5px; max-width: 280px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tg-camp em { font-style: normal; color: var(--faint); }
+.tg-sub-table { border-top: 1px solid var(--line); overflow: auto; min-height: 160px; }
+.tg-sub-table .badge { margin-left: 6px; }
+.tg-sender.is-off { color: var(--warning-ink); }
+.tg-sender em { font-style: normal; color: var(--faint); }
+.tg-ready { color: var(--success-ink); }
+.tg-warm { color: var(--muted); }
