@@ -9,6 +9,7 @@ import { setupDomains } from "@/app/actions";
 import type { ClientRow } from "@/lib/queries";
 import { API_REGISTRARS } from "@/lib/registrar-providers";
 import type { DomainStatus } from "@/lib/status";
+import { Select } from "@/components/Select";
 
 export type SetupTarget = { id: string; name: string; status: DomainStatus; tags: string[]; registrar: string | null };
 type NsMode = "leave" | "hypertide" | "custom";
@@ -101,11 +102,11 @@ export function SetupDialog({
           <div className="dialog-body">
             <label className="field">
               <span className="field-label">Client</span>
-              <select className="select" value={client} onChange={(e) => setClient(e.target.value)}>
+              <Select className="select" value={client} onChange={(e) => setClient(e.target.value)}>
                 <option value="keep">Keep as it is</option>
                 {clients.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
                 <option value="none">No client</option>
-              </select>
+              </Select>
             </label>
 
             <div className="field">

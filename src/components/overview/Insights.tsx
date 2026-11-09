@@ -20,7 +20,8 @@ export function readInsights(trend: TrendDay[], clients: ClientInsight[], capaci
   const silent = clients.filter((c) => c.active > 0 && c.sent === 0);
   if (silent.length) {
     const names = silent.slice(0, 2).map((c) => c.name).join(" and ");
-    out.push({ key: "silent", tone: "danger", icon: PauseCircle, text: `${names}${silent.length > 2 ? ` and ${silent.length - 2} more` : ""} sent nothing in 7 days despite active domains`, href: "/stats" });
+    out.push({ key: "silent", tone: "danger", icon: PauseCircle, text: `${names}${silent.length > 2 ? ` and ${silent.length - 2} more` : ""} sent nothing in 7 days despite active domains`,
+      href: `/stats?range=2weeks${silent.length === 1 ? `&client=${silent[0].id}` : ""}&sending=0` });
   }
   const bounce = [...named].sort((a, b) => rate(b.bounces, b.sent) - rate(a.bounces, a.sent))[0];
   if (bounce && rate(bounce.bounces, bounce.sent) >= 2) {

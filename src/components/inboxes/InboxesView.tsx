@@ -24,6 +24,7 @@ import { PlansCard } from "./PlansCard";
 import { ageLabel, ago, int } from "@/lib/format";
 import type { ClientRow, InboxListRow, OrderState, PlanRow } from "@/lib/queries";
 import { DOMAIN_STATUSES, canReplace, type DomainStatus } from "@/lib/status";
+import { Select } from "@/components/Select";
 
 // Six views of the sending setup. Active and Disconnected list inboxes under
 // their client and domain; the others list one line per domain.
@@ -764,19 +765,19 @@ export function InboxesView({ inboxes, clients, plans, smartleadConnected, dryRu
             </button>
           ))}
         </div>
-        <select className="select" style={{ width: 160 }} value={clientId} onChange={(e) => setClientId(e.target.value)} aria-label="Filter by client">
+        <Select className="select" style={{ width: 160 }} value={clientId} onChange={(e) => setClientId(e.target.value)} aria-label="Filter by client">
           <option value="">All clients</option>
           {clients.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
-        </select>
-        <select className="select" style={{ width: 130 }} value={esp} onChange={(e) => setEsp(e.target.value)} aria-label="Filter by ESP">
+        </Select>
+        <Select className="select" style={{ width: 130 }} value={esp} onChange={(e) => setEsp(e.target.value)} aria-label="Filter by ESP">
           <option value="">All ESPs</option>
           {esps.map((x) => <option key={x} value={x}>{espLabel(x)}</option>)}
-        </select>
+        </Select>
         {providers.length > 1 ? (
-          <select className="select" style={{ width: 150 }} value={provider} onChange={(e) => setProvider(e.target.value)} aria-label="Filter by inbox provider">
+          <Select className="select" style={{ width: 150 }} value={provider} onChange={(e) => setProvider(e.target.value)} aria-label="Filter by inbox provider">
             <option value="">All providers</option>
             {providers.map((p) => <option key={p.name || "-"} value={p.name || "-"}>{p.name || "No provider"} · {int(p.domains)}</option>)}
-          </select>
+          </Select>
         ) : null}
         {clientId || esp || provider || q ? <button type="button" className="btn btn-ghost btn-sm" onClick={() => { setClientId(""); setEsp(""); setProvider(""); setQ(""); }}>Clear</button> : null}
         <span className="spacer-auto" />
@@ -785,11 +786,11 @@ export function InboxesView({ inboxes, clients, plans, smartleadConnected, dryRu
           <input className="input" value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search" aria-label="Search inboxes" />
         </label>
         {FLAT.includes(tab) ? null : (
-          <select className="select" style={{ width: 170 }} value={grouping} onChange={(e) => chooseGrouping(e.target.value as Grouping)} aria-label="Group domains">
+          <Select className="select" style={{ width: 170 }} value={grouping} onChange={(e) => chooseGrouping(e.target.value as Grouping)} aria-label="Group domains">
             <option value="none">No grouping</option>
             <option value="client">Group by client</option>
             <option value="tags">Group by client and tag</option>
-          </select>
+          </Select>
         )}
         {FLAT.includes(tab) ? null : grouping === "none" ? (
           <button type="button" className="btn btn-sm" title={anyOpen ? "Close every domain" : "Show every domain's inboxes"} onClick={() => expandTo(anyOpen ? null : "inboxes")}>

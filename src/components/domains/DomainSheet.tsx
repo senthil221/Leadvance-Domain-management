@@ -10,7 +10,7 @@ import { Badge, ClientCell, Dot, Metric, Rep, Skeleton, StatusDot } from "@/comp
 import { ago, daysSince, int, shortDate } from "@/lib/format";
 import { DEAD_CAUSES } from "@/lib/dead";
 import type { DomainDetail } from "@/lib/queries";
-import { REPLACEMENT_REASONS, STATUS_META, canReplace } from "@/lib/status";
+import { STATUS_META, canReplace, reasonsLabel } from "@/lib/status";
 
 export function DomainSheet({
   domainId,
@@ -263,7 +263,7 @@ function LineageRow({ label, link, self, direction, onOpen }: {
         {direction === "in" ? <>{other}<ArrowRight size={13} className="text-faint" /><span>{self}</span></> : <><span>{self}</span><ArrowRight size={13} className="text-faint" />{other}</>}
       </div>
       <p className="pl-[88px] text-[12px] text-faint">
-        {REPLACEMENT_REASONS[link.reason]}{link.note ? ` · ${link.note}` : ""} · {shortDate(link.at)}
+        {reasonsLabel(link.reasons, link.reason)}{link.note ? ` · ${link.note}` : ""} · {shortDate(link.at)}
       </p>
     </div>
   );

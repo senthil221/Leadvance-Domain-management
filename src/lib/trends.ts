@@ -2,7 +2,7 @@
 // last reply, and whether replies, bounces and warmup reputation went up or
 // down against the same number of days before. Shared by page and tests.
 
-export type TrendKey = "quiet" | "repliesDown" | "repliesUp" | "bouncesUp" | "bouncesDown" | "repDown" | "repUp";
+export type TrendKey = "noSend" | "quiet" | "repliesDown" | "repliesUp" | "bouncesUp" | "bouncesDown" | "repDown" | "repUp";
 export type TrendTone = "danger" | "warning" | "success";
 export type Trend = { key: TrendKey; label: string; tone: TrendTone; hint: string };
 
@@ -26,6 +26,7 @@ export const TREND = {
 };
 
 export const TREND_META: Record<TrendKey, { label: string; hint: string }> = {
+  noSend: { label: "Not sending", hint: "Nothing sent for 2+ of the client's sending days in a row (weekends only for clients that send on them, today once it's over)" },
   quiet: { label: "No reply for days", hint: `No reply of any kind (out of office included) for ${TREND.quietDays}+ days while sending` },
   repliesDown: { label: "Replies dropping", hint: `Reply rate down ${TREND.replyChange}%+ on the days before` },
   repliesUp: { label: "Replies rising", hint: `Reply rate up ${TREND.replyChange}%+ on the days before` },
@@ -34,9 +35,9 @@ export const TREND_META: Record<TrendKey, { label: string; hint: string }> = {
   repDown: { label: "Reputation falling", hint: `Warmup reputation down ${TREND.repPoints}+ points on the days before` },
   repUp: { label: "Reputation rising", hint: `Warmup reputation up ${TREND.repPoints}+ points on the days before` },
 };
-export const TREND_ORDER: TrendKey[] = ["quiet", "repliesDown", "bouncesUp", "repDown", "repliesUp", "bouncesDown", "repUp"];
+export const TREND_ORDER: TrendKey[] = ["noSend", "quiet", "repliesDown", "bouncesUp", "repDown", "repliesUp", "bouncesDown", "repUp"];
 /** Tags that ask for a look, as opposed to good news. */
-export const BAD_TRENDS: TrendKey[] = ["quiet", "repliesDown", "bouncesUp", "repDown"];
+export const BAD_TRENDS: TrendKey[] = ["noSend", "quiet", "repliesDown", "bouncesUp", "repDown"];
 
 export type TrendInput = {
   sent: number; replies: number; bounces: number;
@@ -45,6 +46,8 @@ export type TrendInput = {
   rep: number | null; prevRep: number | null;
   /** From the weekly review: days since the last reply up to the range's end, and what was sent since. */
   quietDays: number | null; neverReplied: boolean; sentSinceReply: number;
+  /** Optional, from the weekly review: the client's sending days in a row with nothing sent, for active domains. */
+  idleDays?: number | null; lastSentOn?: string | null; sendWeekends?: boolean;
 };
 
 const rate = (n: number, d: number) => (100 * n) / d;
@@ -55,6 +58,16 @@ const days = (d: number) => `${d} day${d === 1 ? "" : "s"}`;
 export function trends(x: TrendInput, len: number): Trend[] {
   const out: Trend[] = [];
   const before = `the ${days(len)} before`;
+
+  if (x.idleDays != null && x.idleDays >= 2) {
+    const unit = x.sendWeekends ? "day" : "sending day";
+    out.push({
+      key: "noSend",
+      label: `No sends ${x.idleDays}d`,
+      tone: x.idleDays >= 5 ? "danger" : "warning",
+      hint: `Nothing sent for ${x.idleDays} ${unit}s${x.lastSentOn ? `, last sent ${x.lastSentOn}` : ""}${x.sendWeekends ? "" : ". Weekends don't count: this client doesn't send on them"}`,
+    });
+  }
 
   if (x.quietDays != null && x.quietDays >= TREND.quietDays && x.sentSinceReply > 0) {
     out.push({

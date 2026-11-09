@@ -7,6 +7,7 @@ import { createClient, mergeClient, saveHypertideTemplate, saveSettings, saveWar
 import { ClientCell } from "@/components/ui";
 import type { ClientRow } from "@/lib/queries";
 import type { WarmupProgram } from "@/lib/warmup-program";
+import { Select } from "@/components/Select";
 
 export function LifecycleForm({ drainDays, storageLowThreshold, reuseAfterDays, hypertideNameservers }: { drainDays: number; storageLowThreshold: number; reuseAfterDays: number; hypertideNameservers: string[] }) {
   const [drain, setDrain] = useState(String(drainDays));
@@ -133,7 +134,7 @@ export function ClientsList({ clients }: { clients: ClientRow[] }) {
             <ClientCell name={c.name} hue={c.hue} />
             <span className="list-meta ml-auto">{c.activeCount} active domain{c.activeCount === 1 ? "" : "s"}</span>
             {/* A Smartlead client that is really another client (a sender's name like "Gia" for Qualifi). */}
-            <select className="select" style={{ width: 150 }} value="" disabled={pending} aria-label={`Merge ${c.name} into another client`}
+            <Select className="select" style={{ width: 150 }} value="" disabled={pending} aria-label={`Merge ${c.name} into another client`}
               onChange={(e) => {
                 const into = clients.find((x) => x.id === e.target.value);
                 if (!into || !confirm(`Merge ${c.name} into ${into.name}? Its domains, campaigns, replies and bounces move to ${into.name}, and Smartlead keeps sending them there.`)) return;
@@ -145,7 +146,7 @@ export function ClientsList({ clients }: { clients: ClientRow[] }) {
               }}>
               <option value="">Merge into…</option>
               {clients.filter((x) => x.id !== c.id).map((x) => <option key={x.id} value={x.id}>{x.name}</option>)}
-            </select>
+            </Select>
           </div>
         ))}
       </div>
@@ -189,18 +190,18 @@ export function HypertideOrderForm({ template }: { template: Template }) {
       <div className="grid gap-4 sm:grid-cols-2">
         <label className="field">
           <span className="field-label">Plan</span>
-          <select className="select" value={t.plan} onChange={(e) => setT({ ...t, plan: e.target.value as Template["plan"] })}>
+          <Select className="select" value={t.plan} onChange={(e) => setT({ ...t, plan: e.target.value as Template["plan"] })}>
             <option value="entra">Microsoft (Entra)</option>
             <option value="google">Google Workspace (3 inboxes)</option>
-          </select>
+          </Select>
         </label>
         <label className="field">
           <span className="field-label">Inboxes per domain</span>
-          <select className="select" value={t.inbox_quantity} disabled={t.plan === "google"}
+          <Select className="select" value={t.inbox_quantity} disabled={t.plan === "google"}
             onChange={(e) => setT({ ...t, inbox_quantity: Number(e.target.value) as Template["inbox_quantity"] })}>
             <option value={50}>50 (+2 spare)</option>
             <option value={25}>25 (+2 spare)</option>
-          </select>
+          </Select>
         </label>
         <label className="field">
           <span className="field-label">Forwarding domain</span>

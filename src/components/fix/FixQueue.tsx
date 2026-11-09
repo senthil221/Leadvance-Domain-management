@@ -11,6 +11,7 @@ import { ClientCell, Empty } from "@/components/ui";
 import { fixCsv, FIX_META, fixSummary, TIER_META, TIERS, type FixItem, type FixKind, type FixTier } from "@/lib/fix-queue";
 import { ago, int } from "@/lib/format";
 import type { FixQueueData } from "@/lib/queries";
+import { Select } from "@/components/Select";
 
 const SNOOZE_DAYS = [1, 3, 7, 14];
 
@@ -91,14 +92,14 @@ export function FixQueue({ data, startClient = "", startKind = null }: { data: F
             <button type="button" aria-pressed={view === "open"} onClick={() => setView("open")}>Open</button>
             <button type="button" aria-pressed={view === "snoozed"} onClick={() => setView("snoozed")}>Snoozed{data.snoozed.length ? ` (${int(data.snoozed.length)})` : ""}</button>
           </div>
-          <select className="select fx-select" aria-label="Client" value={client} onChange={(e) => setClient(e.target.value)}>
+          <Select className="select fx-select" aria-label="Client" value={client} onChange={(e) => setClient(e.target.value)}>
             <option value="">All clients</option>
             {clients.map(([id, name]) => <option key={id} value={id}>{name}</option>)}
-          </select>
-          <select className="select fx-select" aria-label="Provider" value={provider} onChange={(e) => setProvider(e.target.value)}>
+          </Select>
+          <Select className="select fx-select" aria-label="Provider" value={provider} onChange={(e) => setProvider(e.target.value)}>
             <option value="">All providers</option>
             {providers.map((p) => <option key={p} value={p}>{p}</option>)}
-          </select>
+          </Select>
           <input className="input fx-search" type="search" placeholder="Find a domain" aria-label="Find a domain" value={search} onChange={(e) => setSearch(e.target.value)} />
           <span className="fx-actions">
             {dnsIds.length ? (
@@ -130,10 +131,10 @@ export function FixQueue({ data, startClient = "", startKind = null }: { data: F
                 {shown.length ? (
                   <label className="fx-snooze-all">
                     <AlarmClock size={13} strokeWidth={1.75} aria-hidden="true" />
-                    <select className="select" aria-label={`Snooze every ${FIX_META[kind].label} problem shown`} value="" disabled={busy} onChange={(e) => { if (e.target.value) snooze(shown.map((i) => ({ name: i.name, kind })), Number(e.target.value)); }}>
+                    <Select className="select" aria-label={`Snooze every ${FIX_META[kind].label} problem shown`} value="" disabled={busy} onChange={(e) => { if (e.target.value) snooze(shown.map((i) => ({ name: i.name, kind })), Number(e.target.value)); }}>
                       <option value="">Snooze these {int(shown.length)}…</option>
                       {SNOOZE_DAYS.map((d) => <option key={d} value={d}>For {d} day{d === 1 ? "" : "s"}</option>)}
-                    </select>
+                    </Select>
                   </label>
                 ) : null}
               </>
@@ -199,10 +200,10 @@ export function FixQueue({ data, startClient = "", startKind = null }: { data: F
                           {i.risk ? <><span className="num">{int(i.risk)}</span><span className="fx-risk-track" aria-hidden="true"><span style={{ width: `${(100 * i.risk) / maxRisk}%` }} /></span></> : <span className="zero" title="Nothing sending through it, but you're paying for it">Unused</span>}
                         </td>
                         <td className="fx-snooze">
-                          <select className="select" aria-label={`Snooze ${FIX_META[i.top.kind].label} on ${i.name}`} value="" disabled={busy} onChange={(e) => { if (e.target.value) snooze([{ name: i.name, kind: i.top.kind }], Number(e.target.value)); }}>
+                          <Select className="select" aria-label={`Snooze ${FIX_META[i.top.kind].label} on ${i.name}`} value="" disabled={busy} onChange={(e) => { if (e.target.value) snooze([{ name: i.name, kind: i.top.kind }], Number(e.target.value)); }}>
                             <option value="">Snooze</option>
                             {SNOOZE_DAYS.map((d) => <option key={d} value={d}>{d} day{d === 1 ? "" : "s"}</option>)}
-                          </select>
+                          </Select>
                         </td>
                       </tr>
                     ))}

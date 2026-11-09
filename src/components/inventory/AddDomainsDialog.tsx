@@ -8,6 +8,7 @@ import { useMemo, useRef, useState, useTransition } from "react";
 import { toast } from "sonner";
 import { addDomains } from "@/app/actions";
 import type { VendorRow } from "@/lib/queries";
+import { Select } from "@/components/Select";
 
 const DOMAIN_RE = /^(?:https?:\/\/)?(?:www\.)?([a-z0-9-]+(?:\.[a-z0-9-]+)+)\/?$/i;
 
@@ -109,10 +110,10 @@ export function AddDomainsDialog({ registrars }: { registrars: VendorRow[] }) {
             <div className="grid gap-3 sm:grid-cols-3">
               <label className="field">
                 <span className="field-label">Registrar</span>
-                <select className="select" value={registrarId} onChange={(e) => setRegistrarId(e.target.value)}>
+                <Select className="select" value={registrarId} onChange={(e) => setRegistrarId(e.target.value)}>
                   {registrars.map((r) => <option key={r.id} value={r.id}>{r.name}</option>)}
                   <option value="">Other</option>
-                </select>
+                </Select>
               </label>
               <label className="field">
                 <span className="field-label">Purchased</span>

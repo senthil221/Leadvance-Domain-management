@@ -1,14 +1,14 @@
 import { describe, expect, it } from "vitest";
 import { bounceCauseOf, bounceReason } from "../src/lib/bounces";
 import { matchPreset, monday, presetRange, previousLabel, previousRange } from "../src/lib/range";
-import { badLists, byClient, bySmartleadTag, judge, sheetRows, type ReviewDomain } from "../src/lib/review";
+import { badLists, byClient, bySmartleadTag, idleDays, judge, sheetRows, type ReviewDomain } from "../src/lib/review";
 import { slShort, slState, slText } from "../src/lib/smartlead-state";
 
 const domain = (over: Partial<ReviewDomain> = {}): ReviewDomain => ({
   id: "d1", name: "welvion.com", status: "active", clientId: null, clientName: "Qualifi", clientHue: null, tags: [],
   inboxes: 10, disconnected: 0, removed: 0, blacklisted: 0, sent: 800, replies: 4, human: 1, bounces: 20, ooo: 1, auto: 0, negative: 1, causes: {},
   prevSent: 800, prevHuman: 2, prevReplies: 3, prevBounces: 10, prevSpam: 2, ageDays: 200, connectedDays: 120, provider: "Hypertide", standing: "active", graceLeft: null,
-  rep: 98, lowRepInboxes: 0, quietDays: 1, neverReplied: false, sentSinceReply: 100, slTags: [], esp: "OUTLOOK", tld: "com", ht: "live", replacedBy: null, ...over,
+  rep: 98, lowRepInboxes: 0, quietDays: 1, neverReplied: false, sentSinceReply: 100, slTags: [], esp: "OUTLOOK", tld: "com", ht: "live", replacedBy: null, lastSentOn: "2026-11-08", sendWeekends: false, idleDays: 0, ...over,
 });
 
 describe("week ranges", () => {
@@ -83,7 +83,7 @@ describe("weekly review calls", () => {
 
   it("puts sender problems first, then idle and disconnected inboxes", () => {
     expect(judge(domain({ human: 0, causes: { sender: 15, spam: 40 } })).verdict).toBe("fix");
-    expect(judge(domain({ sent: 0, disconnected: 4 })).why).toBe("Nothing sent; 4 of 14 inboxes disconnected");
+    expect(judge(domain({ sent: 0, disconnected: 4, idleDays: 3, lastSentOn: "2026-11-04" })).why).toBe("Nothing sent for 3 sending days, last sent 4 Nov; 4 of 14 inboxes disconnected");
     expect(judge(domain({ disconnected: 2, causes: { missing: 9 } })).verdict).toBe("fix");
     expect(judge(domain({ status: "warming", sent: 0 })).verdict).toBe("warming");
     expect(judge(domain({ status: "warming", sent: 800 })).verdict).toBe("ok");
@@ -136,7 +136,34 @@ describe("weekly review calls", () => {
     const j = judge(domain({ inboxes: 0, disconnected: 52, sent: 0, causes: { sender: 4 } }));
     expect(j.verdict).toBe("dead");
     expect(j.why).toBe("52 of 52 inboxes disconnected");
-    expect(judge(domain({ sent: 0, disconnected: 3 })).verdict).toBe("idle");
+    expect(judge(domain({ sent: 0, disconnected: 3, idleDays: 2 })).verdict).toBe("idle");
+  });
+
+  it("counts the client's sending days with nothing sent, and lets one quiet day go", () => {
+    // Mon 9 Nov 2026 is today: it doesn't count until it's over.
+    const today = "2026-11-09";
+    const days = (lastSentOn: string | null, sendWeekends = false, connectedDays: number | null = 30, to = today) => idleDays({ lastSentOn, sendWeekends, connectedDays }, to, today);
+    expect(days("2026-11-08")).toBe(0);
+    // Last sent Friday: the weekend doesn't count for a weekday client, but does for one that sends on weekends.
+    expect(days("2026-11-06")).toBe(0);
+    expect(days("2026-11-06", true)).toBe(2);
+    expect(days("2026-11-04")).toBe(2);
+    expect(days("2026-11-04", true)).toBe(4);
+    // A past range counts up to its own end.
+    expect(days("2026-11-02", false, 30, "2026-11-06")).toBe(4);
+    // Never sent: from the day its first inbox joined Smartlead, or unknown.
+    expect(days(null, false, 4)).toBe(2);
+    expect(days(null, false, null)).toBe(null);
+
+    expect(judge(domain({ sent: 0, idleDays: 1, lastSentOn: "2026-11-06" })).verdict).toBe("low");
+    expect(judge(domain({ sent: 0, idleDays: 0, lastSentOn: "2026-11-06" })).why).toBe("Nothing sent yet in this range; last sent 6 Nov");
+    const idle = judge(domain({ sent: 0, idleDays: 4, lastSentOn: "2026-11-03", sendWeekends: true }));
+    expect([idle.verdict, idle.why]).toEqual(["idle", "Nothing sent for 4 days, last sent 3 Nov"]);
+    expect(idle.chips.find((c) => c.key === "nosend")?.text).toBe("No sends 4d");
+    expect(judge(domain({ sent: 0, idleDays: null, lastSentOn: null })).why).toBe("Nothing sent yet");
+    // Stopped part-way through the range: still sent something, but the tag says how long it's been quiet.
+    expect(judge(domain({ idleDays: 5 })).chips.find((c) => c.key === "nosend")).toMatchObject({ text: "No sends 5d", tone: "danger" });
+    expect(judge(domain({ idleDays: 1 })).chips.some((c) => c.key === "nosend")).toBe(false);
   });
 
   it("sends disconnected domains Hypertide is done with to delete, the rest to reconnect", () => {

@@ -10,7 +10,7 @@ import { ApprovePayment } from "@/components/replacements/ApprovePayment";
 import { StepActions } from "@/components/replacements/StepActions";
 import { ClientCell, Empty } from "@/components/ui";
 import type { ReplacementRow } from "@/lib/queries";
-import { REPLACEMENT_REASONS, STATUS_META, isStepFinished as finished, stepWaitsOnPerson } from "@/lib/status";
+import { STATUS_META, isStepFinished as finished, reasonsLabel, stepWaitsOnPerson } from "@/lib/status";
 
 type StepName = "nameservers" | "inboxes" | "smartlead" | "campaigns";
 const STEP_COL = { nameservers: "stepNameservers", inboxes: "stepInboxes", smartlead: "stepSmartlead", campaigns: "stepCampaigns" } as const;
@@ -212,7 +212,7 @@ function Row({ r, now, graceDays, smartleadLive, isOpen, onToggle }: {
               <p className={`rpl-note ${r.lastError ? "is-error" : stepStatus === "manual" ? "is-warn" : ""}`}>{note}</p>
             ) : null}
             <dl className="rpl-facts">
-              <div><dt>Reason</dt><dd>{REPLACEMENT_REASONS[r.reason]}{r.batchNote ? ` · ${r.batchNote}` : ""}</dd></div>
+              <div><dt>Reason</dt><dd>{reasonsLabel(r.reasons, r.reason)}{r.batchNote ? ` · ${r.batchNote}` : ""}</dd></div>
               <div><dt>Started by</dt><dd>{r.actor}</dd></div>
               {r.htNameservers?.length ? <div><dt>Nameservers</dt><dd>{r.htNameservers.join(", ")}</dd></div> : null}
               {r.hypertideReplace ? <div><dt>Hypertide</dt><dd>{r.htOperation ? r.htOperation.replace(/_/g, " ") : "not sent yet"}</dd></div> : null}

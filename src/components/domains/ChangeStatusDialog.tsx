@@ -6,6 +6,7 @@ import { useMemo, useState, useTransition } from "react";
 import { toast } from "sonner";
 import { changeStatus } from "@/app/actions";
 import { DOMAIN_STATUSES, STATUS_META, canMove, type DomainStatus } from "@/lib/status";
+import { Select } from "@/components/Select";
 
 export function ChangeStatusDialog({
   open,
@@ -67,12 +68,12 @@ export function ChangeStatusDialog({
           <div className="dialog-body">
             <label className="field">
               <span className="field-label">Move to</span>
-              <select className="select" value={to} onChange={(e) => setTo(e.target.value as DomainStatus)}>
+              <Select className="select" value={to} onChange={(e) => setTo(e.target.value as DomainStatus)}>
                 <option value="" disabled>Choose a status</option>
                 {DOMAIN_STATUSES.map((s) => (
                   <option key={s} value={s}>{STATUS_META[s].label} — {STATUS_META[s].hint}</option>
                 ))}
-              </select>
+              </Select>
             </label>
             <label className="field">
               <span className="field-label">Reason {force ? null : <span className="zero">(optional)</span>}</span>

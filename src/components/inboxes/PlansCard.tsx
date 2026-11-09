@@ -8,6 +8,7 @@ import { deleteSendingPlan, runSendingPlanNow, saveSendingPlan, setSendingPlanEn
 import { ClientCell } from "@/components/ui";
 import { int } from "@/lib/format";
 import type { ClientRow, PlanRow } from "@/lib/queries";
+import { Select } from "@/components/Select";
 
 const hourLabel = (h: number) => `${String(h).padStart(2, "0")}:00`;
 
@@ -150,9 +151,9 @@ function PlanDialog({ plan, onClose, clients, selectedDomainIds }: { plan: PlanR
                 <button type="button" aria-pressed={scope === "domains"} disabled={!domainIds.length} onClick={() => setScope("domains")}>{domainIds.length} selected domains</button>
               </div>
               {scope === "client" ? (
-                <select className="select" value={clientId} onChange={(e) => setClientId(e.target.value)} aria-label="Client">
+                <Select className="select" value={clientId} onChange={(e) => setClientId(e.target.value)} aria-label="Client">
                   {clients.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
-                </select>
+                </Select>
               ) : null}
               {!domainIds.length && !existing ? <span className="field-hint">To cover specific domains, select them in the table first.</span> : null}
             </div>
@@ -169,9 +170,9 @@ function PlanDialog({ plan, onClose, clients, selectedDomainIds }: { plan: PlanR
               <label className="field"><span className="field-label">Lowest per inbox</span><input className="input num" type="number" min={0} max={1000} value={inboxMin} onChange={(e) => setInboxMin(e.target.value)} /></label>
               <label className="field"><span className="field-label">Highest per inbox</span><input className="input num" type="number" min={0} max={1000} value={inboxMax} onChange={(e) => setInboxMax(e.target.value)} /></label>
               <label className="field"><span className="field-label flex items-center gap-1.5"><CalendarClock size={12} /> Runs at</span>
-                <select className="select" value={hour} onChange={(e) => setHour(Number(e.target.value))}>
+                <Select className="select" value={hour} onChange={(e) => setHour(Number(e.target.value))}>
                   {Array.from({ length: 24 }, (_, h) => <option key={h} value={h}>{hourLabel(h)}</option>)}
-                </select>
+                </Select>
               </label>
             </div>
             <p className="field-hint">If the total doesn&apos;t fit the per-inbox range, it is raised or capped to what the inboxes can carry.</p>

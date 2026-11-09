@@ -14,6 +14,7 @@ import { htOf } from "@/lib/lifecycle";
 import { useSticky } from "@/lib/sticky";
 import type { DomainRow } from "@/lib/queries";
 import { canReplace } from "@/lib/status";
+import { Select } from "@/components/Select";
 
 // What's running out among the domains in use: how long is left, whether the
 // registrar will renew it, what's riding on it, and whether a swap has started.
@@ -181,22 +182,22 @@ export function ExpiringView({ domains, free }: { domains: DomainRow[]; free: nu
               <input className="input" value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search" aria-label="Search expiring domains" />
             </label>
             {clients.length > 1 ? (
-              <select className="select rv-filter" data-on={client ? true : undefined} value={client} onChange={(e) => setClient(e.target.value)} aria-label="Filter by client">
+              <Select className="select rv-filter" data-on={client ? true : undefined} value={client} onChange={(e) => setClient(e.target.value)} aria-label="Filter by client">
                 <option value="">All clients</option>
                 {clients.map((c) => <option key={c} value={c}>{c}</option>)}
-              </select>
+              </Select>
             ) : null}
             {accounts.length > 1 ? (
-              <select className="select rv-filter" data-on={account ? true : undefined} value={account} onChange={(e) => setAccount(e.target.value)} aria-label="Filter by registrar account">
+              <Select className="select rv-filter" data-on={account ? true : undefined} value={account} onChange={(e) => setAccount(e.target.value)} aria-label="Filter by registrar account">
                 <option value="">All registrar accounts</option>
                 {accounts.map((a) => <option key={a} value={a}>{a}</option>)}
-              </select>
+              </Select>
             ) : null}
-            <select className="select rv-filter" data-on={renew ? true : undefined} value={renew} onChange={(e) => setRenew(e.target.value as typeof renew)} aria-label="Filter by what they need">
+            <Select className="select rv-filter" data-on={renew ? true : undefined} value={renew} onChange={(e) => setRenew(e.target.value as typeof renew)} aria-label="Filter by what they need">
               <option value="">Any auto-renew</option>
               <option value="action">Need you to act</option>
               <option value="on">Auto-renew on</option>
-            </select>
+            </Select>
             {filtered ? <button type="button" className="btn btn-ghost btn-sm" onClick={() => { setQ(""); setClient(""); setAccount(""); setRenew(""); }}>Clear</button> : null}
             {widths.customized ? <button type="button" className="btn btn-ghost btn-sm" title="Put every column back to its usual width" onClick={widths.reset}>Reset widths</button> : null}
             <span className="spacer-auto" />

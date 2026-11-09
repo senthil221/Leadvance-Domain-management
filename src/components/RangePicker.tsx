@@ -3,6 +3,7 @@
 import { CalendarDays, Loader } from "lucide-react";
 import { useState } from "react";
 import { PRESETS, daysBetween, matchPreset, nice, presetRange, type PresetKey } from "@/lib/range";
+import { Select } from "@/components/Select";
 
 /** A date range: a preset, or two dates and Apply. Calls onChange with the new range. */
 export function RangePicker({ from, to, today, loading, onChange, initial = matchPreset(from, to, today) }: {
@@ -23,9 +24,9 @@ export function RangePicker({ from, to, today, loading, onChange, initial = matc
     <>
       <label className="flex items-center gap-1.5">
         <CalendarDays size={14} className="text-faint" />
-        <select className="select" style={{ width: 130 }} value={preset} onChange={(e) => pick(e.target.value as PresetKey)} aria-label="Date range">
+        <Select className="select" style={{ width: 130 }} value={preset} onChange={(e) => pick(e.target.value as PresetKey)} aria-label="Date range">
           {PRESETS.map((p) => <option key={p.key} value={p.key}>{p.label}</option>)}
-        </select>
+        </Select>
       </label>
       {preset === "custom" ? (
         <span className="flex items-center gap-1.5">

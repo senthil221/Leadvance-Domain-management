@@ -7,6 +7,7 @@ import { Fragment, memo, useCallback, useDeferredValue, useEffect, useMemo, useR
 import { toast } from "sonner";
 import { loadReview, loadStats } from "@/app/actions";
 import { ColumnsMenu, useColumns, type ColumnDef } from "@/components/Columns";
+import { Select } from "@/components/Select";
 import { SortTh } from "@/components/SortTh";
 import { keepTextUnselected, useRangeSelect } from "@/components/table-tools";
 import { useSticky } from "@/lib/sticky";
@@ -122,12 +123,13 @@ const gc = (key: string, on: (k: string) => boolean) => {
 };
 
 const COLUMNS: ColumnDef[] = [
-  { key: "client", label: "Client (when not grouped)" }, { key: "call", label: "Weekly review call", hidden: true }, { key: "trend", label: "Trend" }, { key: "sender", label: "Sender name" }, { key: "tags", label: "Tags", hidden: true }, { key: "esp", label: "ESP", hidden: true },
+  { key: "client", label: "Client (when not grouped)" }, { key: "call", label: "Weekly review call", hidden: true }, { key: "sender", label: "Sender name" }, { key: "tags", label: "Tags", hidden: true }, { key: "esp", label: "ESP", hidden: true },
   { key: "inboxes", label: "Inboxes" }, { key: "usage", label: "Used" }, { key: "sent", label: "Sent" },
   { key: "slReplies", label: "Replies ex. OOO" }, { key: "replies", label: "Replies incl. OOO" },
   { key: "human", label: "Human" }, { key: "ooo", label: "Out of office", hidden: true }, { key: "negative", label: "Not interested", hidden: true },
   { key: "bounces", label: "Bounces" }, { key: "reputation", label: "Reputation" },
-  { key: "advice", label: "Suggestion" },
+  // Trend and Suggestion sit together at the end, each on one line, so rows stay one height.
+  { key: "trend", label: "Trend" }, { key: "advice", label: "Suggestion" },
 ];
 
 const pct = (v: number | null, digits: number) => (v == null ? null : `${v.toFixed(digits)}%`);
@@ -195,8 +197,8 @@ const DomainRow = memo(function DomainRow({ r, i, byClient, showClient, showCall
             </button>
             <span className="st-n">{i + 1}</span>
             <DomainLink id={r.id} tab="stats" className="strong hover:underline">{r.name}</DomainLink>
-            {/* Status only when it isn't the usual Active. */}
-            {r.status !== "active" ? <StatusDot status={r.status} /> : null}
+            {/* Status only when it isn't the usual Active, with the days it has been in it. */}
+            {r.status !== "active" ? <StatusDot status={r.status} since={r.statusSince} /> : null}
             <SlBadge c={r} quiet />
           </span>
         </td>
@@ -206,7 +208,6 @@ const DomainRow = memo(function DomainRow({ r, i, byClient, showClient, showCall
             {r.call ? <Badge tone={VERDICT_META[r.call.verdict].tone === "faint" ? undefined : VERDICT_META[r.call.verdict].tone}>{VERDICT_META[r.call.verdict].label}</Badge> : <span className="zero">—</span>}
           </td>
         ) : null}
-        {on("trend") ? <td className="st-trend-cell"><TrendTags list={r.trends} max={3} /></td> : null}
         {on("sender") ? (
           <td className="truncate" style={{ maxWidth: 180 }} title={r.senders.join(", ") || undefined}>
             {r.senders.length ? <>{r.senders[0]}{r.senders.length > 1 ? <span className="text-faint"> +{r.senders.length - 1}</span> : null}</> : <span className="zero">—</span>}
@@ -219,6 +220,7 @@ const DomainRow = memo(function DomainRow({ r, i, byClient, showClient, showCall
         ) : null}
         {on("esp") ? <td className="text-muted text-[12px]">{r.esp ?? <span className="zero">—</span>}</td> : null}
         <Cells r={r} len={len} on={on} />
+        {on("trend") ? <td className="st-start st-trend-cell"><TrendTags list={r.trends} max={2} /></td> : null}
         {on("advice") ? <td className="st-start st-advice-cell"><AdviceCell call={r.call} /></td> : null}
       </tr>
       {open ? (
@@ -296,6 +298,8 @@ function download(name: string, head: string[], lines: unknown[][]) {
 // The weekly review's calls that ask for action; Idle, too little sent and OK don't.
 const ATTENTION: Verdict[] = ["fix", "rest", "drop", "dead", "watch"];
 type CallFilter = "" | "attention" | Verdict;
+// The ESP filter's value for domains with none: "" already means every ESP.
+const NO_ESP = "-";
 type Facet = "call" | "tag" | "esp" | "sender" | "sl" | "trend";
 /** "bad" is any tag that asks for a look: no reply for days, replies or reputation down, bounces up. */
 type TrendFilter = "" | "bad" | TrendKey;
@@ -319,7 +323,8 @@ export function StatsView({ initial, initialReview, clients }: { initial: StatsD
   // ?tag=, ?esp=, ?sender=, ?status=, ?sl= or ?call= opens the page filtered and wins.
   const [q, setQ] = useSticky("stats:q", "");
   const [clientId, setClientId] = useSticky("stats:client", "", params.get("client"));
-  const [onlySending, setOnlySending] = useSticky("stats:sending", true);
+  // ?sending=0 (from Overview's "sent nothing" line) shows domains that sent nothing too.
+  const [onlySending, setOnlySending] = useSticky("stats:sending", true, params.get("sending") === "0" ? false : null);
   const urlCall = params.get("call");
   const [call, setCall] = useSticky<CallFilter>("stats:call", "", urlCall === "attention" || VERDICT_ORDER.includes(urlCall as Verdict) ? (urlCall as CallFilter) : null);
   const [tag, setTag] = useSticky("stats:tag", "", params.get("tag")?.toLowerCase() ?? null);
@@ -379,6 +384,7 @@ export function StatsView({ initial, initialReview, clients }: { initial: StatsD
       r.trends = trendsOf({
         sent: r.sent, replies: r.replies, bounces: r.bounces, prevSent: r.prevSent, prevReplies: r.prevReplies, prevBounces: r.prevBounces,
         rep: r.reputation, prevRep: r.prevRep, quietDays: r.call?.quietDays ?? null, neverReplied: r.call?.neverReplied ?? false, sentSinceReply: r.call?.sentSinceReply ?? 0,
+        idleDays: r.status === "active" ? r.call?.idleDays ?? null : null, lastSentOn: r.call?.lastSentOn ?? null, sendWeekends: r.call?.sendWeekends ?? false,
       }, len);
     }
     return byId;
@@ -399,7 +405,7 @@ export function StatsView({ initial, initialReview, clients }: { initial: StatsD
       (standing === "all" || (standing === "current") === d.current) &&
       (skip === "call" || callMatches(calls.get(d.id))) &&
       (skip === "tag" || !tag || d.allTags.some((t) => t.toLowerCase() === tag)) &&
-      (skip === "esp" || !esp || (d.esp ?? "") === esp) &&
+      (skip === "esp" || !esp || (d.esp || NO_ESP) === esp) &&
       (skip === "sender" || !sender || d.senders.includes(sender)) &&
       (skip === "sl" || slMatches(d, sl)) &&
       (skip === "trend" || trendMatches(base.get(d.id)?.trends ?? [])) &&
@@ -429,14 +435,16 @@ export function StatsView({ initial, initialReview, clients }: { initial: StatsD
         trends: trendCounts,
         attention: ATTENTION.reduce((a, x) => a + (verdicts.get(x) ?? 0), 0),
         tags: [...tags].sort((a, b) => a[1].label.localeCompare(b[1].label)),
-        esps: [...count("esp", (d) => [d.esp ?? ""])].sort((a, b) => a[0].localeCompare(b[0])),
+        esps: [...count("esp", (d) => [d.esp || NO_ESP])].sort((a, b) => a[0].localeCompare(b[0])),
         senders: [...count("sender", (d) => d.senders)].sort((a, b) => a[0].localeCompare(b[0])),
         sl: new Map(SL_FILTERS.map(([k]) => [k, data.domains.filter((d) => passes(d, "sl") && sendingOk(d, "sl") && slMatches(d, k)).length])),
       },
     };
   }, [data.domains, clientId, standing, needle, call, calls, tag, esp, sender, sl, trend, base, sentIn, onlySending]);
-  const filtering = !!(call || tag || esp || sender || trend || sl !== "in");
   const clearFilters = () => { setCall(""); setTag(""); setEsp(""); setSender(""); setTrend(""); setSl("in"); };
+  // Every filter, the client, which domains and the search too: back to the page as it first opens.
+  const setCount = [clientId, standing !== "current", call, trend, tag, esp, sender, sl !== "in", q.trim()].filter(Boolean).length;
+  const clearAll = () => { clearFilters(); setClientId(""); setStanding("current"); setQ(""); };
 
   const rows = useMemo(() => {
     // Each row's sort value is worked out once, not on every comparison.
@@ -559,9 +567,9 @@ export function StatsView({ initial, initialReview, clients }: { initial: StatsD
         </div>
         <label className="flex items-center gap-1.5">
           <CalendarDays size={14} className="text-faint" />
-          <select className="select" style={{ width: 130 }} value={preset} onChange={(e) => pick(e.target.value as PresetKey)} aria-label="Date range">
+          <Select className="select" style={{ width: 130 }} value={preset} onChange={(e) => pick(e.target.value as PresetKey)} aria-label="Date range">
             {PRESETS.map((p) => <option key={p.key} value={p.key}>{p.label}</option>)}
-          </select>
+          </Select>
         </label>
         {preset === "custom" ? (
           <span className="flex items-center gap-1.5">
@@ -572,45 +580,48 @@ export function StatsView({ initial, initialReview, clients }: { initial: StatsD
           </span>
         ) : <span className="text-[12.5px] text-muted">{rangeLabel}</span>}
         {loading ? <Loader size={14} className="animate-spin text-faint" aria-label="Loading" /> : null}
-        <select className="select rv-filter" data-on={clientId ? true : undefined} value={clientId} onChange={(e) => setClientId(e.target.value)} aria-label="Filter by client">
+        <Select className="select rv-filter" data-on={clientId ? true : undefined} value={clientId} onChange={(e) => setClientId(e.target.value)} aria-label="Filter by client">
           <option value="">All clients</option>
           {clients.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
-        </select>
-        <select className="select rv-filter" data-on={standing !== "current" ? true : undefined} value={standing} onChange={(e) => setStanding(e.target.value as "current" | "ended" | "all")} aria-label="Which domains"
+        </Select>
+        <Select className="select rv-filter" data-on={standing !== "current" ? true : undefined} value={standing} onChange={(e) => setStanding(e.target.value as "current" | "ended" | "all")} aria-label="Which domains"
           title="Active includes domains in their grace period">
           <option value="current">Active domains</option>
           <option value="ended">Disconnected or replaced</option>
           <option value="all">All domains</option>
-        </select>
-        <select className="select rv-filter" data-on={call ? true : undefined} value={call} onChange={(e) => setCall(e.target.value as CallFilter)} aria-label="Filter by weekly review call"
+        </Select>
+        <Select className="select rv-filter" data-on={call ? true : undefined} value={call} onChange={(e) => setCall(e.target.value as CallFilter)} aria-label="Filter by weekly review call"
           title="The weekly review's call for this range. Picking one also shows domains that sent nothing">
           <option value="">All review calls</option>
           <option value="attention">Needs attention ({options.attention})</option>
           {VERDICT_ORDER.map((x) => <option key={x} value={x}>{VERDICT_META[x].label} ({options.verdicts.get(x) ?? 0})</option>)}
-        </select>
-        <select className="select rv-filter" data-on={trend ? true : undefined} value={trend} onChange={(e) => setTrend(e.target.value as TrendFilter)} aria-label="Filter by trend"
+        </Select>
+        <Select className="select rv-filter" data-on={trend ? true : undefined} value={trend} onChange={(e) => setTrend(e.target.value as TrendFilter)} aria-label="Filter by trend"
           title="Against the same number of days before: replies, bounces and warmup reputation going up or down, and days without a reply">
           <option value="">All trends</option>
           <option value="bad">Getting worse ({options.trends.get("bad") ?? 0})</option>
           {TREND_ORDER.map((k) => <option key={k} value={k}>{TREND_META[k].label} ({options.trends.get(k) ?? 0})</option>)}
-        </select>
-        <select className="select rv-filter" data-on={tag ? true : undefined} value={tag} onChange={(e) => setTag(e.target.value)} aria-label="Filter by tag">
+        </Select>
+        <Select className="select rv-filter" data-on={tag ? true : undefined} value={tag} onChange={(e) => setTag(e.target.value)} aria-label="Filter by tag">
           <option value="">All tags</option>
           {options.tags.map(([k, x]) => <option key={k} value={k}>{x.label} ({x.n})</option>)}
-        </select>
-        <select className="select rv-filter" data-on={esp ? true : undefined} value={esp} onChange={(e) => setEsp(e.target.value)} aria-label="Filter by ESP">
+        </Select>
+        <Select className="select rv-filter" data-on={esp ? true : undefined} value={esp} onChange={(e) => setEsp(e.target.value)} aria-label="Filter by ESP">
           <option value="">All ESPs</option>
-          {options.esps.map(([k, n]) => <option key={k} value={k}>{k || "No ESP"} ({n})</option>)}
-        </select>
-        <select className="select rv-filter" data-on={sender ? true : undefined} value={sender} onChange={(e) => setSender(e.target.value)} aria-label="Filter by sender name">
+          {options.esps.map(([k, n]) => <option key={k} value={k}>{k === NO_ESP ? "No ESP" : k} ({n})</option>)}
+        </Select>
+        <button type="button" className="btn btn-sm clear-all" data-on={setCount ? true : undefined} disabled={!setCount} onClick={clearAll}
+          title={setCount ? "Clear every filter, the client and the search" : "No filters set"}>
+          <X size={13} /> Clear all{setCount ? <span className="clear-all-n">{setCount}</span> : null}
+        </button>
+        <Select className="select rv-filter" data-on={sender ? true : undefined} value={sender} onChange={(e) => setSender(e.target.value)} aria-label="Filter by sender name">
           <option value="">All senders</option>
           {options.senders.map(([k, n]) => <option key={k} value={k}>{k} ({n})</option>)}
-        </select>
-        <select className="select rv-filter" data-on={sl !== "in" ? true : undefined} value={sl} onChange={(e) => setSl(e.target.value as SlFilter)} aria-label="Filter by Smartlead status"
+        </Select>
+        <Select className="select rv-filter" data-on={sl !== "in" ? true : undefined} value={sl} onChange={(e) => setSl(e.target.value as SlFilter)} aria-label="Filter by Smartlead status"
           title={`Connected, disconnected or deleted in Smartlead now${data.slSyncedAt ? `, as of the sync ${ago(data.slSyncedAt)}` : ""}. Deleted domains are left out unless you pick them`}>
           {SL_FILTERS.map(([k, label]) => <option key={k} value={k}>{label} ({options.sl.get(k) ?? 0})</option>)}
-        </select>
-        {filtering ? <button type="button" className="btn btn-sm" onClick={clearFilters}>Clear filters</button> : null}
+        </Select>
         {view === "domain" ? (
           <>
             <label className="flex items-center gap-1.5 text-[12.5px] text-muted" title="Only domains that sent at least one email in this range"><input type="checkbox" className="checkbox" checked={onlySending} onChange={(e) => setOnlySending(e.target.checked)} /> Sending only</label>
@@ -652,7 +663,6 @@ export function StatsView({ initial, initialReview, clients }: { initial: StatsD
                   </th>
                   {showClient ? <SortTh k="client" sort={sort} onSort={sortBy}>Client</SortTh> : null}
                   {showCall ? <SortTh k="call" sort={sort} onSort={sortBy} title="The weekly review's call for this range; hover a call for why">Call</SortTh> : null}
-                  {on("trend") ? <SortTh k="trend" sort={sort} onSort={sortBy} title="Days without a reply, and replies, bounces and warmup reputation against the same number of days before. Hover a tag for the numbers">Trend</SortTh> : null}
                   {on("sender") ? <SortTh k="sender" sort={sort} onSort={sortBy} title="Sender names on the domain's connected inboxes">Sender</SortTh> : null}
                   {on("tags") ? <SortTh k="tags" sort={sort} onSort={sortBy} title="The domain's tags and the Smartlead tags on its inboxes">Tags</SortTh> : null}
                   {on("esp") ? <SortTh k="esp" sort={sort} onSort={sortBy}>ESP</SortTh> : null}
@@ -666,6 +676,7 @@ export function StatsView({ initial, initialReview, clients }: { initial: StatsD
                   {on("negative") ? <SortTh k="negative" sort={sort} onSort={sortBy} num className={gc("negative", on)}>Negative</SortTh> : null}
                   {on("bounces") ? <SortTh k="bounceRate" sort={sort} onSort={sortBy} num className={gc("bounces", on)} title="Bounces and bounce rate; sorts by rate">Bounces</SortTh> : null}
                   {on("reputation") ? <SortTh k="reputation" sort={sort} onSort={sortBy} num className={gc("reputation", on)}>Reputation</SortTh> : null}
+                  {on("trend") ? <SortTh k="trend" sort={sort} onSort={sortBy} className="st-start" title="Days without a reply, and replies, bounces and warmup reputation against the same number of days before. Hover a tag for the numbers">Trend</SortTh> : null}
                   {on("advice") ? <SortTh k="advice" sort={sort} onSort={sortBy} className="st-start" title="What to do, from the weekly review's call and the bounces. Click a domain's arrow for its bounce reasons">Suggestion</SortTh> : null}
                 </tr>
               </thead>
@@ -685,11 +696,11 @@ export function StatsView({ initial, initialReview, clients }: { initial: StatsD
                           </span>
                         </td>
                         {showCall ? <td /> : null}
-                        {on("trend") ? <td /> : null}
                         {on("sender") ? <td /> : null}
                         {on("tags") ? <td /> : null}
                         {on("esp") ? <td /> : null}
                         <Cells r={g.t ?? total(g.rows)} len={len} on={on} agg />
+                        {on("trend") ? <td className="st-start" /> : null}
                         {on("advice") ? <td className="st-start" /> : null}
                       </tr>
                     ) : null}

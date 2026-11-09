@@ -18,6 +18,7 @@ import { daysBetween, nice, previousLabel } from "@/lib/range";
 import { isCurrent, STANDING_META, type ReviewData, type ReviewDomain } from "@/lib/review";
 import { RankedBars, seriesColor, TrendChart } from "./CompareCharts";
 import { Findings } from "./Findings";
+import { Select } from "@/components/Select";
 
 const SLOTS = 8;
 type Pick = { key: string; slot: number | null };
@@ -312,10 +313,10 @@ export function CompareView({ initial, initialDaily, startClient = "", startDim 
         <div className="cmp-bar">
           <label className="cmp-client">
             <span className="sr-only">Client</span>
-            <select className="select" value={client} onChange={(e) => { setClient(e.target.value); setPicks(null); setOpened(null); setOnlyIds(null); if (e.target.value && dim === "client") setDim("tag"); }}>
+            <Select className="select" value={client} onChange={(e) => { setClient(e.target.value); setPicks(null); setOpened(null); setOnlyIds(null); if (e.target.value && dim === "client") setDim("tag"); }}>
               <option value="">All clients</option>
               {clients.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
-            </select>
+            </Select>
           </label>
           <div className="seg" role="group" aria-label="Which domains">
             <button type="button" aria-pressed={scope === "current"} onClick={() => { setScope("current"); setPicks(null); }}>Active</button>
@@ -324,10 +325,10 @@ export function CompareView({ initial, initialDaily, startClient = "", startDim 
           <RangePicker from={data.from} to={data.to} today={data.today} loading={loading} onChange={load} />
           <label className="cmp-against">
             <span>against</span>
-            <select className="select" value={pickDates ? "pick" : "prev"} onChange={(e) => { const p = e.target.value === "pick"; setPickDates(p); if (!p) setAgainst(null); }}>
+            <Select className="select" value={pickDates ? "pick" : "prev"} onChange={(e) => { const p = e.target.value === "pick"; setPickDates(p); if (!p) setAgainst(null); }}>
               <option value="prev">The same days before</option>
               <option value="pick">Dates I pick…</option>
-            </select>
+            </Select>
           </label>
           {pickDates ? (
             <span className="cmp-against-dates">
@@ -347,10 +348,10 @@ export function CompareView({ initial, initialDaily, startClient = "", startDim 
             {DIMS.filter((d) => d !== "client" && d !== dim).map((d) => (
               <label key={d} className="cmp-filter">
                 <span>{DIM_META[d].label}</span>
-                <select className="select" value={only[d] ?? ""} onChange={(e) => { setOnly({ ...only, [d]: e.target.value }); setPicks(null); }}>
+                <Select className="select" value={only[d] ?? ""} onChange={(e) => { setOnly({ ...only, [d]: e.target.value }); setPicks(null); }}>
                   <option value="">{DIM_META[d].all}</option>
                   {groupsBy(data.domains.filter(inScope).filter((x) => !client || x.clientId === client), d).map((g) => <option key={g.key} value={g.key}>{g.label}</option>)}
-                </select>
+                </Select>
               </label>
             ))}
             {Object.values(only).some(Boolean) ? <button type="button" className="btn btn-sm" onClick={() => { setOnly({}); setPicks(null); }}>Clear</button> : null}

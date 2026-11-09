@@ -23,6 +23,7 @@ import {
   ESP_ORDER, RULES, SIGNAL_META, SIGNAL_ORDER, STANDING_META, VERDICT_META, VERDICT_ORDER, badLists, byClient, byEsp, byProvider, bySmartleadTag, byTld, espName, isCurrent, judge, sheetRows,
   type Chip, type ClientSummary, type Judged, type ReviewData, type Signal, type Verdict,
 } from "@/lib/review";
+import { Select } from "@/components/Select";
 
 // The weekly review: every sending domain sorted into what to do with it, a
 // tab per call with the reason beside each domain, split by mail provider and
@@ -83,10 +84,10 @@ function EspBadge({ esp }: { esp: string | null }) {
 function FacetSelect({ label, all, items, value, onPick }: { label: string; all: string; items: [string, number, string?][]; value: string | null; onPick: (v: string | null) => void }) {
   const list = value != null && !items.some(([k]) => k === value) ? [...items, [value, 0] as [string, number]] : items;
   return (
-    <select className="select rv-filter" data-on={value != null || undefined} value={value ?? ""} onChange={(e) => onPick(e.target.value || null)} aria-label={label}>
+    <Select className="select rv-filter" data-on={value != null || undefined} value={value ?? ""} onChange={(e) => onPick(e.target.value || null)} aria-label={label}>
       <option value="">{all}</option>
       {list.map(([k, n, shown]) => <option key={k} value={k}>{shown ?? k} ({int(n)})</option>)}
-    </select>
+    </Select>
   );
 }
 
@@ -313,20 +314,20 @@ export function ReviewView({ initial, clients }: { initial: ReviewData; clients:
         <RangePicker from={data.from} to={data.to} today={data.today} loading={loading} onChange={load} />
         <span className="rv-client-pick">
           <button type="button" className="btn btn-sm btn-icon" aria-label="Previous client" title="Previous client" onClick={() => step(-1)}><ChevronLeft size={14} /></button>
-          <select className="select" style={{ width: 170 }} value={clientId ?? "*"} onChange={(e) => pickClient(e.target.value === "*" ? null : e.target.value)} aria-label="Filter by client">
+          <Select className="select" style={{ width: 170 }} value={clientId ?? "*"} onChange={(e) => pickClient(e.target.value === "*" ? null : e.target.value)} aria-label="Filter by client">
             <option value="*">All clients</option>
             {clientRows.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
             {clients.filter((c) => !clientRows.some((r) => r.id === c.id)).map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
-          </select>
+          </Select>
           <button type="button" className="btn btn-sm btn-icon" aria-label="Next client" title="Next client, worst first" onClick={() => step(1)}><ChevronRight size={14} /></button>
           {current ? <span className="rv-client-at">{at + 1} of {clientRows.length}</span> : null}
         </span>
         {data.slSyncedAt ? <span className="sl-synced" suppressHydrationWarning title="Connected, disconnected and deleted come from the last Smartlead sync (Settings → Background sync)">Smartlead status {ago(data.slSyncedAt)}</span> : null}
-        <select className="select" style={{ width: 190 }} value={slTag ?? "*"} onChange={(e) => pickTag(e.target.value === "*" ? null : e.target.value)} aria-label="Filter by Smartlead tag">
+        <Select className="select" style={{ width: 190 }} value={slTag ?? "*"} onChange={(e) => pickTag(e.target.value === "*" ? null : e.target.value)} aria-label="Filter by Smartlead tag">
           <option value="*">All Smartlead tags</option>
           {[...tagRows].sort((a, b) => (a.id ? 0 : 1) - (b.id ? 0 : 1) || a.name.localeCompare(b.name)).map((t) => <option key={t.id || "none"} value={t.id}>{t.name} ({t.domains})</option>)}
           {slTag != null && !tagRows.some((t) => t.id === slTag) ? <option value={slTag}>{slTag || "No tag"}</option> : null}
-        </select>
+        </Select>
       </div>
 
       <section className="stats is-6 rv-kpis" aria-label="This view">

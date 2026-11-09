@@ -6,6 +6,7 @@ import { toast } from "sonner";
 import { applyBuiltInTagMap, applyTagClients, archiveEmptyClients, createClientTags, saveSenderPairs, saveTagPairs, setClientSource, setSenderClient, setTagClient } from "@/app/actions";
 import { int } from "@/lib/format";
 import type { ClientRow, SenderRow, TagRow } from "@/lib/queries";
+import { Select } from "@/components/Select";
 
 const plural = (n: number, one: string, many = `${one}s`) => `${int(n)} ${n === 1 ? one : many}`;
 
@@ -93,14 +94,14 @@ function MapList({ rows, clients, noun, placeholder, onSet, onPaste, empty }: {
                 {r.current?.length ? <> · now under {r.current.join(", ")}</> : null}
               </span>
             </span>
-            <select className="select" value={r.clientId ?? ""} disabled={pending} aria-label={`Client for ${r.name}`}
+            <Select className="select" value={r.clientId ?? ""} disabled={pending} aria-label={`Client for ${r.name}`}
               onChange={(e) => {
                 const id = e.target.value || null;
                 startTransition(async () => { const err = await onSet(r.name, id); if (err) toast.error(err); });
               }}>
               <option value="">No client</option>
               {clients.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
-            </select>
+            </Select>
           </div>
         ))}
       </div>

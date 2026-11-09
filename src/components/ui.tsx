@@ -18,9 +18,20 @@ export function PageHead({ title, sub, children }: { title: string; sub?: ReactN
   );
 }
 
-export function StatusDot({ status }: { status: DomainStatus }) {
+/** Whole days from `since` to now, never below 0. */
+export const daysSince = (since: Date | string, now = Date.now()) => Math.max(0, Math.floor((now - new Date(since).getTime()) / 86_400_000));
+
+/** A domain's status; with `since`, how many days it has been in it ("Draining · 6d"). */
+export function StatusDot({ status, since }: { status: DomainStatus; since?: Date | string | null }) {
   const m = STATUS_META[status];
-  return <span className={`status-dot tone-${m.tone}${m.live ? " is-live" : ""}`} title={m.hint}>{m.label}</span>;
+  const days = since ? daysSince(since) : null;
+  const on = since ? new Date(since).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" }) : "";
+  const title = days == null ? m.hint : `${m.label} for ${days === 0 ? "less than a day" : `${days} day${days === 1 ? "" : "s"}`}, since ${on}. ${m.hint}`;
+  return (
+    <span className={`status-dot tone-${m.tone}${m.live ? " is-live" : ""}`} title={title}>
+      {m.label}{days != null ? <span className="status-days">{days === 0 ? "today" : `${days}d`}</span> : null}
+    </span>
+  );
 }
 
 export function Dot({ tone }: { tone: Tone }) {

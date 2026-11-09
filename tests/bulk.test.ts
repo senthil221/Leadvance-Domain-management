@@ -7,7 +7,7 @@ const domain = (over: Partial<ReviewDomain> = {}): ReviewDomain => ({
   id: "d1", name: "welvion.com", status: "active", clientId: null, clientName: "Qualifi", clientHue: null, tags: [],
   inboxes: 10, disconnected: 0, removed: 0, blacklisted: 0, sent: 800, replies: 4, human: 1, bounces: 20, ooo: 1, auto: 0, negative: 1, causes: {},
   prevSent: 800, prevHuman: 2, prevReplies: 3, prevBounces: 10, prevSpam: 2, ageDays: 200, connectedDays: 120, provider: "Hypertide", standing: "active", graceLeft: null,
-  rep: 98, lowRepInboxes: 0, quietDays: 1, neverReplied: false, sentSinceReply: 100, slTags: [], esp: "OUTLOOK", tld: "com", ht: "live", replacedBy: null, ...over,
+  rep: 98, lowRepInboxes: 0, quietDays: 1, neverReplied: false, sentSinceReply: 100, slTags: [], esp: "OUTLOOK", tld: "com", ht: "live", replacedBy: null, lastSentOn: "2026-11-08", sendWeekends: false, idleDays: 0, ...over,
 });
 
 describe("paste to select", () => {

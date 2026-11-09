@@ -11,6 +11,7 @@ import { hypertideAcceptsDomain } from "@/integrations/hypertide";
 import { ageLabel, daysSince } from "@/lib/format";
 import type { StorageCandidate } from "@/lib/queries";
 import { REPLACEMENT_REASONS, type ReplacementReason } from "@/lib/status";
+import { Select } from "@/components/Select";
 
 export type ReplaceTarget = { id: string; name: string; tld: string | null; clientName: string | null; clientHue: number | null };
 
@@ -86,10 +87,10 @@ function FreeDomains({ candidates, assign, targets, hypertide, onPick }: {
           <input className="input" value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search free domains" aria-label="Search free domains" />
         </label>
         {tlds.length > 1 ? (
-          <select className="select" value={tld} onChange={(e) => setTld(e.target.value)} aria-label="Filter by TLD">
+          <Select className="select" value={tld} onChange={(e) => setTld(e.target.value)} aria-label="Filter by TLD">
             <option value="">All TLDs</option>
             {tlds.map(([k, n]) => <option key={k} value={k}>.{k} ({n})</option>)}
-          </select>
+          </Select>
         ) : null}
       </div>
       <div className="rp-list" role="listbox" aria-label="Free domains" aria-multiselectable>
@@ -132,7 +133,9 @@ export function ReplaceDialog({
   // Old domains whose Hypertide order is Done: the only ones Hypertide replaces.
   const [htDone, setHtDone] = useState<Set<string> | null>(null);
   const [assign, setAssign] = useState<Record<string, string>>({});
-  const [reason, setReason] = useState<ReplacementReason>(defaultReason);
+  // One or more reasons, in the order picked: the first is the main one.
+  const [reasons, setReasons] = useState<ReplacementReason[]>([defaultReason]);
+  const toggleReason = (k: ReplacementReason) => setReasons((r) => (r.includes(k) ? r.filter((x) => x !== k) : [...r, k]));
   const [note, setNote] = useState("");
   const [mode, setMode] = useState<"hypertide" | "manual">("hypertide");
   const [copyTagsAndWarmup, setCopyTagsAndWarmup] = useState(true);
@@ -155,7 +158,7 @@ export function ReplaceDialog({
     if (openKey !== null) {
       setCandidates(null);
       setError(null);
-      setReason(defaultReason);
+      setReasons([defaultReason]);
       setNote("");
     }
   }
@@ -217,7 +220,7 @@ export function ReplaceDialog({
     setAssign(next);
     setActive(nextOpen(next));
   };
-  const ready = candidates !== null && going.length > 0 && short === 0 && going.every((t) => assign[t.id]) && namesOk && refused === 0;
+  const ready = candidates !== null && going.length > 0 && short === 0 && going.every((t) => assign[t.id]) && namesOk && refused === 0 && reasons.length > 0;
 
   const submit = () => {
     setError(null);
@@ -226,7 +229,7 @@ export function ReplaceDialog({
       const res = await startReplacement({
         oldIds: going.map((t) => t.id),
         newIds: going.map((t) => assign[t.id]),
-        reason,
+        reasons,
         note: note || undefined,
         manualInboxes: !hypertide,
         hypertideReplace: hypertide,
@@ -266,15 +269,15 @@ export function ReplaceDialog({
           </div>
 
           <div className="dialog-body">
-            <div className="grid gap-3 sm:grid-cols-[220px_1fr]">
-              <label className="field">
-                <span className="field-label">Reason</span>
-                <select className="select" value={reason} onChange={(e) => setReason(e.target.value as ReplacementReason)}>
-                  {Object.entries(REPLACEMENT_REASONS).map(([k, label]) => (
-                    <option key={k} value={k}>{label}</option>
+            <div className="grid gap-3">
+              <div className="field">
+                <span className="field-label">Reasons <span className="zero">(pick one or more)</span></span>
+                <div className="tld-chips" role="group" aria-label="Reasons for the replacement">
+                  {(Object.entries(REPLACEMENT_REASONS) as [ReplacementReason, string][]).map(([k, label]) => (
+                    <button key={k} type="button" className="tld-chip" aria-pressed={reasons.includes(k)} onClick={() => toggleReason(k)}>{label}</button>
                   ))}
-                </select>
-              </label>
+                </div>
+              </div>
               <label className="field">
                 <span className="field-label">Note <span className="zero">(optional)</span></span>
                 <input className="input" value={note} onChange={(e) => setNote(e.target.value)} placeholder="e.g. Bounce over 4% on the staffing campaign" maxLength={1000} />
@@ -354,6 +357,10 @@ export function ReplaceDialog({
               <Check checked={autoWarmup} onChange={setAutoWarmup} label="Turn warmup on for the new inboxes" hint="As soon as they're in Smartlead, using the old domain's warmup numbers. The new domain is tagged New until it joins campaigns." />
               <Check checked={addToCampaigns} onChange={setAddToCampaigns} label="Add the new inboxes to campaigns straight away" hint="Only for domains that are already warmed up. Otherwise they warm first and you add them from Replacements when they're ready." />
               <Check checked={stopOldSending} onChange={setStopOldSending} label="Stop sending from the old domain when the new one is live" hint="Its daily limit goes to 0 once the new inboxes are in Smartlead. Either way it's tagged Replaced with an 18-day countdown from the swap, while Hypertide keeps its inboxes up for replies." />
+              <p className="field-hint flex items-start gap-1.5">
+                <Info size={13} className="mt-0.5 flex-none" aria-hidden />
+                <span>Done for you on every replacement: the old domains are tagged Replaced, here and on their Smartlead inboxes, and start their grace period; the new ones are tagged New while they warm up.</span>
+              </p>
             </div>
 
             {short > 0 ? (
@@ -388,7 +395,7 @@ export function ReplaceDialog({
             <Dialog.Close asChild>
               <button type="button" className="btn">Cancel</button>
             </Dialog.Close>
-            <button type="button" className="btn btn-primary" disabled={!ready || pending} onClick={submit}>
+            <button type="button" className="btn btn-primary" disabled={!ready || pending} title={reasons.length ? undefined : "Pick at least one reason"} onClick={submit}>
               {pending ? "Starting…" : `Replace ${going.length} domain${going.length === 1 ? "" : "s"}`}
             </button>
           </div>

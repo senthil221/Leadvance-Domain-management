@@ -114,6 +114,28 @@ export async function markReplaced(input: { ids: string[]; note?: string; to?: "
   }
 }
 
+/**
+ * Takes storage domains out of Free domains: they were used somewhere the app
+ * can't see. Counts as a use for the reuse cool-down. undo clears the mark.
+ */
+export async function markDomainsUsed(input: { ids: string[]; undo?: boolean }): Promise<ActionResult<{ changed: number }>> {
+  try {
+    await requireActor();
+    const v = z.object({ ids, undo: z.boolean().default(false) }).parse(input);
+    const rows = await sql.begin(async (tx) => {
+      const changed = v.undo
+        ? await tx`update domains set marked_used_on = null where id in ${sql(v.ids)} and marked_used_on is not null returning id`
+        : await tx`update domains set marked_used_on = current_date where id in ${sql(v.ids)} and status = 'in_storage' and marked_used_on is null returning id`;
+      await tx`select refresh_last_used()`;
+      return changed;
+    });
+    refresh();
+    return { ok: true, data: { changed: rows.length } };
+  } catch (e) {
+    return fail(e);
+  }
+}
+
 const assignClientInput = z.object({ ids, clientId: z.uuid().nullable() });
 
 export async function assignClient(input: z.input<typeof assignClientInput>): Promise<ActionResult<{ changed: number }>> {
@@ -132,7 +154,8 @@ const replacementInput = z
   .object({
     oldIds: ids,
     newIds: ids,
-    reason: z.enum(Object.keys(REPLACEMENT_REASONS) as [keyof typeof REPLACEMENT_REASONS]),
+    // One or more; the first is the main reason.
+    reasons: z.array(z.enum(Object.keys(REPLACEMENT_REASONS) as [keyof typeof REPLACEMENT_REASONS])).min(1, "Pick at least one reason").max(Object.keys(REPLACEMENT_REASONS).length),
     note: z.string().trim().max(1000).optional(),
     manualInboxes: z.boolean().optional(),
     // Hypertide's replace-domain queue instead of a new order.
@@ -152,7 +175,9 @@ export async function startReplacement(input: z.input<typeof replacementInput>):
   try {
     const actor = await requireActor();
     const v = replacementInput.parse(input);
-    const { oldIds, newIds, reason, note } = v;
+    const { oldIds, newIds, note } = v;
+    const reasons = [...new Set(v.reasons)];
+    const reason = reasons[0];
     if (v.hypertideReplace) {
       // Hypertide only replaces finished orders, and refuses names it won't host.
       const rows = await sql<{ name: string; done: boolean; isNew: boolean }[]>`
@@ -169,14 +194,16 @@ export async function startReplacement(input: z.input<typeof replacementInput>):
     const row = await sql.begin(async (tx) => {
       const [r] = await tx<{ batchId: string }[]>`
         select start_replacement(${oldIds}::uuid[], ${newIds}::uuid[], ${reason}::replacement_reason, ${note ?? null}, ${actor}) as batch_id`;
+      await tx`update replacement_batches set reasons = ${reasons}::replacement_reason[], auto_tag = true where id = ${r.batchId}`;
+      // New until it joins campaigns, whichever way it's replaced. The old domain gets
+      // "Replaced" when its grace period starts (the replacement-steps job).
+      await tx`update domains set tags = array(select distinct t from unnest(tags || array['New']) t order by 1)
+        where id = any(${newIds}::uuid[])`;
       if (v.hypertideReplace) {
         await tx`update replacement_batches set hypertide_replace = true, copy_tags_and_warmup = ${v.copyTagsAndWarmup},
             usernames = ${v.usernames ? JSON.stringify(v.usernames) : null}::text::jsonb, stop_old_sending = ${v.stopOldSending},
             add_to_campaigns = ${v.addToCampaigns}, auto_warmup = ${v.autoWarmup}
           where id = ${r.batchId}`;
-        // New until it joins campaigns.
-        await tx`update domains set tags = array(select distinct t from unnest(tags || array['New']) t order by 1)
-          where id = any(${newIds}::uuid[])`;
       } else {
         await tx`update replacement_batches set manual_inboxes = ${Boolean(v.manualInboxes)}, stop_old_sending = ${v.stopOldSending},
             add_to_campaigns = ${v.addToCampaigns}, auto_warmup = ${v.autoWarmup}

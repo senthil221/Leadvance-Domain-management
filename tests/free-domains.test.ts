@@ -72,6 +72,30 @@ describe("free domains", () => {
     await add("clean.com");
     expect(await free()).toEqual(["clean.com"]);
   });
+
+  it("leaves out a domain at Icemail by name, before the sync links it", async () => {
+    await add("aticemail.com");
+    await add("clean.com");
+    const account = (await db.query<{ id: string }>(
+      "insert into icemail_accounts (label, credentials, webhook_token, created_by) values ('w', 'x', $1, 'test') returning id", ["t".padEnd(40, "0")])).rows[0].id;
+    await db.query("insert into icemail_domains (id, account_id, domain_name) values ('d1', $1, 'AtIcemail.com')", [account]);
+    expect(await free()).toEqual(["clean.com"]);
+  });
+
+  it("leaves out a domain marked as used, counts the mark for the cool-down, and takes it back on undo", async () => {
+    const marked = await add("usedelsewhere.com");
+    await add("clean.com");
+    await db.query("update domains set marked_used_on = current_date - 3 where id = $1", [marked]);
+    await db.query("select refresh_last_used()");
+    expect(await free()).toEqual(["clean.com"]);
+    const lastUsed = async () => (await db.query<{ ok: boolean }>("select last_used_on = current_date - 3 as ok from domains where id = $1", [marked])).rows[0].ok;
+    // refresh_last_used rebuilds last_used_on from every source: the mark has to survive it.
+    expect(await lastUsed()).toBe(true);
+
+    await db.query("update domains set marked_used_on = null where id = $1", [marked]);
+    await db.query("select refresh_last_used()");
+    expect(await free()).toEqual(["clean.com", "usedelsewhere.com"]);
+  });
 });
 
 describe("the nameserver cell", () => {

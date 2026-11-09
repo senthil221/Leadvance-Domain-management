@@ -3,26 +3,32 @@ import { Suspense } from "react";
 import { StatsView } from "@/components/stats/StatsView";
 import { PageHead, TableSkeleton } from "@/components/ui";
 import { getCurrentUser } from "@/lib/auth";
-import { getReview, getStats, listClients, thisWeek } from "@/lib/queries";
+import { getReview, getStats, lastDays, listClients } from "@/lib/queries";
+import { PRESETS, presetRange, type PresetKey } from "@/lib/range";
 
 export const metadata: Metadata = { title: "Stats" };
 
-export default function StatsPage() {
+export default function StatsPage({ searchParams }: PageProps<"/stats">) {
   return (
     <>
       <PageHead title="Performance" sub="Sent, replies and bounces per domain or per day, for any date range" />
       <div className="page-body">
         <Suspense fallback={<TableSkeleton rows={12} />}>
-          <StatsData />
+          <StatsData searchParams={searchParams} />
         </Suspense>
       </div>
     </>
   );
 }
 
-async function StatsData() {
+async function StatsData({ searchParams }: { searchParams: PageProps<"/stats">["searchParams"] }) {
   await getCurrentUser();
-  const { from, to } = await thisWeek(); // Monday to today; the date picker changes it
+  // This and last week unless a link asks for another range (?range=7d): this
+  // week alone is only today on a Monday, before anything has gone out.
+  const asked = (await searchParams).range;
+  const key: PresetKey = typeof asked === "string" && asked !== "custom" && PRESETS.some((p) => p.key === asked) ? (asked as PresetKey) : "2weeks";
+  const { to: today } = await lastDays(1);
+  const [from, to] = presetRange(key, today) ?? presetRange("2weeks", today)!;
   const [data, review, clients] = await Promise.all([getStats(from, to), getReview(from, to), listClients()]);
   return <StatsView initial={data} initialReview={review} clients={clients} />;
 }

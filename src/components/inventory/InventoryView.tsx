@@ -22,6 +22,7 @@ import { LIFE, LIFE_ORDER, LIFE_TABS, htOf, lifeOf, nsOf, type Life } from "@/li
 import { SlBadge } from "@/components/domains/SlStatus";
 import { SL_META, SL_ORDER, slState, slText, type SlState } from "@/lib/smartlead-state";
 import { canReplace } from "@/lib/status";
+import { Select } from "@/components/Select";
 
 // Ownership view of every domain: where it is in its life (free, setting up,
 // active, replaced, retired), where it is registered, where its nameservers
@@ -214,7 +215,7 @@ export function InventoryView({ domains, clients }: { domains: DomainRow[]; clie
   const COLS = 2 + shown.length;
 
   const registrarFilter = (
-    <select className="select rv-filter" data-on={registrar ? true : undefined} value={registrar} onChange={(e) => setRegistrar(e.target.value)} aria-label="Filter by registrar account">
+    <Select className="select rv-filter" data-on={registrar ? true : undefined} value={registrar} onChange={(e) => setRegistrar(e.target.value)} aria-label="Filter by registrar account">
       <option value="">All registrar accounts</option>
       {registrars.map((r) => r.accounts.length > 1 ? (
         <optgroup key={r.name} label={r.name}>
@@ -226,13 +227,13 @@ export function InventoryView({ domains, clients }: { domains: DomainRow[]; clie
           {r.name === "Unknown" ? "No registrar account" : r.name}{r.accounts.length === 1 ? ` · ${r.accounts[0][0]}` : ""} ({int(r.total)})
         </option>
       ))}
-    </select>
+    </Select>
   );
   const tldFilter = (
-    <select className="select rv-filter" data-on={tld ? true : undefined} value={tld} onChange={(e) => setTld(e.target.value)} aria-label="Filter by TLD">
+    <Select className="select rv-filter" data-on={tld ? true : undefined} value={tld} onChange={(e) => setTld(e.target.value)} aria-label="Filter by TLD">
       <option value="">All TLDs</option>
       {tlds.map(([t, n]) => <option key={t} value={t}>.{t} ({int(n)})</option>)}
-    </select>
+    </Select>
   );
 
   return (
@@ -258,23 +259,23 @@ export function InventoryView({ domains, clients }: { domains: DomainRow[]; clie
           <ColumnsMenu cols={cols} widths={widths} />
         </div>
         <div className="table-bar">
-          <select className="select rv-filter" data-on={clientId ? true : undefined} value={clientId} onChange={(e) => setClientId(e.target.value)} aria-label="Filter by client">
+          <Select className="select rv-filter" data-on={clientId ? true : undefined} value={clientId} onChange={(e) => setClientId(e.target.value)} aria-label="Filter by client">
             <option value="">All clients</option>
             {clients.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
-          </select>
+          </Select>
           {allTags.length ? (
-            <select className="select rv-filter" data-on={tag ? true : undefined} value={tag} onChange={(e) => setTag(e.target.value)} aria-label="Filter by tag">
+            <Select className="select rv-filter" data-on={tag ? true : undefined} value={tag} onChange={(e) => setTag(e.target.value)} aria-label="Filter by tag">
               <option value="">All tags</option>
               {allTags.map((t) => <option key={t} value={t}>{t}</option>)}
-            </select>
+            </Select>
           ) : null}
           {registrars.length > 1 || registrars.some((r) => r.accounts.length > 1) ? registrarFilter : null}
           {tlds.length > 1 ? tldFilter : null}
-          <select className="select rv-filter" data-on={sl ? true : undefined} value={sl} onChange={(e) => setSl(e.target.value as SlState | "")} aria-label="Filter by Smartlead status"
+          <Select className="select rv-filter" data-on={sl ? true : undefined} value={sl} onChange={(e) => setSl(e.target.value as SlState | "")} aria-label="Filter by Smartlead status"
             title="Connected, disconnected or deleted in Smartlead now, as of the last Smartlead sync">
             <option value="">Any Smartlead status</option>
             {SL_ORDER.map((k) => <option key={k} value={k}>{SL_META[k].label} ({int(slCounts.get(k) ?? 0)})</option>)}
-          </select>
+          </Select>
           {filtered ? <button type="button" className="btn btn-ghost btn-sm" onClick={() => { setQ(""); setClientId(""); setTag(""); setRegistrar(""); setTld(""); setSl(""); }}>Clear</button> : null}
         </div>
         </div>

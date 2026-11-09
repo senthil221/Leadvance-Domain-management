@@ -647,7 +647,7 @@ export async function syncSmartleadTags(sql: Sql, app: SmartleadApp) {
     from replacement_items ri
     join replacement_batches rb on rb.id = ri.batch_id
     join domains od on od.id = ri.old_domain_id
-    where rb.hypertide_replace and ri.created_at > now() - interval '60 days'
+    where rb.auto_tag and ri.created_at > now() - interval '60 days'
       and ((ri.sl_new_tagged_at is null and ri.step_smartlead in ('done', 'skipped'))
         or (ri.sl_old_tagged_at is null and od.status = 'draining'))`;
   if (!due.length) return { tagged: 0, errors: 0 };

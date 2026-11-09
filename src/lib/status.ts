@@ -83,6 +83,10 @@ export const REPLACEMENT_REASONS = {
 } as const;
 export type ReplacementReason = keyof typeof REPLACEMENT_REASONS;
 
+/** "High bounce rate, Low or no replies": every reason, or the one when that's all there is. */
+export const reasonsLabel = (reasons: readonly ReplacementReason[] | null | undefined, reason?: ReplacementReason) =>
+  (reasons?.length ? reasons : reason ? [reason] : []).map((r) => REPLACEMENT_REASONS[r] ?? r).join(", ");
+
 export const STEP_LABELS = {
   stepNameservers: "Nameservers",
   stepInboxes: "Inboxes",

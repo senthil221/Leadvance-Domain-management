@@ -1,4 +1,6 @@
 import type { BounceReason } from "./bounces";
+import { isSendingDay } from "./client-sending";
+import { addDays, nice } from "./range";
 import { slText } from "./smartlead-state";
 
 // The weekly review's call on each sending domain, with the numbers behind
@@ -58,19 +60,42 @@ export const RULES = {
   quietSent: 300,
   /** Sent in the range with not one reply, not even an out of office: Replace on its own. */
   silentSent: 300,
+  /** Sending days in a row with nothing sent before it counts as idle: one quiet day is normal. */
+  idleDays: 2,
 };
+
+/**
+ * Sending days in a row with nothing sent: from the day after the last send,
+ * or the day its first inbox joined Smartlead when it never sent, up to the
+ * range's end. Today doesn't count until it's over, and weekends only for
+ * clients that send on them (most send to US markets on weekdays). null when
+ * it never sent and there's no date to count from.
+ */
+export function idleDays(d: Pick<ReviewDomain, "lastSentOn" | "sendWeekends" | "connectedDays">, to: string, today: string): number | null {
+  const start = d.lastSentOn ? addDays(d.lastSentOn, 1) : d.connectedDays != null ? addDays(today, -d.connectedDays) : null;
+  if (!start) return null;
+  const end = to < today ? to : addDays(today, -1);
+  let n = 0;
+  for (let day = start; day <= end; day = addDays(day, 1)) if (isSendingDay(day, d.sendWeekends)) n++;
+  return n;
+}
+
+/** "4 sending days" for weekday senders, "4 days" for clients that send every day. */
+const idleText = (d: ReviewDomain) => `${n(d.idleDays ?? 0)} ${d.sendWeekends ? "" : "sending "}day${d.idleDays === 1 ? "" : "s"}`;
+const lastSentText = (d: ReviewDomain) => (d.lastSentOn ? `last sent ${nice(d.lastSentOn)}` : "never sent");
 
 /**
  * The short tags beside each domain. Strikes count against the domain; the
  * rest explain the call. Ordered as they're shown.
  */
-export type Signal = "ended" | "unlisted" | "tenant" | "dns" | "disconnected" | "spam" | "rising" | "blocklist" | "lowrep" | "quiet" | "silent" | "badlist";
+export type Signal = "ended" | "unlisted" | "tenant" | "dns" | "disconnected" | "nosend" | "spam" | "rising" | "blocklist" | "lowrep" | "quiet" | "silent" | "badlist";
 export const SIGNAL_META: Record<Signal, { label: string; hint: string; strike?: true }> = {
   ended: { label: "Cancelled / replaced", hint: "The provider shows the order cancelled, or the domain was replaced" },
   unlisted: { label: "No order", hint: "Fully disconnected, and the provider's order list doesn't have the domain (or no longer does). The list can miss a live domain, so this alone doesn't prove it's cancelled" },
   tenant: { label: "Tenant", hint: "Bounces saying our Microsoft tenant or mailbox is blocked, over its limit, or can't sign in" },
   dns: { label: "DNS", hint: "Bounces saying the sending domain has no MX/A records, or SPF, DKIM or DMARC failed" },
   disconnected: { label: "Disconnected", hint: "Inboxes disconnected in Smartlead" },
+  nosend: { label: "Not sending", hint: `Nothing sent for ${RULES.idleDays}+ sending days in a row. Weekends count only for clients that send on them, and today only once it's over` },
   spam: { label: "Spam", hint: `Spam rejections: at least ${RULES.watchSpam} and ${RULES.watchSpamRate}% of sent`, strike: true },
   rising: { label: "Spam rising", hint: "Spam share at least doubled since the same days before" },
   blocklist: { label: "Blocklisted", hint: `On a blocklist in Smartlead's scan, or ${RULES.restBlocklist}+ blocklist bounces`, strike: true },
@@ -79,7 +104,7 @@ export const SIGNAL_META: Record<Signal, { label: string; hint: string; strike?:
   silent: { label: "No response", hint: `${RULES.silentSent}+ sent in the range and not one reply, not even an out of office: the mail is likely landing in spam`, strike: true },
   badlist: { label: "Bad list", hint: "Most bounces are addresses that don't exist: the list's fault, not the domain's" },
 };
-export const SIGNAL_ORDER: Signal[] = ["ended", "unlisted", "tenant", "dns", "disconnected", "spam", "rising", "blocklist", "lowrep", "quiet", "silent", "badlist"];
+export const SIGNAL_ORDER: Signal[] = ["ended", "unlisted", "tenant", "dns", "disconnected", "nosend", "spam", "rising", "blocklist", "lowrep", "quiet", "silent", "badlist"];
 export type Tone = "danger" | "warning" | "info" | "faint";
 export type Chip = { key: Signal; text: string; tone: Tone; why: string };
 
@@ -100,6 +125,10 @@ export type ReviewDomain = {
   rep: number | null; lowRepInboxes: number;
   /** Days from the last reply of any kind (or, with none on record, the first send) to the end of the range. */
   quietDays: number | null; neverReplied: boolean; sentSinceReply: number;
+  /** The last day anything went out (up to the range's end), and whether the client sends on weekends. */
+  lastSentOn: string | null; sendWeekends: boolean;
+  /** Sending days in a row with nothing sent, up to the range's end (see idleDays); null when it never sent. */
+  idleDays: number | null;
   /** The Smartlead tags on the domain's inboxes, most used first. */
   slTags: string[];
   /** Smartlead's provider type of the domain's inboxes (OUTLOOK, GMAIL, SMTP), MIXED when they differ. */
@@ -165,6 +194,9 @@ export function judge(d: ReviewDomain): Judged {
   if (ownSetup && tenant) add("tenant", `Tenant ${n(tenant)}`, "danger", `${s(tenant, "bounce")} from the tenant or mailbox`);
   if (ownSetup && dns) add("dns", `DNS ${n(dns)}`, "danger", `${s(dns, "bounce")} from missing or failing DNS`);
   if (d.disconnected) add("disconnected", `Disconnected ${n(d.disconnected)}/${n(d.inboxes + d.disconnected)}`, "danger", `${n(d.disconnected)} of ${n(d.inboxes + d.disconnected)} inboxes disconnected`);
+  // Stopped sending: how many of the client's sending days have gone by with nothing out.
+  const notSending = d.status === "active" && d.idleDays != null && d.idleDays >= RULES.idleDays;
+  if (notSending) add("nosend", `No sends ${n(d.idleDays!)}d`, d.idleDays! >= 5 ? "danger" : "warning", `nothing sent for ${idleText(d)}, ${lastSentText(d)}`);
   if (judged && spam >= RULES.watchSpam && rate >= RULES.watchSpamRate) {
     add("spam", `Spam ${p(rate)}`, heavySpam ? "danger" : "warning", `${n(spam)} spam/blocklist rejections, ${p(rate)} of ${n(d.sent)} sent`);
   }
@@ -210,7 +242,11 @@ export function judge(d: ReviewDomain): Judged {
   // from Hypertide, it can go; otherwise it may only need reconnecting.
   if (allGone) return ended ? out("drop", said(["ended", "disconnected"])) : out("dead", said(["unlisted", "disconnected"]));
   if (ownSetup) return out("fix", `${said(["tenant", "dns", "disconnected"])}${against ? `; ${against}` : ""}`);
-  if (d.status === "active" && d.sent === 0) return out("idle", ["Nothing sent", said(["disconnected", "lowrep"])].filter(Boolean).join("; "));
+  if (d.status === "active" && d.sent === 0) {
+    // A day or two without sends (a weekend for a weekday client, or today not over yet) is normal.
+    if (d.idleDays != null && !notSending) return out("low", d.idleDays === 0 ? `Nothing sent yet in this range; ${lastSentText(d)}` : `Nothing sent for 1 ${d.sendWeekends ? "" : "sending "}day, ${lastSentText(d)}`);
+    return out("idle", [d.idleDays == null ? "Nothing sent yet" : `Nothing sent for ${idleText(d)}, ${lastSentText(d)}`, said(["disconnected", "lowrep"])].filter(Boolean).join("; "));
+  }
   if (d.status === "warming" && d.sent === 0) return out("warming", ["Warming up, not sending yet", said(["disconnected", "lowrep"])].filter(Boolean).join("; "));
   if (silent) return out("rest", against);
   if (judged && d.human === 0 && (heavySpam || (c.blocklist ?? 0) >= RULES.restBlocklist)) return out("rest", chips.some((x) => x.key === "quiet") ? against : `${against}, no human replies`);
@@ -328,7 +364,7 @@ export function advise(d: Judged): Advice[] {
   if (d.chips.some((x) => x.key === "silent")) add("danger", `${n(d.sent)} sent and not one reply: it's likely landing in spam; rest or replace it`);
   else if (d.chips.some((x) => x.key === "quiet")) add("warning", `No reply for ${n(d.quietDays ?? 0)} days: check inbox placement and lower the volume`);
   if (d.verdict === "warming") add("info", "Warming up: mark it active once it joins a campaign");
-  if (d.verdict === "idle") add("info", "Connected but sent nothing: add it to a campaign or check its Smartlead tag");
+  if (d.verdict === "idle") add("info", `${d.idleDays != null ? `Nothing sent for ${idleText(d)} (${lastSentText(d)})` : "Connected but never sent"}: add it to a campaign or check its Smartlead tag`);
   if (d.verdict === "low" && !out.length) add("faint", `Only ${n(d.sent)} sent: too little to judge yet`);
   if (!out.length && d.sent) add("success", "Healthy: nothing to change");
   return out;

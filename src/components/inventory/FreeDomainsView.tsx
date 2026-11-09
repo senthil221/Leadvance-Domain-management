@@ -1,21 +1,22 @@
 "use client";
 
-import { ArrowDown, ArrowUp, Copy, Download, Globe, RefreshCw, Search, Tag, X } from "lucide-react";
+import { ArrowDown, ArrowUp, Ban, Copy, Download, Globe, RefreshCw, Search, Tag, X } from "lucide-react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
-import { useEffect, useMemo, useState, useTransition } from "react";
+import { Fragment, useEffect, useMemo, useState, useTransition } from "react";
 import { toast } from "sonner";
-import { recheckNameservers } from "@/app/actions";
+import { markDomainsUsed, recheckNameservers } from "@/app/actions";
 import { DomainLink } from "@/components/domains/DomainLink";
 import { PasteSelect } from "@/components/domains/DomainBulk";
 import { SetupDialog } from "@/components/domains/SetupDialog";
 import { ColResizer, copyDomains, keepTextUnselected, useColumnWidths, useRangeSelect } from "@/components/table-tools";
 import { Empty } from "@/components/ui";
-import { ago, daysSince, fixedDate, int } from "@/lib/format";
+import { ageLabel, ago, daysSince, fixedDate, int } from "@/lib/format";
 import { nsOf } from "@/lib/lifecycle";
 import { useSticky } from "@/lib/sticky";
 import { isReplacementTld, REPLACEMENT_TLDS } from "@/lib/tlds";
 import type { ClientRow, DomainRow } from "@/lib/queries";
+import { Select } from "@/components/Select";
 
 // Domains bought and never touched, laid out for picking which to use next:
 // narrow them by TLD, see where each one's nameservers stand and when it renews.
@@ -27,6 +28,9 @@ const nsState = (d: DomainRow): NsState => (d.nameservers.length ? "default" : d
 const RENEW_SOON_DAYS = 60;
 const renewsIn = (d: DomainRow) => (d.expiresAt ? Math.ceil((new Date(d.expiresAt).getTime() - Date.now()) / 86_400_000) : null);
 const money = (cents: number) => `$${(cents / 100).toLocaleString("en-US", { maximumFractionDigits: 2 })}`;
+
+// "Over 3 months" and so on: the minimum age in days.
+const AGE_FILTERS: [string, string][] = [["", "Any age"], ["30", "Over 1 month"], ["90", "Over 3 months"], ["180", "Over 6 months"], ["365", "Over 1 year"], ["730", "Over 2 years"]];
 
 type SortKey = "name" | "tld" | "registrar" | "account" | "ns" | "checked" | "age" | "bought" | "renews" | "cost";
 const sortValue = (d: DomainRow, k: SortKey): string | number | null => {
@@ -45,14 +49,15 @@ const sortValue = (d: DomainRow, k: SortKey): string | number | null => {
   }
 };
 
+// What decides a pick sits next to the name: its age, where it's registered and its nameservers.
 const COLUMNS: { key: SortKey; label: string; width?: number; num?: boolean; title?: string }[] = [
   { key: "name", label: "Domain" },
-  { key: "tld", label: "TLD", width: 72 },
+  { key: "age", label: "Age", width: 72, num: true, title: "How long ago the domain was bought: older domains usually send with a better reputation" },
   { key: "registrar", label: "Registrar", width: 112 },
-  { key: "account", label: "Account", width: 132 },
   { key: "ns", label: "Nameservers", width: 168 },
+  { key: "tld", label: "TLD", width: 64 },
+  { key: "account", label: "Account", width: 132 },
   { key: "checked", label: "Checked", width: 92, title: "When the nameservers were last looked up" },
-  { key: "age", label: "Age", width: 64, num: true, title: "Days since the domain was bought" },
   { key: "bought", label: "Bought", width: 104, num: true },
   { key: "renews", label: "Renews", width: 104, num: true },
   { key: "cost", label: "A year", width: 72, num: true },
@@ -80,6 +85,7 @@ export function FreeDomainsView({ domains: all, clients, used, pointed }: { doma
   const [q, setQ] = useSticky("free:q", "");
   const [registrar, setRegistrar] = useSticky("free:registrar", "");
   const [ns, setNs] = useSticky<NsState | "">("free:ns", "");
+  const [minAge, setMinAge] = useSticky("free:min-age", "");
   const [sort, setSort] = useSticky<{ key: SortKey; dir: 1 | -1 }>("free:sort", { key: "age", dir: -1 });
   const widths = useColumnWidths("free-domains", DEFAULT_WIDTHS);
   const [selected, setSelected] = useState<Set<string>>(new Set());
@@ -115,8 +121,10 @@ export function FreeDomainsView({ domains: all, clients, used, pointed }: { doma
   // Every filter but the TLDs, so each chip says what picking it would add.
   const beforeTld = useMemo(() => {
     const needle = q.trim().toLowerCase();
-    return domains.filter((d) => (!registrar || accountKey(d) === registrar) && (!ns || nsState(d) === ns) && (!needle || d.name.includes(needle)));
-  }, [domains, registrar, ns, q]);
+    const min = Number(minAge) || 0;
+    return domains.filter((d) => (!registrar || accountKey(d) === registrar) && (!ns || nsState(d) === ns) && (!needle || d.name.includes(needle))
+      && (!min || (d.bornAt !== null && (daysSince(d.bornAt) ?? 0) >= min)));
+  }, [domains, registrar, ns, q, minAge]);
   const tldCounts = useMemo(() => {
     const c = new Map<string, number>(domains.map((d) => [d.tld ?? "?", 0]));
     for (const d of beforeTld) c.set(d.tld ?? "?", (c.get(d.tld ?? "?") ?? 0) + 1);
@@ -150,7 +158,7 @@ export function FreeDomainsView({ domains: all, clients, used, pointed }: { doma
   const pick = useRangeSelect(rowIds, setSelected);
   const toggleTld = (t: string) => { const n = new Set(tlds); if (n.has(t)) n.delete(t); else n.add(t); setTlds(n); };
   const sortBy = (key: SortKey) => setSort((s) => (s.key === key ? { key, dir: (s.dir * -1) as 1 | -1 } : { key, dir: 1 }));
-  const filtered = q || registrar || ns || tlds.size > 0;
+  const filtered = q || registrar || ns || minAge || tlds.size > 0;
 
   const check = (list: DomainRow[]) => startCheck(async () => {
     const r = await recheckNameservers(list.map((d) => d.id));
@@ -159,6 +167,23 @@ export function FreeDomainsView({ domains: all, clients, used, pointed }: { doma
       router.refresh();
       setWatching(true);
     } else toast.error(r.error);
+  });
+
+  // Used somewhere the app can't see: out of Free domains, with an Undo.
+  const markUsed = (list: DomainRow[]) => startCheck(async () => {
+    const ids = list.map((d) => d.id);
+    const r = await markDomainsUsed({ ids });
+    if (!r.ok) { toast.error(r.error); return; }
+    setSelected(new Set());
+    router.refresh();
+    toast.success(`Marked ${int(r.data.changed)} domain${r.data.changed === 1 ? "" : "s"} as used`, {
+      description: "They're out of Free domains and won't be offered for replacements until the reuse cool-down ends.",
+      duration: 10_000,
+      action: {
+        label: "Undo",
+        onClick: () => { void markDomainsUsed({ ids, undo: true }).then((u) => { if (u.ok) router.refresh(); else toast.error(u.error); }); },
+      },
+    });
   });
 
   const exportCsv = () => {
@@ -222,16 +247,19 @@ export function FreeDomainsView({ domains: all, clients, used, pointed }: { doma
               <input className="input" value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search" aria-label="Search free domains" />
             </label>
             {accounts.length > 1 ? (
-              <select className="select rv-filter" data-on={registrar ? true : undefined} value={registrar} onChange={(e) => setRegistrar(e.target.value)} aria-label="Filter by registrar account">
+              <Select className="select rv-filter" data-on={registrar ? true : undefined} value={registrar} onChange={(e) => setRegistrar(e.target.value)} aria-label="Filter by registrar account">
                 <option value="">All registrar accounts</option>
                 {accounts.map(([a, n]) => <option key={a} value={a}>{a} ({int(n)})</option>)}
-              </select>
+              </Select>
             ) : null}
-            <select className="select rv-filter" data-on={ns ? true : undefined} value={ns} onChange={(e) => setNs(e.target.value as NsState | "")} aria-label="Filter by nameserver status">
+            <Select className="select rv-filter" data-on={ns ? true : undefined} value={ns} onChange={(e) => setNs(e.target.value as NsState | "")} aria-label="Filter by nameserver status">
               <option value="">Any nameservers</option>
               {(Object.keys(NS_LABEL) as NsState[]).map((k) => <option key={k} value={k}>{NS_LABEL[k]}</option>)}
-            </select>
-            {filtered ? <button type="button" className="btn btn-ghost btn-sm" onClick={() => { setQ(""); setRegistrar(""); setNs(""); setTlds(new Set()); }}>Clear</button> : null}
+            </Select>
+            <Select className="select rv-filter" data-on={minAge ? true : undefined} value={minAge} onChange={(e) => setMinAge(e.target.value)} aria-label="Filter by age">
+              {AGE_FILTERS.map(([v, label]) => <option key={v} value={v}>{label}</option>)}
+            </Select>
+            {filtered ? <button type="button" className="btn btn-ghost btn-sm" onClick={() => { setQ(""); setRegistrar(""); setNs(""); setMinAge(""); setTlds(new Set()); }}>Clear</button> : null}
             {widths.customized ? <button type="button" className="btn btn-ghost btn-sm" title="Put every column back to its usual width" onClick={widths.reset}>Reset widths</button> : null}
             <span className="spacer-auto" />
             <PasteSelect rows={domains} selected={selected} where="in your free domains" onSelect={setSelected} />
@@ -272,25 +300,34 @@ export function FreeDomainsView({ domains: all, clients, used, pointed }: { doma
                   const n = nsOf(d);
                   const days = renewsIn(d);
                   const isSel = selected.has(d.id);
+                  const age = d.bornAt ? daysSince(d.bornAt) : null;
+                  // One cell per column, laid out in COLUMNS order.
+                  const cell = (k: SortKey) => {
+                    switch (k) {
+                      case "name": return <td className="col-first"><span className="inv-name"><DomainLink id={d.id} className="strong hover:underline" title={d.name}>{d.name}</DomainLink></span></td>;
+                      case "age": return <td className="is-num" title={d.bornAt ? `${int(age)} days · bought ${fixedDate(d.bornAt)}` : "Purchase date not known"}>{age !== null ? ageLabel(age) : <span className="zero">—</span>}</td>;
+                      case "registrar": return <td title={d.registrar ?? undefined}>{d.registrar?.replace(/ Domains$/, "") ?? <span className="zero">—</span>}</td>;
+                      case "ns": return (
+                        <td>
+                          <span className="ns-cell" title={n.title}>
+                            <span className={`dot tone-${n.tone}`} />
+                            <span className="ns-host">{n.host ?? "—"}</span>
+                            <span className={`ns-status tone-${n.tone}`}>{n.status}</span>
+                          </span>
+                        </td>
+                      );
+                      case "tld": return <td className="text-muted">{d.tld ? `.${d.tld}` : <span className="zero">—</span>}</td>;
+                      case "account": return <td className="text-muted" title={d.registrarAccount ?? undefined}>{d.registrarAccount ?? <span className="zero">—</span>}</td>;
+                      case "checked": return <td className="text-muted" title={d.nameserversCheckedAt ? fixedDate(d.nameserversCheckedAt) : "Not looked up yet"}>{d.nameserversCheckedAt ? ago(d.nameserversCheckedAt) : <span className="zero">—</span>}</td>;
+                      case "bought": return <td className="is-num text-muted">{d.purchasedAt ? fixedDate(d.purchasedAt) : <span className="zero">—</span>}</td>;
+                      case "renews": return <td className={`is-num ${days !== null && days <= RENEW_SOON_DAYS ? "text-warning-ink" : "text-muted"}`} title={days !== null ? `In ${int(days)} days` : undefined}>{d.expiresAt ? fixedDate(d.expiresAt) : <span className="zero">—</span>}</td>;
+                      case "cost": return <td className="is-num text-muted">{d.costCents != null ? money(d.costCents) : <span className="zero">—</span>}</td>;
+                    }
+                  };
                   return (
                     <tr key={d.id} data-selected={isSel} className="is-clickable" onMouseDown={keepTextUnselected} onClick={(e) => pick(d.id, e)}>
                       <td className="col-check"><input type="checkbox" className="checkbox" checked={isSel} onChange={() => {}} aria-label={`Select ${d.name}`} tabIndex={-1} /></td>
-                      <td className="col-first"><span className="inv-name"><DomainLink id={d.id} className="strong hover:underline" title={d.name}>{d.name}</DomainLink></span></td>
-                      <td className="text-muted">{d.tld ? `.${d.tld}` : <span className="zero">—</span>}</td>
-                      <td title={d.registrar ?? undefined}>{d.registrar?.replace(/ Domains$/, "") ?? <span className="zero">—</span>}</td>
-                      <td className="text-muted" title={d.registrarAccount ?? undefined}>{d.registrarAccount ?? <span className="zero">—</span>}</td>
-                      <td>
-                        <span className="ns-cell" title={n.title}>
-                          <span className={`dot tone-${n.tone}`} />
-                          <span className="ns-host">{n.host ?? "—"}</span>
-                          <span className={`ns-status tone-${n.tone}`}>{n.status}</span>
-                        </span>
-                      </td>
-                      <td className="text-muted" title={d.nameserversCheckedAt ? fixedDate(d.nameserversCheckedAt) : "Not looked up yet"}>{d.nameserversCheckedAt ? ago(d.nameserversCheckedAt) : <span className="zero">—</span>}</td>
-                      <td className="is-num text-muted" title={d.bornAt ? `Bought ${fixedDate(d.bornAt)}` : "Purchase date not known"}>{d.bornAt ? `${int(daysSince(d.bornAt))}d` : <span className="zero">—</span>}</td>
-                      <td className="is-num text-muted">{d.purchasedAt ? fixedDate(d.purchasedAt) : <span className="zero">—</span>}</td>
-                      <td className={`is-num ${days !== null && days <= RENEW_SOON_DAYS ? "text-warning-ink" : "text-muted"}`} title={days !== null ? `In ${int(days)} days` : undefined}>{d.expiresAt ? fixedDate(d.expiresAt) : <span className="zero">—</span>}</td>
-                      <td className="is-num text-muted">{d.costCents != null ? money(d.costCents) : <span className="zero">—</span>}</td>
+                      {COLUMNS.map((c) => <Fragment key={c.key}>{cell(c.key)}</Fragment>)}
                     </tr>
                   );
                 })}
@@ -323,6 +360,8 @@ export function FreeDomainsView({ domains: all, clients, used, pointed }: { doma
           <button type="button" className="btn btn-sm" disabled={checking} onClick={() => check(selectedRows)}><RefreshCw size={14} /> Check nameservers</button>
           <button type="button" className="btn btn-sm" title="Copy the selected domains, one per line" onClick={() => copyDomains(selectedRows.map((d) => d.name))}><Copy size={14} /> Copy</button>
           <button type="button" className="btn btn-sm" onClick={exportCsv}><Download size={14} /> Export</button>
+          <button type="button" className="btn btn-sm" disabled={checking} title="Already used somewhere the app can't see, like an old Hypertide order: take them out of Free domains"
+            onClick={() => markUsed(selectedRows)}><Ban size={14} /> Mark as used</button>
           <span className="sep" />
           <button type="button" className="btn btn-sm" aria-label="Clear selection" onClick={() => setSelected(new Set())}><X size={14} /></button>
         </div>

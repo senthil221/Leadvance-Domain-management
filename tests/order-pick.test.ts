@@ -168,3 +168,20 @@ describe("whether Replace is offered", () => {
     expect(await flags()).toEqual({ domains: false, sheet: false, inboxes: false, performance: false });
   });
 });
+
+describe("how long a domain has been in its status, on Performance", () => {
+  it("dates Draining from when it started draining, and other statuses from their last move", async () => {
+    const since = async (id: string) => (await getStats("2026-11-02", "2026-11-08")).domains.find((d) => d.id === id)?.statusSince ?? null;
+    const id = await domain("drainer.com");
+    await sql`select transition_domain(${id}, 'draining', 'test', 'test')`;
+    await sql`update domains set draining_since = now() - interval '6 days' where id = ${id}`;
+    const d = await since(id);
+    expect(Math.round((Date.now() - new Date(d!).getTime()) / 86_400_000)).toBe(6);
+
+    // Warming has no date of its own: the history row of the move into it counts.
+    const w = await domain("warmer.com");
+    await sql`select transition_domain(${w}, 'warming', 'test', 'test', null, true)`;
+    await sql`update domain_status_history set at = now() - interval '3 days' where domain_id = ${w} and to_status = 'warming'`;
+    expect(Math.round((Date.now() - new Date((await since(w))!).getTime()) / 86_400_000)).toBe(3);
+  });
+});

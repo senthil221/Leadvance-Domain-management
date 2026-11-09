@@ -357,8 +357,8 @@ export type DomainDetail = {
   daily: { day: string; sent: number; humanReplies: number; ooo: number; bounces: number; warmupReputation: number | null }[];
   history: { id: number; fromStatus: DomainStatus | null; toStatus: DomainStatus; reason: string | null; actor: string; forced: boolean; at: Date }[];
   lineage: {
-    replaced: { domainId: string; name: string; at: Date; reason: ReplacementReason; note: string | null } | null;
-    replacedBy: { domainId: string; name: string; at: Date; reason: ReplacementReason; note: string | null } | null;
+    replaced: { domainId: string; name: string; at: Date; reason: ReplacementReason; reasons: ReplacementReason[]; note: string | null } | null;
+    replacedBy: { domainId: string; name: string; at: Date; reason: ReplacementReason; reasons: ReplacementReason[]; note: string | null } | null;
   };
   alerts: { id: string; ruleName: string; metric: string; value: number | null; severity: string; openedAt: Date }[];
   diagnosis: StoredDiagnosis | null;
@@ -469,12 +469,12 @@ export async function getDomainDetail(id: string): Promise<DomainDetail | null> 
     sql<DomainDetail["history"]>`
       select id, from_status, to_status, reason, actor, forced, at
       from domain_status_history where domain_id = ${id} order by at desc, id desc`,
-    sql<{ side: "replaced" | "replacedBy"; domainId: string; name: string; at: Date; reason: ReplacementReason; note: string | null }[]>`
-      select 'replaced' as side, ri.old_domain_id as domain_id, od.name, ri.created_at as at, rb.reason, rb.note
+    sql<{ side: "replaced" | "replacedBy"; domainId: string; name: string; at: Date; reason: ReplacementReason; reasons: ReplacementReason[]; note: string | null }[]>`
+      select 'replaced' as side, ri.old_domain_id as domain_id, od.name, ri.created_at as at, rb.reason, rb.reasons::text[] as reasons, rb.note
       from replacement_items ri join replacement_batches rb on rb.id = ri.batch_id join domains od on od.id = ri.old_domain_id
       where ri.new_domain_id = ${id}
       union all
-      select 'replacedBy', ri.new_domain_id, nd.name, ri.created_at, rb.reason, rb.note
+      select 'replacedBy', ri.new_domain_id, nd.name, ri.created_at, rb.reason, rb.reasons::text[], rb.note
       from replacement_items ri join replacement_batches rb on rb.id = ri.batch_id join domains nd on nd.id = ri.new_domain_id
       where ri.old_domain_id = ${id} and rb.status <> 'cancelled'`,
     sql<DomainDetail["alerts"]>`
@@ -488,7 +488,7 @@ export async function getDomainDetail(id: string): Promise<DomainDetail | null> 
 
   const pick = (side: "replaced" | "replacedBy") => {
     const r = lineageRows.find((l) => l.side === side);
-    return r ? { domainId: r.domainId, name: r.name, at: r.at, reason: r.reason, note: r.note } : null;
+    return r ? { domainId: r.domainId, name: r.name, at: r.at, reason: r.reason, reasons: r.reasons, note: r.note } : null;
   };
 
   return { domain, inboxes, daily, history, lineage: { replaced: pick("replaced"), replacedBy: pick("replacedBy") }, alerts, diagnosis: diagnosis ?? null };
@@ -606,6 +606,8 @@ export async function getHypertideSummary(): Promise<HypertideSummary> {
 export type ReplacementRow = {
   id: string;
   reason: ReplacementReason;
+  /** Every reason picked; reason is the first. */
+  reasons: ReplacementReason[];
   batchNote: string | null;
   actor: string;
   createdAt: Date;
@@ -652,7 +654,7 @@ export async function listReplacements(limit = 200): Promise<{ rows: Replacement
   const [[{ now, graceDays }], rows] = await Promise.all([sql<{ now: Date; graceDays: number }[]>`
     select now(), coalesce((select (value #>> '{}')::int from settings where key = 'drain_days'), 18) as grace_days`, sql<ReplacementRow[]>`
     with drain as (select coalesce((select (value #>> '{}')::int from settings where key = 'drain_days'), 18) as days)
-    select ri.id, rb.reason, rb.note as batch_note, rb.actor, ri.created_at, ri.completed_at,
+    select ri.id, rb.reason, rb.reasons::text[] as reasons, rb.note as batch_note, rb.actor, ri.created_at, ri.completed_at,
       rb.hypertide_replace, rb.add_to_campaigns, rb.stop_old_sending, rb.copy_tags_and_warmup,
       od.id as old_domain_id, od.name as old_domain, od.status as old_status,
       (select count(*)::int from inboxes i where i.domain_id = od.id and i.status <> 'removed') as old_inboxes,
@@ -844,6 +846,8 @@ export type StatDomain = {
   tld: string | null;
   /** The old domain of a replacement still running (domain_being_replaced): Replace isn't offered. */
   beingReplaced: boolean;
+  /** When the domain moved into its current status (Draining keeps its own date), null when no record says. */
+  statusSince: Date | null;
 } & import("./smartlead-state").SlCounts;
 /**
  * One domain on one day; only days with any activity. `replies` counts every
@@ -867,6 +871,8 @@ export async function getStats(from: string, to: string): Promise<StatsData> {
       with r as (select ${from}::date as f, ${to}::date as t, ${pf}::date as pf, ${pt}::date as pt)
       select d.id, d.name, d.tld, d.status, d.client_id, c.name as client_name, c.hue as client_hue, d.tags,
         domain_being_replaced(d.id) as being_replaced,
+        coalesce(case when d.status = 'draining' then d.draining_since end,
+          (select max(h.at) from domain_status_history h where h.domain_id = d.id and h.to_status = d.status)) as status_since,
         (select count(*)::int from inboxes i where i.domain_id = d.id and i.status = 'connected') as inboxes,
         (select coalesce(sum(i.daily_limit), 0)::int from inboxes i where i.domain_id = d.id and i.status = 'connected') as capacity,
         (select coalesce(array_agg(distinct trim(i.sender_name) order by trim(i.sender_name)), '{}') from inboxes i
@@ -1049,7 +1055,8 @@ export async function getReview(from: string, to: string): Promise<import("./rev
       -- inbox. Replies are on record from the first day one came in.
       since as (select min(day) as day from domain_daily_stats where replies > 0),
       hr as (
-        select domain_id, max(day) filter (where replies > 0) as last_reply, min(day) filter (where sent > 0) as first_sent
+        select domain_id, max(day) filter (where replies > 0) as last_reply, min(day) filter (where sent > 0) as first_sent,
+          max(day) filter (where sent > 0) as last_sent
         from domain_daily_stats where day <= ${to}::date group by 1),
       quiet as (
         select hr.domain_id, hr.last_reply is null as never,
@@ -1071,6 +1078,7 @@ export async function getReview(from: string, to: string): Promise<import("./rev
         st.provider, st.standing, st.grace_left,
         rep.rep, coalesce(rep.low, 0) as low_rep_inboxes,
         quiet.days as quiet_days, coalesce(quiet.never, false) as never_replied, coalesce(quiet.sent_since, 0) as sent_since_reply,
+        to_char(hr.last_sent, 'YYYY-MM-DD') as last_sent_on, coalesce(c.send_weekends, false) as send_weekends,
         (select coalesce(array_agg(x.t order by x.n desc, x.t), '{}') from (
           select trim(t) as t, count(*) as n from inboxes i cross join unnest(i.smartlead_tags) t
           where i.domain_id = d.id and i.status <> 'removed' and trim(t) <> '' group by 1) x) as sl_tags,
@@ -1105,6 +1113,7 @@ export async function getReview(from: string, to: string): Promise<import("./rev
       left join ev on ev.domain_id = d.id
       left join rep on rep.domain_id = d.id
       left join quiet on quiet.domain_id = d.id
+      left join hr on hr.domain_id = d.id
       -- Live today, or anything that has numbers in this range: the page splits them.
       where st.current or cur.sent > 0 or cur.replies > 0 or cur.bounces > 0
       order by d.name`,
@@ -1118,6 +1127,8 @@ export async function getReview(from: string, to: string): Promise<import("./rev
         and (e.occurred_at at time zone tz.z)::date between ${from}::date and ${to}::date
       group by e.campaign_id`,
   ]);
+  const { idleDays } = await import("./review");
+  for (const d of domains) d.idleDays = idleDays(d, to, t.today);
   return { from, to, today: t.today, slSyncedAt: t.slSyncedAt, domains, campaigns };
 }
 
