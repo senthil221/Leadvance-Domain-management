@@ -228,8 +228,11 @@ export function resolveFacts(paths: string[], facts: DiagnosisFacts): CitedFact[
 }
 
 /** A claim with nothing real behind it is dropped. If nothing is left, it can't be trusted, so it says so. */
+/** The card stays readable: the model is asked for the most important few, and any extra are dropped. */
+export const MAX_REASONS = 5;
+
 export function checkDiagnosis(raw: DiagnosisRaw, facts: DiagnosisFacts): Diagnosis {
-  const reasons = raw.reasons.map((r) => ({ claim: r.claim, facts: resolveFacts(r.facts, facts) })).filter((r) => r.facts.length);
+  const reasons = raw.reasons.map((r) => ({ claim: r.claim, facts: resolveFacts(r.facts, facts) })).filter((r) => r.facts.length).slice(0, MAX_REASONS);
   const unbacked = raw.reasons.length > 0 && reasons.length === 0;
   return {
     ...raw,
@@ -240,7 +243,7 @@ export function checkDiagnosis(raw: DiagnosisRaw, facts: DiagnosisFacts): Diagno
 }
 
 /** Cheap, and good enough to read numbers. Set OPENROUTER_MODEL to use another one. */
-export const DEFAULT_DIAGNOSIS_MODEL = "deepseek/deepseek-v4.1-flash";
+export const DEFAULT_DIAGNOSIS_MODEL = "deepseek/deepseek-v4.1-flash-1017";
 
 /** What a run cost, as OpenRouter reported it. */
 export function diagnosisCost(costUsd: number | null | undefined) {
@@ -268,6 +271,8 @@ How to read the facts:
 What makes this useful is telling apart a problem with this domain from a problem with the client, its lists or its copy. If the client's other domains or the same tag fell in the same way, it is probably not this domain, so say so and prefer check_lists over rest or replace.
 
 Rules for your answer:
+- Give at most ${MAX_REASONS} reasons, most important first, and only ones that bear on the verdict. Put related facts in one reason: comparing this domain with the client's other domains and with all domains is one reason, not two.
+- The statistics are already done. Decide from the gaps rather than recalculating them, and keep your thinking short.
 - Every reason must cite in "facts" the exact paths it relies on, such as "week1.bounceRate" or "gaps.humanRepliesVsClient". Only cite paths that exist and hold a single value. Paths inside lists use the index, such as "rules.problems.0".
 - Only use numbers that appear in the facts. Don't bring in industry benchmarks from memory.
 - A number can show that something happened, not why. Word causes as "probably" or "likely", and set confidence to match. Use high only when several independent facts agree.
@@ -275,4 +280,4 @@ Rules for your answer:
 - healthy is a fine verdict when nothing is wrong. Don't look for problems that aren't there.
 - headline: one sentence with the conclusion. Each claim: one short sentence. next: the concrete next step. wouldChange: what result would prove this wrong.
 - cannotSee: what you would need but don't have and that matters for this domain, such as inbox placement, list quality or the copy. Leave it empty if nothing would change the call.
-- Write in plain English for someone running campaigns. Refer to facts in words, not by their path names.`;
+- Write in plain English for someone running campaigns. Refer to facts in words, never by their path or field names: write "the last 7 days", not "week1", and "the client's other domains", not "peers.client". Path names belong only in "facts".`;

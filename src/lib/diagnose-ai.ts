@@ -38,11 +38,13 @@ export async function askAi(facts: DiagnosisFacts, setup: AiSetup): Promise<AiAn
     res = await fetch(`${setup.baseUrl}/chat/completions`, {
       method: "POST",
       headers: { "content-type": "application/json", authorization: `Bearer ${setup.apiKey}` },
-      signal: AbortSignal.timeout(120_000),
+      signal: AbortSignal.timeout(180_000),
       body: JSON.stringify({
         model: setup.model,
-        max_tokens: 8000,
-        reasoning: { effort: "medium", exclude: true },
+        // Room for the thinking as well as the answer, which is about a thousand tokens.
+        max_tokens: 16000,
+        // The statistics arrive already done, so a little thinking is enough, and it's quicker and cheaper.
+        reasoning: { effort: "low", exclude: true },
         messages: [{ role: "system", content: DIAGNOSIS_SYSTEM }, { role: "user", content: JSON.stringify(facts) }],
         response_format: { type: "json_schema", json_schema: { name: "diagnosis", strict: true, schema: ANSWER_SHAPE } },
         // Hosts that don't keep or train on the data, cheapest first, and only ones that can return this shape.

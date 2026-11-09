@@ -1,7 +1,7 @@
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
-import { answerWithoutAi, buildFacts, checkDiagnosis, DEFAULT_DIAGNOSIS_MODEL, diagnosisCost, factLabel, modelName, gapBetween, resolveFacts, sent28, type DiagnosisInput, type DiagnosisRaw } from "../src/lib/diagnose";
+import { answerWithoutAi, buildFacts, checkDiagnosis, DEFAULT_DIAGNOSIS_MODEL, DIAGNOSIS_SYSTEM, diagnosisCost, factLabel, modelName, gapBetween, resolveFacts, sent28, type DiagnosisInput, type DiagnosisRaw } from "../src/lib/diagnose";
 import type { FixFact } from "../src/lib/fix-queue";
 
 vi.mock("../src/lib/db", () => ({ sql: Object.assign(() => ({}), { json: (v: unknown) => v }) }));
@@ -117,6 +117,13 @@ describe("checking the answer", () => {
     expect(d.headline).toContain("treat this with care");
   });
 
+  it("keeps only the first few reasons that hold up", () => {
+    const many = Array.from({ length: 8 }, (_, i) => ({ claim: `Reason ${i}.`, facts: i === 0 ? ["week9.sent"] : ["week1.sent"] }));
+    const d = checkDiagnosis(raw({ reasons: many }), facts);
+    expect(d.reasons.map((r) => r.claim)).toEqual(["Reason 1.", "Reason 2.", "Reason 3.", "Reason 4.", "Reason 5."]);
+    expect(DIAGNOSIS_SYSTEM).toContain("at most 5 reasons");
+  });
+
   it("leaves an answer with no reasons alone", () => {
     expect(checkDiagnosis(raw({ reasons: [], verdict: "healthy" }), facts).confidence).toBe("high");
   });
@@ -135,7 +142,7 @@ describe("cost", () => {
     expect(diagnosisCost(0.0027)).toBe("$0.003");
     expect(diagnosisCost(0.042)).toBe("$0.04");
     expect(diagnosisCost(null)).toBeNull();
-    expect(modelName(DEFAULT_DIAGNOSIS_MODEL)).toBe("deepseek-v4.1-flash");
+    expect(modelName(DEFAULT_DIAGNOSIS_MODEL)).toBe("deepseek-v4.1-flash-1017");
   });
 });
 
