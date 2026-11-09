@@ -51,7 +51,7 @@ const sortValue = (d: DomainRow, k: SortKey): string | number | null => {
 
 // What decides a pick sits next to the name: its age, where it's registered and its nameservers.
 const COLUMNS: { key: SortKey; label: string; width?: number; num?: boolean; title?: string }[] = [
-  { key: "name", label: "Domain" },
+  { key: "name", label: "Domain", width: 250 },
   { key: "age", label: "Age", width: 72, num: true, title: "How long ago the domain was bought: older domains usually send with a better reputation" },
   { key: "registrar", label: "Registrar", width: 112 },
   { key: "ns", label: "Nameservers", width: 168 },
@@ -63,11 +63,12 @@ const COLUMNS: { key: SortKey; label: string; width?: number; num?: boolean; tit
   { key: "cost", label: "A year", width: 72, num: true },
 ];
 
-// Each column's usual width; Domain takes what's left until you size it.
+// Each column's usual width. An empty last column takes the spare room, so Age
+// and the rest sit right next to the name on a wide screen.
 const DEFAULT_WIDTHS: Record<string, number> = Object.fromEntries(COLUMNS.filter((c) => c.width).map((c) => [c.key, c.width as number]));
-const tableStyle = (custom: Record<string, number>, nameMin: number) => {
-  const total = 40 + (custom.name ?? nameMin) + COLUMNS.reduce((a, c) => a + (c.key === "name" ? 0 : custom[c.key] ?? c.width ?? 0), 0);
-  return custom.name ? { width: total, minWidth: total } : { minWidth: total };
+const tableStyle = (custom: Record<string, number>) => {
+  const total = 40 + COLUMNS.reduce((a, c) => a + (custom[c.key] ?? c.width ?? 0), 0);
+  return { minWidth: total };
 };
 
 export function FreeDomainsView({ domains: all, clients, used, pointed }: { domains: DomainRow[]; clients: ClientRow[]; used: number; pointed: number }) {
@@ -272,10 +273,11 @@ export function FreeDomainsView({ domains: all, clients, used, pointed }: { doma
 
         <div className="table-wrap">
           <div className="table-scroll" style={{ maxHeight: "calc(100dvh - 300px)", minHeight: 280 }}>
-            <table className="data-table is-main is-fixed" aria-rowcount={rows.length} style={tableStyle(widths.custom, 200)}>
+            <table className="data-table is-main is-fixed" aria-rowcount={rows.length} style={tableStyle(widths.custom)}>
               <colgroup>
                 <col style={{ width: 40 }} />
                 {COLUMNS.map((c) => { const w = widths.custom[c.key] ?? c.width; return <col key={c.key} style={w ? { width: w } : undefined} />; })}
+                <col />
               </colgroup>
               <thead>
                 <tr>
@@ -293,6 +295,7 @@ export function FreeDomainsView({ domains: all, clients, used, pointed }: { doma
                       <ColResizer col={c.key} label={c.label} onResize={widths.setWidth} />
                     </th>
                   ))}
+                  <th aria-hidden="true" />
                 </tr>
               </thead>
               <tbody>
@@ -328,6 +331,7 @@ export function FreeDomainsView({ domains: all, clients, used, pointed }: { doma
                     <tr key={d.id} data-selected={isSel} className="is-clickable" onMouseDown={keepTextUnselected} onClick={(e) => pick(d.id, e)}>
                       <td className="col-check"><input type="checkbox" className="checkbox" checked={isSel} onChange={() => {}} aria-label={`Select ${d.name}`} tabIndex={-1} /></td>
                       {COLUMNS.map((c) => <Fragment key={c.key}>{cell(c.key)}</Fragment>)}
+                      <td aria-hidden="true" />
                     </tr>
                   );
                 })}

@@ -71,6 +71,11 @@ export function Select({ value, onChange, children, className = "select", style,
     return out;
   }, [options]);
 
+  // A width given for the old <select> is a floor: the button grows to show its
+  // whole label ("This and last week") instead of cutting it off, up to a cap.
+  const { width, ...restStyle } = style ?? {};
+  const triggerStyle: CSSProperties | undefined = width == null ? style : { ...restStyle, minWidth: width, maxWidth: 320 };
+
   const pick = (v: string) => {
     setOpen(false);
     if (v === current) return;
@@ -82,7 +87,7 @@ export function Select({ value, onChange, children, className = "select", style,
   return (
     <Popover.Root open={open} onOpenChange={setOpen}>
       <Popover.Trigger asChild disabled={disabled}>
-        <button type="button" id={id} className={`${className} dd-trigger`} style={style} title={title ?? chosen?.text} aria-label={ariaLabel}
+        <button type="button" id={id} className={`${className} dd-trigger`} style={triggerStyle} title={title ?? chosen?.text} aria-label={ariaLabel}
           data-on={dataOn || undefined} data-empty={chosen ? undefined : true} disabled={disabled}>
           <span className="dd-value">{chosen?.text ?? ""}</span>
           <ChevronDown size={14} strokeWidth={1.75} className="dd-chevron" aria-hidden />
