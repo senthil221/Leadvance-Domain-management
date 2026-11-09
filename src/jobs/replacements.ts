@@ -107,6 +107,26 @@ async function startGrace(sql: Sql, item: Item, actor: string) {
   item.oldstatus = "draining";
 }
 
+/**
+ * The new domain joins Smartlead → Warming up like any other new domain,
+ * counted from its first inbox in Smartlead, for the days in Settings →
+ * Warming up. It stays there until it's moved to active or added to campaigns.
+ */
+async function startWarmupClock(sql: Sql, domainId: string) {
+  await sql`
+    update domains d set
+      warmup_started_at = coalesce((select min(coalesce(i.smartlead_created_at, i.created_at)) from inboxes i
+        where i.domain_id = d.id and i.status <> 'removed' and i.smartlead_account_id is not null), now()),
+      warmup_days = coalesce((select (value ->> 'days')::int from settings where key = 'warmup_program'), 18),
+      warmup_done_at = null, warmup_moved_to = null
+    where d.id = ${domainId} and d.warmup_started_at is null`;
+}
+
+/** In campaigns: the warm-up is over. */
+async function endWarmupClock(sql: Sql, domainId: string) {
+  await sql`update domains set warmup_done_at = now() where id = ${domainId} and warmup_started_at is not null and warmup_done_at is null`;
+}
+
 // Keeps domain statuses in line with how far the pair has got.
 async function syncStatuses(sql: Sql, item: Item, actor: string) {
   // A Hypertide swap starts the old domain's clock as soon as Hypertide has it.
@@ -117,11 +137,13 @@ async function syncStatuses(sql: Sql, item: Item, actor: string) {
     await sql`select transition_domain(${item.newid}, 'warming', ${"inboxes connected, replacing " + item.oldname}, ${actor})`;
     item.newstatus = "warming";
   }
+  if (live && item.newstatus === "warming" && item.campaigns !== "done") await startWarmupClock(sql, item.newid);
   if (finished(item.campaigns) && !item.completed) {
     if (item.newstatus === "provisioning") await sql`select transition_domain(${item.newid}, 'warming', 'setup finished', ${actor})`;
     // Not in campaigns yet: the new domain keeps warming until someone adds it.
     if (item.campaigns === "done") {
       if (item.newstatus !== "active") await sql`select transition_domain(${item.newid}, 'active', ${"replaced " + item.oldname}, ${actor})`;
+      await endWarmupClock(sql, item.newid);
       await retag(sql, item.newid, [], ["New"]);
     }
     if (item.oldstatus === "active" || item.oldstatus === "warming") await startGrace(sql, item, actor);
@@ -341,6 +363,7 @@ export async function addReplacementToCampaigns(sql: Sql, sl: Smartlead, id: str
   await sql`update replacement_items set step_campaigns = 'done', campaigns_added_at = now(), note = null, last_error = null where id = ${id}`;
   if (item.newstatus === "provisioning") await sql`select transition_domain(${item.newid}, 'warming', 'setup finished', ${actor})`;
   if (item.newstatus !== "active") await sql`select transition_domain(${item.newid}, 'active', ${"added to campaigns, replaced " + item.oldname}, ${actor})`;
+  await endWarmupClock(sql, item.newid);
   await retag(sql, item.newid, [], ["New"]);
   // The Smartlead "New" tag comes off with the next tag pass.
   await sql`update replacement_items set sl_new_tagged_at = null where id = ${id} and sl_new_tagged_at is not null`;

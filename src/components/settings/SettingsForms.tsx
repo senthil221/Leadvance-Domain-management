@@ -107,11 +107,11 @@ export function WarmupProgramForm({ program }: { program: WarmupProgram }) {
         <div className="field">
           <span className="field-label">Warm up for</span>
           <div className="seg" role="group" aria-label="Warm-up days" style={{ width: "fit-content" }}>
-            {["12", "13", "14"].map((d) => (
+            {["12", "14", "16", "18", "21"].map((d) => (
               <button key={d} type="button" aria-pressed={v.days === d} onClick={() => setV((x) => ({ ...x, days: d }))}>{d} days</button>
             ))}
           </div>
-          <span className="field-hint">Days counted from the start of warm-up, shown as a day-by-day track.</span>
+          <span className="field-hint">Days counted from the start of warm-up, shown as a day-by-day track. Replacement domains warm for the same days. A domain stays in Warming up until you move it to active or add it to campaigns.</span>
         </div>
         {field("maxAgeDays", "New means at most", "days old", "Age counts from the first inbox added to Smartlead. 0 is only today's.")}
         {field("perDay", "Warmup emails a day", "per inbox", "Smartlead's total warmup per day.")}

@@ -21,7 +21,8 @@ type State = "attention" | "progress" | "warming" | "live";
 function stateOf(r: ReplacementRow): State {
   if (!r.completedAt && STEPS.some((s) => stepWaitsOnPerson(r[STEP_COL[s]]))) return "attention";
   if (!r.completedAt) return "progress";
-  return r.stepCampaigns === "done" ? "live" : "warming";
+  // Moved to active from Smartlead → Warming up counts as live too.
+  return r.stepCampaigns === "done" || r.newStatus === "active" ? "live" : "warming";
 }
 const currentStep = (r: ReplacementRow) => STEPS.find((s) => !finished(r[STEP_COL[s]])) ?? null;
 const stepName = (r: ReplacementRow, s: StepName) =>
@@ -31,7 +32,7 @@ const stepName = (r: ReplacementRow, s: StepName) =>
 function statusText(r: ReplacementRow): { text: string; tone: "warning" | "danger" | "info" | "violet" | "success" } {
   const state = stateOf(r);
   const step = currentStep(r);
-  if (state === "live") return { text: "In campaigns", tone: "success" };
+  if (state === "live") return { text: r.stepCampaigns === "done" ? "In campaigns" : "Moved to active", tone: "success" };
   if (state === "warming") {
     if (r.ready) return { text: "Ready for campaigns", tone: "success" };
     const days = r.warmDays ?? 0;

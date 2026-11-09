@@ -10,7 +10,7 @@ export type WarmupProgram = {
   replyRate: number;
 };
 
-export const WARMUP_DEFAULTS: WarmupProgram = { enabled: false, days: 12, maxAgeDays: 1, perDay: 20, rampup: 2, replyRate: 40 };
+export const WARMUP_DEFAULTS: WarmupProgram = { enabled: false, days: 18, maxAgeDays: 1, perDay: 20, rampup: 2, replyRate: 40 };
 
 const num = (v: unknown, fallback: number, min: number, max: number) => {
   const n = Number(v);
