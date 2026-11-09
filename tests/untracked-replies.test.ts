@@ -108,6 +108,28 @@ describe("the untracked-replies job", () => {
     expect(await open()).toEqual(["1"]);
   });
 
+  it("sorts replies to campaign emails from bounces and warm-up mail", async () => {
+    const kind = async (subject: string | null, sender = "jane@acme.com") =>
+      (await sql<{ k: string }[]>`select untracked_kind(${subject}, ${sender}) as k`)[0].k;
+    // Replies to "For …" campaign emails, in any case and after any prefix.
+    expect(await kind("Re: For Lost Empire Herbs")).toBe("reply");
+    expect(await kind("RE: for acme")).toBe("reply");
+    expect(await kind("AW: For Saashop")).toBe("reply");
+    expect(await kind("Fwd: RE: For Lighting")).toBe("reply");
+    expect(await kind("Uusi sähköpostiosoite / New email address Re: For Saashop")).toBe("reply");
+    expect(await kind("Automatic reply: For Brightpath")).toBe("reply");
+    // Delivery failures, even quoting a "For …" subject.
+    expect(await kind("Undeliverable: For Lighting")).toBe("bounce");
+    expect(await kind("Delivery Status Notification (Failure)", "mailer-daemon@googlemail.com")).toBe("bounce");
+    expect(await kind("Re: For Lighting", "postmaster@outlook.com")).toBe("bounce");
+    // Warm-up and stray mail, including "for" later in a sentence.
+    expect(await kind("Re: Quick sync about the roadmap")).toBe("other");
+    expect(await kind("Re: Thanks for the notes")).toBe("other");
+    expect(await kind("Information for you")).toBe("other");
+    expect(await kind("Format review")).toBe("other");
+    expect(await kind(null)).toBe("other");
+  });
+
   it("an empty list means everything was dealt with", async () => {
     await syncUntrackedReplies(sql, fake([reply(1), reply(2)]));
     const r = await syncUntrackedReplies(sql, fake([]));

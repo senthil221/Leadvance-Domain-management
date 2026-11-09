@@ -3,7 +3,8 @@ import { sheetTokenOk } from "@/lib/sheet-token";
 import { lastUntrackedSync, listUntrackedReplies } from "@/lib/untracked-replies-db";
 
 // Read-only feed for the account managers' untracked replies sheet: every reply
-// still waiting in Smartlead's untracked list, newest first. The sheet's script
+// to a campaign email ("Re: For …") still waiting in Smartlead's untracked list,
+// newest first. Bounces and warm-up mail stay out. The sheet's script
 // (deploy/google-sheet/untracked-replies.gs) calls
 // https://<app>/api/sheet/<SHEET_SYNC_TOKEN>/untracked and rewrites the sheet.
 
@@ -12,7 +13,7 @@ export async function GET(_request: Request, ctx: RouteContext<"/api/sheet/[toke
   const { token } = await ctx.params;
   if (!sheetTokenOk(token)) return new Response("Not found", { status: 404 });
   try {
-    const [rows, sync] = await Promise.all([listUntrackedReplies(), lastUntrackedSync()]);
+    const [rows, sync] = await Promise.all([listUntrackedReplies({ view: "replies" }), lastUntrackedSync()]);
     return Response.json({
       ok: true,
       generatedAt: new Date().toISOString(),

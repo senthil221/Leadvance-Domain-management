@@ -9,7 +9,7 @@ import { Empty } from "@/components/ui";
 import { ago, int, summarize } from "@/lib/format";
 
 export type UntrackedItem = {
-  id: string; subject: string | null; senderName: string | null; senderEmail: string | null;
+  id: string; kind: "reply" | "bounce" | "other"; subject: string | null; senderName: string | null; senderEmail: string | null;
   recipientName: string | null; recipientEmail: string | null; body: string | null;
   receivedAt: string | null; firstSeenAt: string; handledAt: string | null;
   client: string | null; domain: string | null;
@@ -23,27 +23,34 @@ function stamp(d: string) {
   return new Date(d).toLocaleString("en-US", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit", hour12: false });
 }
 
-export function UntrackedView({ rows, lastSync, handledDays }: {
-  rows: UntrackedItem[];
+type Tab = "replies" | "other" | "handled";
+
+export function UntrackedView({ replies, other, handled, counts, lastSync, handledDays }: {
+  /** Waiting replies to campaign emails ("Re: For …"): what the account managers' sheet gets. */
+  replies: UntrackedItem[];
+  /** Waiting bounces, warm-up and stray mail: the latest only. */
+  other: UntrackedItem[];
+  /** Campaign replies handled in the last `handledDays` days. */
+  handled: UntrackedItem[];
+  counts: { replies: number; other: number; handled: number };
   lastSync: { finishedAt: string | null; ok: boolean | null; error: string | null } | null;
   handledDays: number;
 }) {
   const [now] = useState(() => Date.now());
-  const [tab, setTab] = useState<"open" | "handled">("open");
+  const [tab, setTab] = useState<Tab>("replies");
   const [q, setQ] = useState("");
   const [client, setClient] = useState("");
   const [open, setOpen] = useState<string | null>(null);
   const [pending, start] = useTransition();
 
-  const waiting = useMemo(() => rows.filter((r) => !r.handledAt), [rows]);
-  const handled = useMemo(() => rows.filter((r) => r.handledAt), [rows]);
+  const rows = tab === "replies" ? replies : tab === "other" ? other : handled;
   const clients = useMemo(() => [...new Set(rows.map((r) => r.client ?? ""))].sort((a, b) => (a ? (b ? a.localeCompare(b) : -1) : 1)), [rows]);
-  const today = waiting.filter((r) => now - new Date(when(r)).getTime() < DAY).length;
-  const week = waiting.filter((r) => now - new Date(when(r)).getTime() < 7 * DAY).length;
-  const oldest = waiting.reduce<string | null>((a, r) => (!a || when(r) < a ? when(r) : a), null);
+  const today = replies.filter((r) => now - new Date(when(r)).getTime() < DAY).length;
+  const week = replies.filter((r) => now - new Date(when(r)).getTime() < 7 * DAY).length;
+  const oldest = replies.reduce<string | null>((a, r) => (!a || when(r) < a ? when(r) : a), null);
 
   const needle = q.trim().toLowerCase();
-  const shown = (tab === "open" ? waiting : handled).filter((r) =>
+  const shown = rows.filter((r) =>
     (client === "" || (r.client ?? "") === client)
     && (!needle || [r.subject, r.senderName, r.senderEmail, r.recipientEmail, r.client, r.domain, r.body].some((v) => v?.toLowerCase().includes(needle))));
 
@@ -60,9 +67,13 @@ export function UntrackedView({ rows, lastSync, handledDays }: {
           <Search size={14} strokeWidth={1.5} />
           <input className="input" value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search sender, subject, inbox or text" aria-label="Search replies" />
         </label>
-        <div className="seg" role="group" aria-label="Waiting or handled">
-          <button type="button" aria-pressed={tab === "open"} onClick={() => setTab("open")}>Waiting {int(waiting.length)}</button>
-          <button type="button" aria-pressed={tab === "handled"} onClick={() => setTab("handled")} title={`Left Smartlead's untracked list in the last ${handledDays} days`}>Handled {int(handled.length)}</button>
+        <div className="seg" role="group" aria-label="Which replies">
+          <button type="button" aria-pressed={tab === "replies"} onClick={() => setTab("replies")}
+            title="Replies to campaign emails (subject Re: For …) still in Smartlead's untracked list. These go to the sheet">Replies {int(counts.replies)}</button>
+          <button type="button" aria-pressed={tab === "other"} onClick={() => setTab("other")}
+            title="Bounce notices, warm-up and other mail in the untracked list. Kept out of the sheet">Bounces &amp; other {int(counts.other)}</button>
+          <button type="button" aria-pressed={tab === "handled"} onClick={() => setTab("handled")}
+            title={`Campaign replies that left Smartlead's untracked list in the last ${handledDays} days`}>Handled {int(counts.handled)}</button>
         </div>
         <Select className="select" style={{ width: 150 }} value={client} onChange={(e) => setClient(e.target.value)} aria-label="Filter by client">
           <option value="">All clients</option>
@@ -70,7 +81,7 @@ export function UntrackedView({ rows, lastSync, handledDays }: {
         </Select>
         <span className="spacer-auto" />
         <dl className="inb-kpis" aria-label="Untracked reply numbers">
-          <div className="inb-kpi"><dt>Waiting</dt><dd>{int(waiting.length)}</dd></div>
+          <div className="inb-kpi" title="Campaign replies waiting"><dt>Waiting</dt><dd>{int(counts.replies)}</dd></div>
           <div className="inb-kpi"><dt>Today</dt><dd>{int(today)}</dd></div>
           <div className="inb-kpi"><dt>Last 7 days</dt><dd>{int(week)}</dd></div>
           <div className="inb-kpi" title={oldest ? `Oldest still waiting: ${stamp(oldest)}` : undefined}><dt>Oldest</dt><dd>{oldest ? ago(oldest, now) : "—"}</dd></div>
@@ -99,7 +110,7 @@ export function UntrackedView({ rows, lastSync, handledDays }: {
             <tbody>
               {shown.map((r) => {
                 const isOpen = open === r.id;
-                const fresh = !r.handledAt && now - new Date(when(r)).getTime() < DAY;
+                const fresh = tab === "replies" && now - new Date(when(r)).getTime() < DAY;
                 return (
                   <Fragment key={r.id}>
                     <tr className="is-clickable" data-selected={isOpen} onClick={() => setOpen(isOpen ? null : r.id)}>
@@ -115,7 +126,10 @@ export function UntrackedView({ rows, lastSync, handledDays }: {
                       </td>
                       <td>
                         <div className="ur-two">
-                          <span className="ur-clip">{r.subject ?? <span className="zero">(no subject)</span>}</span>
+                          <span className="ur-clip">
+                            {tab === "other" ? <span className={`badge${r.kind === "bounce" ? " tone-danger" : ""} ur-kind`}>{r.kind === "bounce" ? "Bounce" : "Other"}</span> : null}
+                            {r.subject ?? <span className="zero">(no subject)</span>}
+                          </span>
                           {r.body ? <span className="ur-sub ur-clip">{r.body.replace(/\s+/g, " ").slice(0, 220)}</span> : null}
                         </div>
                       </td>
@@ -146,11 +160,15 @@ export function UntrackedView({ rows, lastSync, handledDays }: {
               })}
             </tbody>
           </table>
+          {tab === "other" && counts.other > other.length && shown.length ? (
+            <p className="ur-more">The latest {int(other.length)} of {int(counts.other)} shown.</p>
+          ) : null}
           {shown.length === 0 ? (
-            <Empty icon={MailQuestion} title={tab === "open" ? (rows.length ? "Nothing matches" : "No untracked replies") : "Nothing handled lately"}>
-              {tab === "open"
-                ? "Replies Smartlead can't tie to a campaign lead show up here within 15 minutes, and in the account managers' sheet."
-                : `Replies that left Smartlead's untracked list in the last ${handledDays} days show here.`}
+            <Empty icon={MailQuestion} title={rows.length ? "Nothing matches" : tab === "replies" ? "No untracked replies" : tab === "other" ? "No bounces or other mail" : "Nothing handled lately"}>
+              {tab === "replies"
+                ? "Replies to campaign emails that Smartlead can't tie to a lead show up here within 15 minutes, and in the account managers' sheet."
+                : tab === "other" ? "Bounce notices, warm-up and other mail in Smartlead's untracked list show here, kept out of the sheet."
+                : `Campaign replies that left Smartlead's untracked list in the last ${handledDays} days show here.`}
             </Empty>
           ) : null}
         </div>

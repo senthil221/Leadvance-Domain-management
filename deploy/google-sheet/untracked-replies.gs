@@ -1,14 +1,17 @@
 /**
  * Domain Engine -> untracked replies sheet.
  *
- * Lists every reply waiting in Smartlead's untracked list (master inbox replies
- * Smartlead couldn't tie to a campaign lead), newest first, for the account
- * managers. The Domain Engine reads Smartlead every 15 minutes, every page of
- * the list; this script copies what it has into the sheet.
+ * Lists every reply to a campaign email waiting in Smartlead's untracked list
+ * (master inbox replies Smartlead couldn't tie to a lead), newest first, for
+ * the account managers. Campaign subjects start with "For …", so only replies
+ * whose subject has "Re: For …" (any case, any prefix) come through; bounces
+ * and warm-up mail stay out. The Domain Engine reads Smartlead every 15
+ * minutes, every page of the list; this script copies what it has into the sheet.
  *
- * Columns are matched by their header in row 1 (id, account_id, sender_name,
- * sender_email, recipient_email, recipient name, subject, body, date, plus
- * client, domain and received, which are added at the end if missing). Any
+ * Columns are matched by their header in row 1, in any order (date, client,
+ * domain, sender_name, sender_email, recipient_email, recipient name, subject,
+ * body, received, id, account_id); client, domain and received are added at
+ * the end if missing, and an empty sheet gets them all, client near the front. Any
  * other column is yours: notes or a status typed there stay with their reply
  * (matched by id) when the sheet updates. A reply someone has dealt with in
  * Smartlead leaves the sheet, notes and all.
@@ -20,7 +23,7 @@
 
 const APP_URL = "https://domains.srv1033325.hstgr.cloud";
 const SHEET_NAME = "Sheet1";
-const FEED_KEYS = ["id", "account_id", "sender_name", "sender_email", "recipient_email", "recipient name", "subject", "body", "date", "client", "domain", "received"];
+const FEED_KEYS = ["date", "client", "domain", "sender_name", "sender_email", "recipient_email", "recipient name", "subject", "body", "received", "id", "account_id"];
 const ADD_IF_MISSING = ["client", "domain", "received"];
 
 function onOpen() {
