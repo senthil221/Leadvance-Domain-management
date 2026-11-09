@@ -59,6 +59,7 @@ export type ReplaceItem = {
   domainId: string; name: string; tld: string | null; tags: string | null; status: string; clientId: string | null; clientName: string | null; clientHue: number | null; provider: string | null;
   call: ReplaceCall;
   /** The numbers behind the call, most important first. */ reasons: string[];
+  /** The same in a few words, for one line of a table: "Spam/block bounces 2.3% vs 0.16% · 14.0×". */ short: string;
   next: string;
   /** Smaller things worth knowing that didn't decide the call. */ also: string[];
   sent7: number; perDay: number;
@@ -138,10 +139,10 @@ export function replaceList(facts: FixFact[], stats: ReplaceStat[], passes: 1 | 
   // What a domain's own numbers say, set against the others. Run twice: the
   // second time the others leave out every domain the first pass flagged, so
   // two bad domains in one client can't make each other look normal.
-  type Perf = { perf: { call: "replace" | "watch"; reasons: string[]; weekly: boolean } | null; badList: string | null };
+  type Perf = { perf: { call: "replace" | "watch"; reasons: string[]; short: string[]; weekly: boolean } | null; badList: { text: string; short: string } | null };
   const measure = (f: FixFact, s: ReplaceStat | undefined, sums: ReturnType<typeof totals>, skip: ReadonlySet<string>): Perf => {
     let perf: Perf["perf"] = null;
-    let badList: string | null = null;
+    let badList: Perf["badList"] = null;
     if (judgeable(s)) {
       const without = (g: Sums) => (skip.has(f.domainId) ? g : minus(g, s));
       // Like with like: the same tag first, then the client, then everyone.
@@ -153,6 +154,7 @@ export function replaceList(facts: FixFact[], stats: ReplaceStat[], passes: 1 | 
       const who = onTag ? "the other domains on its tag" : inClient ? "the client's other domains" : "all other live domains";
 
       const reasons: string[] = [];
+      const short: string[] = [];
       const bounces = (text: string) => `Spam, policy and block list bounces ${text}`;
       // Too little in a week to say anything: the fortnight is judged as one window, by the same test.
       const weekly = s.sent7 >= R.minSent;
@@ -165,6 +167,7 @@ export function replaceList(facts: FixFact[], stats: ReplaceStat[], passes: 1 | 
       if (thisWeek) {
         reasons.push(bounces(`${p(k, of)} of ${n(of)} sent in ${weekly ? 7 : 14} days, ${times(k, of, peerK, peerOf)} ${who} (${p(peerK, peerOf)})`));
         if (lastWeek) reasons.push(`The week before too: ${p(s.senderPrev, s.sentPrev)} against ${p(peers.senderPrev, peers.sentPrev)}`);
+        short.push(`Spam/block bounces ${p(k, of)} vs ${p(peerK, peerOf)} · ${times(k, of, peerK, peerOf)}${weekly ? "" : " · 14 days"}${lastWeek ? " · 2 weeks running" : ""}`);
       }
 
       // Replies of any kind, out of office included: five times the signal of human replies, and they only come back from mail that landed.
@@ -175,12 +178,17 @@ export function replaceList(facts: FixFact[], stats: ReplaceStat[], passes: 1 | 
       const quiet14 = !quiet7 && quiet(s.replies14, s.sent14, peers.replies14, peers.sent14, 14);
       if (quiet7) reasons.push(`Replies of any kind ${p(s.replies7, s.sent7)} of ${n(s.sent7)} sent in 7 days, ${who} got ${p(peers.replies7, peers.sent7)}`);
       if (quiet14) reasons.push(`Replies of any kind ${p(s.replies14, s.sent14)} of ${n(s.sent14)} sent in 14 days, ${who} got ${p(peers.replies14, peers.sent14)}`);
+      if (quiet7) short.push(`Replies ${p(s.replies7, s.sent7)} vs ${p(peers.replies7, peers.sent7)}`);
+      if (quiet14) short.push(`Replies ${p(s.replies14, s.sent14)} vs ${p(peers.replies14, peers.sent14)} · 14 days`);
 
-      if (heavy || (thisWeek && lastWeek) || quiet7 || quiet14) perf = { call: "replace", reasons, weekly };
-      else if (thisWeek) perf = { call: "watch", reasons, weekly };
+      if (heavy || (thisWeek && lastWeek) || quiet7 || quiet14) perf = { call: "replace", reasons, short, weekly };
+      else if (thisWeek) perf = { call: "watch", reasons, short, weekly };
 
       if (over(s.missing7, s.sent7, peers.missing7, peers.sent7, R.watchRatio) && s.missing7 >= 0.5 * s.bounces7) {
-        badList = `${plural(s.missing7, "bounce")} to addresses that don't exist, ${p(s.missing7, s.sent7)} of ${n(s.sent7)} sent against ${p(peers.missing7, peers.sent7)} for ${who}`;
+        badList = {
+          text: `${plural(s.missing7, "bounce")} to addresses that don't exist, ${p(s.missing7, s.sent7)} of ${n(s.sent7)} sent against ${p(peers.missing7, peers.sent7)} for ${who}`,
+          short: `Bad addresses ${p(s.missing7, s.sent7)} vs ${p(peers.missing7, peers.sent7)}`,
+        };
       }
     }
     return { perf, badList };
@@ -201,8 +209,8 @@ export function replaceList(facts: FixFact[], stats: ReplaceStat[], passes: 1 | 
       domainId: f.domainId, name: f.name, tld: s?.tld ?? null, tags: s?.tags ?? null, status: f.status, clientId: f.clientId, clientName: f.clientName, clientHue: f.clientHue, provider: f.provider,
       sent7: s?.sent7 ?? 0, perDay: f.daysSent ? Math.round(f.sent7 / f.daysSent) : 0, canReplace: !(s?.beingReplaced ?? false),
     };
-    const put = (call: ReplaceCall, reasons: string[], next: string, also: string[] = []) => {
-      items.push({ ...base, call, reasons: reasons.slice(0, 3), next, also });
+    const put = (call: ReplaceCall, reasons: string[], short: string[], next: string, also: string[] = []) => {
+      items.push({ ...base, call, reasons: reasons.slice(0, 3), short: short.join(" · "), next, also });
       calls.set(f.domainId, { call, reasons: reasons.slice(0, 3) });
     };
 
@@ -222,15 +230,15 @@ export function replaceList(facts: FixFact[], stats: ReplaceStat[], passes: 1 | 
     const also = [...(badList && perf ? ["Bad list too"] : []), ...minor];
 
     if (f.listed > 0) {
-      put("replace_now", [`On ${plural(f.listed, "block list")}`, ...(perf?.reasons ?? [])], "Replace it now, and check the links in the copy it was sending", also);
+      put("replace_now", [`On ${plural(f.listed, "block list")}`, ...(perf?.reasons ?? [])], [`On ${plural(f.listed, "block list")}`, ...(perf?.short ?? [])], "Replace it now, and check the links in the copy it was sending", also);
     } else if (perf && blocking.length) {
-      put("fix", [...blocking.map((x) => `${x.label}: ${x.evidence}`), ...perf.reasons], `${blocking[0].next}. Then see whether its numbers recover`, also);
+      put("fix", [...blocking.map((x) => `${x.label}: ${x.evidence}`), ...perf.reasons], [...blocking.map((x) => x.label), ...perf.short], `${blocking[0].next}. Then see whether its numbers recover`, also);
     } else if (perf?.call === "replace") {
-      put("replace", perf.reasons, "Replace it this week", also);
+      put("replace", perf.reasons, perf.short, "Replace it this week", also);
     } else if (perf) {
-      put("watch", perf.reasons, perf.weekly ? "Leave it sending. It moves to Replace if next week is the same" : "Leave it sending. It sends too little to be sure yet, and moves to Replace if the bounces keep coming", also);
+      put("watch", perf.reasons, perf.short, perf.weekly ? "Leave it sending. It moves to Replace if next week is the same" : "Leave it sending. It sends too little to be sure yet, and moves to Replace if the bounces keep coming", also);
     } else if (badList) {
-      put("list", [badList], "Re-verify the list it's sending to. The domain itself looks fine", minor);
+      put("list", [badList.text], [badList.short], "Re-verify the list it's sending to. The domain itself looks fine", minor);
     } else if (!judgeable(s)) {
       early++;
       calls.set(f.domainId, { call: "early", reasons: [`${n(fortnight)} sent in 14 days, under the ${n(R.minSent)} needed to judge it`] });

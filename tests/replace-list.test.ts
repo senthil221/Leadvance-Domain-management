@@ -112,6 +112,7 @@ describe("catching bad domains", () => {
     const bad = callOf(fleet({ ...thin, sender7: 7, senderPrev: 5 }));
     expect(bad.item).toMatchObject({ call: "replace" });
     expect(bad.item!.reasons[0]).toBe("Spam, policy and block list bounces 3.0% of 400 sent in 14 days, 10.0× the client's other domains (0.30%)");
+    expect(bad.item!.short).toBe("Spam/block bounces 3.0% vs 0.30% · 10.0× · 14 days");
     expect(callOf(fleet({ ...thin, sender7: 1, senderPrev: 0 })).call).toBe("keep");
     // Six bounces is five times the others, but too few to replace on: one strict company can refuse that many at once.
     const few = callOf(fleet({ ...thin, sender7: 3, senderPrev: 3 }));
@@ -121,6 +122,7 @@ describe("catching bad domains", () => {
     const silent = callOf(fleet({ sent7: 250, sentPrev: 750, sent14: 1000, replies7: 0, repliesPrev: 0, replies14: 0 }));
     expect(silent.item).toMatchObject({ call: "replace" });
     expect(silent.item!.reasons[0]).toContain("sent in 14 days");
+    expect(silent.item!.short).toMatch(/^Replies 0.00% vs [0-9.]+% · 14 days$/);
   });
 
   it("doesn't read a domain that has only just started as quiet", () => {

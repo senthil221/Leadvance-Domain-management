@@ -3,12 +3,12 @@
 import { ArrowLeftRight, ChevronDown, CircleCheck, Download, Sparkles, X } from "lucide-react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useMemo, useState } from "react";
+import { Fragment, useMemo, useState } from "react";
 import { toast } from "sonner";
 import { DomainLink } from "@/components/domains/DomainLink";
 import { ReplaceDialog } from "@/components/domains/ReplaceDialog";
 import { Select } from "@/components/Select";
-import { Badge, ClientCell, Empty } from "@/components/ui";
+import { Badge, ClientCell } from "@/components/ui";
 import { DIAGNOSIS_ACTIONS, diagnosisCost, type DiagnosisAction, type StoredDiagnosis } from "@/lib/diagnose";
 import { ago, int } from "@/lib/format";
 import type { AiOpinion, ReplaceListData } from "@/lib/queries";
@@ -28,72 +28,74 @@ const AGREES: Record<ReplaceCall, DiagnosisAction[]> = {
   replace_now: ["replace", "rest"], replace: ["replace", "rest"], watch: ["lower_volume", "keep_sending", "wait_for_data"], fix: ["fix_setup"], list: ["check_lists"],
 };
 
-type Verdict = "agrees" | "disagrees" | "sooner" | null;
-const verdictOf = (item: ReplaceItem, opinion: AiOpinion | undefined): Verdict => {
+type Verdict = "agrees" | "disagrees" | "sooner";
+const verdictOf = (item: ReplaceItem, opinion: AiOpinion | undefined): Verdict | null => {
   if (!opinion) return null;
   if (AGREES[item.call].includes(opinion.action)) return "agrees";
   return item.call === "watch" && (opinion.action === "replace" || opinion.action === "rest") ? "sooner" : "disagrees";
 };
-const VERDICT: Record<Exclude<Verdict, null>, { label: string; tone: "success" | "warning" | "danger" }> = {
-  agrees: { label: "AI agrees", tone: "success" },
-  disagrees: { label: "AI disagrees", tone: "warning" },
-  sooner: { label: "AI: replace now", tone: "danger" },
+const VERDICT: Record<Verdict, { label: string; tone: "success" | "warning" | "danger" }> = {
+  agrees: { label: "Agrees", tone: "success" },
+  disagrees: { label: "Disagrees", tone: "warning" },
+  sooner: { label: "Replace now", tone: "danger" },
 };
 
-/** The three lists the page is made of. Replace now sits with Replace, and List problem with Fix first. */
-const GROUPS: { key: string; title: string; calls: ReplaceCall[]; what: string; ai: boolean }[] = [
-  { key: "replace", title: "Replace", calls: ["replace_now", "replace"], ai: true,
-    what: "Clearly worse than the other domains on its Smartlead tag. Tick the ones the AI agrees on and replace them." },
-  { key: "watch", title: "Watch", calls: ["watch"], ai: true,
-    what: "Worse than the others, but not by enough yet. Leave them sending: they move to Replace on their own if it carries on." },
-  { key: "fix", title: "Fix first", calls: ["fix", "list"], ai: false,
-    what: "Don't replace these. Fix the setup, or re-verify the lead list, and the domain can stay." },
+/** The three groups the table is made of. Replace now sits with Replace, and List problem with Fix first. */
+const GROUPS: { key: string; title: string; tone: "danger" | "warning" | "info"; calls: ReplaceCall[]; what: string; ai: boolean }[] = [
+  { key: "replace", title: "Replace", tone: "danger", calls: ["replace_now", "replace"], ai: true,
+    what: "Clearly worse than the other domains on its Smartlead tag" },
+  { key: "watch", title: "Watch", tone: "warning", calls: ["watch"], ai: true,
+    what: "Worse, not by enough yet. Leave sending: moves to Replace on its own if it carries on" },
+  { key: "fix", title: "Fix first", tone: "info", calls: ["fix", "list"], ai: false,
+    what: "Don't replace. Fix the setup, or re-verify the lead list" },
 ];
+const COLS = 7;
 
 function Row({ item, opinion, ai, picked, onPick }: { item: ReplaceItem; opinion: AiOpinion | undefined; ai: boolean; picked: boolean; onPick?: () => void }) {
   const [open, setOpen] = useState(false);
   const verdict = verdictOf(item, opinion);
   const tag = item.call === "replace_now" || item.call === "list" ? CALL_META[item.call] : null;
   return (
-    <li className="rs-row" data-open={open || undefined} data-selected={picked || undefined}>
-      <span className="rs-check">
-        {onPick ? (
-          <input type="checkbox" className="checkbox" aria-label={`Select ${item.name}`} disabled={!item.canReplace}
-            title={item.canReplace ? undefined : "A replacement is already running for it"} checked={picked} onChange={onPick} />
-        ) : null}
-      </span>
-      <span className="rs-domain">
-        <DomainLink id={item.domainId} className="fx-name">{item.name}</DomainLink>
-        <span className="fx-sub">
+    <>
+      <tr className="rs-row" data-open={open || undefined} data-selected={picked || undefined} onClick={(e) => { if (!(e.target as HTMLElement).closest("a,input,button")) setOpen(!open); }}>
+        <td className="col-check">
+          {onPick ? (
+            <input type="checkbox" className="checkbox" aria-label={`Select ${item.name}`} disabled={!item.canReplace}
+              title={item.canReplace ? undefined : "A replacement is already running for it"} checked={picked} onChange={onPick} />
+          ) : null}
+        </td>
+        <td className="rs-name"><DomainLink id={item.domainId} className="fx-name">{item.name}</DomainLink></td>
+        <td className="rs-client">
           {item.clientId ? <Link href={`/clients/${item.clientId}`} className="hover:underline"><ClientCell name={item.clientName} hue={item.clientHue} /></Link> : <span className="zero">No client</span>}
           {item.tags ? <span className="fx-provider" title="Its Smartlead tag: the domains it's compared with">{item.tags}</span> : null}
-        </span>
-      </span>
-      <span className="rs-why">
-        {tag ? <Badge tone={tag.tone}>{tag.label}</Badge> : null}
-        {item.reasons[0]}
-      </span>
-      <span className="rs-ai">
-        {!ai ? null : verdict ? <Badge tone={VERDICT[verdict].tone}>{VERDICT[verdict].label}</Badge> : <span className="zero">Not reviewed</span>}
-      </span>
-      <button type="button" className="btn btn-icon btn-ghost rs-toggle" aria-expanded={open} aria-label={`${open ? "Hide" : "Show"} details for ${item.name}`} onClick={() => setOpen(!open)}>
-        <ChevronDown size={15} strokeWidth={1.75} aria-hidden="true" />
-      </button>
+        </td>
+        <td className="rs-why" title={item.reasons.join("\n")}>
+          {tag ? <Badge tone={tag.tone}>{tag.label}</Badge> : null}<span>{item.short}</span>
+        </td>
+        <td className="is-num num">{int(item.perDay)}</td>
+        <td className="rs-ai" title={opinion ? `${DIAGNOSIS_ACTIONS[opinion.action]}. ${opinion.headline}` : undefined}>
+          {!ai ? null : verdict ? <Badge tone={VERDICT[verdict].tone}>{VERDICT[verdict].label}</Badge> : <span className="zero">–</span>}
+        </td>
+        <td className="rs-toggle-cell">
+          <button type="button" className="btn btn-sm btn-icon btn-ghost rs-toggle" aria-expanded={open} aria-label={`${open ? "Hide" : "Show"} details for ${item.name}`} onClick={() => setOpen(!open)}>
+            <ChevronDown size={14} strokeWidth={1.75} aria-hidden="true" />
+          </button>
+        </td>
+      </tr>
       {open ? (
-        <div className="rs-more">
-          <dl>
-            <dt>Numbers</dt>
-            <dd><ul>{item.reasons.map((r) => <li key={r}>{r}</li>)}</ul></dd>
-            <dt>Next step</dt>
-            <dd>{item.canReplace ? item.next : "A replacement is already running for it"}</dd>
-            <dt>Sends</dt>
-            <dd>{int(item.perDay)} a day</dd>
-            {item.also.length ? <><dt>Also</dt><dd>{item.also.join(" · ")}</dd></> : null}
-            {opinion ? <><dt>AI says</dt><dd><b>{DIAGNOSIS_ACTIONS[opinion.action]}.</b> {opinion.headline} <span className="rs-when">{ago(opinion.createdAt)}</span></dd></> : null}
-          </dl>
-        </div>
+        <tr className="rs-more">
+          <td />
+          <td colSpan={COLS - 1}>
+            <dl>
+              <dt>Numbers</dt><dd>{item.reasons.join(". ")}</dd>
+              <dt>Next step</dt><dd>{item.canReplace ? item.next : "A replacement is already running for it"}</dd>
+              {item.also.length ? <><dt>Also</dt><dd>{item.also.join(" · ")}</dd></> : null}
+              {opinion ? <><dt>AI says</dt><dd><b>{DIAGNOSIS_ACTIONS[opinion.action]}.</b> {opinion.headline} <span className="rs-when">{ago(opinion.createdAt)}</span></dd></> : null}
+            </dl>
+          </td>
+        </tr>
       ) : null}
-    </li>
+    </>
   );
 }
 
@@ -114,7 +116,7 @@ export function ReplaceList({ data }: { data: ReplaceListData }) {
   }, [data.items]);
 
   const groups = GROUPS.map((g) => ({ ...g, items: shown.filter((i) => g.calls.includes(i.call)) }));
-  const [replace, watch, fix] = groups;
+  const [replace, watch] = groups;
   const picked = data.items.filter((i) => selected.has(i.domainId) && i.canReplace);
   const agreed = replace.items.filter((i) => i.canReplace && verdictOf(i, opinions.get(i.domainId)) === "agrees");
   const toggle = (id: string) => setSelected((s) => { const next = new Set(s); if (next.has(id)) next.delete(id); else next.add(id); return next; });
@@ -152,76 +154,82 @@ export function ReplaceList({ data }: { data: ReplaceListData }) {
 
   return (
     <>
-      <section className="card rs-top" aria-label="Summary">
-        <div className="rs-counts">
-          <span><b className="is-danger">{int(replace.items.length)}</b> to replace</span>
-          <span><b className="is-warning">{int(watch.items.length)}</b> to watch</span>
-          <span><b>{int(fix.items.length)}</b> to fix first</span>
-        </div>
-        <p className="rs-sub">
-          From the last 7 days up to today, so it&apos;s current whatever day you check
-          {data.slSyncedAt ? <> · Smartlead synced {ago(data.slSyncedAt)}</> : null}
-          {" "}· {int(data.healthy)} other domains are fine
-        </p>
-        <div className="rs-actions">
-          <Select className="select fx-select" aria-label="Client" value={client} onChange={(e) => setClient(e.target.value)}>
-            <option value="">All clients</option>
-            {clients.map(([id, name]) => <option key={id} value={id}>{name}</option>)}
-          </Select>
-          <button type="button" className="btn btn-primary" disabled={!candidates.length || !!review || !data.aiReady}
-            title={!data.aiReady ? "Add OPENROUTER_API_KEY to the server's .env to turn this on" : "A second opinion on the Replace and Watch domains. Unchanged numbers cost nothing to ask again"}
-            onClick={runReview}>
-            <Sparkles size={14} strokeWidth={1.75} aria-hidden="true" className={review ? "dx-spin" : undefined} />
-            {review ? `Reviewing ${int(review.done)} of ${int(review.total)}…` : `Review with AI${unreviewed ? ` (${int(unreviewed)} new)` : ""}`}
-          </button>
-          {agreed.length ? (
-            <button type="button" className="btn" title="Tick every Replace domain the AI agrees with" onClick={() => setSelected(new Set(agreed.map((i) => i.domainId)))}>
-              <CircleCheck size={14} strokeWidth={1.75} aria-hidden="true" />Select the {int(agreed.length)} the AI agrees on
+      <section className="card" aria-label="Replace list">
+        <div className="rs-bar">
+          <span className="rs-counts">
+            {groups.map((g) => (
+              <span key={g.key} title={g.what}><span className={`fx-mark rp-mark is-${g.tone}`} aria-hidden="true" /><b>{int(g.items.length)}</b> {g.title.toLowerCase()}</span>
+            ))}
+          </span>
+          <span className="rs-sync" title="Every number is the last 7 days up to today, so the list is current whatever day you check">
+            Last 7 days{data.slSyncedAt ? ` · synced ${ago(data.slSyncedAt)}` : ""}
+          </span>
+          <span className="rs-actions">
+            <Select className="select fx-select" aria-label="Client" value={client} onChange={(e) => setClient(e.target.value)}>
+              <option value="">All clients</option>
+              {clients.map(([id, name]) => <option key={id} value={id}>{name}</option>)}
+            </Select>
+            {agreed.length ? (
+              <button type="button" className="btn btn-sm" title="Tick every Replace domain the AI agrees with" onClick={() => setSelected(new Set(agreed.map((i) => i.domainId)))}>
+                <CircleCheck size={14} strokeWidth={1.75} aria-hidden="true" />Select {int(agreed.length)} agreed
+              </button>
+            ) : null}
+            <button type="button" className="btn btn-sm btn-primary" disabled={!candidates.length || !!review || !data.aiReady}
+              title={!data.aiReady ? "Add OPENROUTER_API_KEY to the server's .env to turn this on" : "A second opinion on every Replace and Watch domain. Unchanged numbers cost nothing to ask again"}
+              onClick={runReview}>
+              <Sparkles size={14} strokeWidth={1.75} aria-hidden="true" className={review ? "dx-spin" : undefined} />
+              {review ? `${int(review.done)} of ${int(review.total)}…` : `Review with AI${unreviewed ? ` (${int(unreviewed)})` : ""}`}
             </button>
-          ) : null}
+          </span>
+        </div>
+
+        {data.notes.map((g) => (
+          <p key={`${g.kind}|${g.id}|${g.text}`} className="rs-note-line"><b>{g.name}</b> {g.text}</p>
+        ))}
+
+        <div className="table-scroll">
+          <table className="data-table rs-table">
+            <thead>
+              <tr>
+                <th className="col-check" />
+                <th>Domain</th><th>Client · tag</th>
+                <th title="Its number against the other domains on its Smartlead tag. Spam/block bounces are spam, policy and block list bounces">Why · vs its tag</th>
+                <th className="is-num" title="What it sends on a day it sends">A day</th>
+                <th title="The AI's second opinion. Hover for what it said">AI</th>
+                <th />
+              </tr>
+            </thead>
+            <tbody>
+              {groups.map((g) => (
+                <Fragment key={g.key}>
+                  <tr className="rs-group">
+                    <th colSpan={COLS} scope="rowgroup">
+                      <span className={`fx-mark rp-mark is-${g.tone}`} aria-hidden="true" />{g.title} <span className="num">{int(g.items.length)}</span>
+                      <span className="rs-group-what">{g.what}</span>
+                    </th>
+                  </tr>
+                  {g.items.length ? g.items.map((i) => (
+                    <Row key={i.domainId} item={i} opinion={opinions.get(i.domainId)} ai={g.ai}
+                      picked={selected.has(i.domainId)} onPick={g.key === "replace" ? () => toggle(i.domainId) : undefined} />
+                  )) : (
+                    <tr><td /><td colSpan={COLS - 1} className="zero">None</td></tr>
+                  )}
+                </Fragment>
+              ))}
+            </tbody>
+          </table>
         </div>
       </section>
-
-      {data.notes.length ? (
-        <ul className="rp-notes" aria-label="Changes shared by a whole client or provider">
-          {data.notes.map((g) => <li key={`${g.kind}|${g.id}|${g.text}`}><b>{g.name}</b>{g.text}</li>)}
-        </ul>
-      ) : null}
-
-      {groups.map((g) => (
-        <section key={g.key} className="card" aria-labelledby={`rs-${g.key}`}>
-          <div className="card-head rs-head">
-            <span className={`fx-mark rp-mark is-${g.key === "replace" ? "danger" : g.key === "watch" ? "warning" : "info"}`} aria-hidden="true" />
-            <h2 id={`rs-${g.key}`} className="card-title">{g.title} <span className="num">{int(g.items.length)}</span></h2>
-            <span className="card-sub">{g.what}</span>
-          </div>
-          {g.items.length ? (
-            <ul className="rs-list">
-              {g.items.map((i) => (
-                <Row key={i.domainId} item={i} opinion={opinions.get(i.domainId)} ai={g.ai}
-                  picked={selected.has(i.domainId)} onPick={g.key === "replace" ? () => toggle(i.domainId) : undefined} />
-              ))}
-            </ul>
-          ) : (
-            <p className="rp-meta">{g.key === "replace" ? "Nothing to replace right now." : "None."}</p>
-          )}
-        </section>
-      ))}
-
-      {!shown.length && !client ? (
-        <Empty icon={CircleCheck} title="Nothing to replace">No live domain is clearly worse than the others it sends with.</Empty>
-      ) : null}
 
       <details className="card rs-details">
         <summary>How domains get here, CSV and past replacements</summary>
         <div className="rs-details-body">
           <ul className="rs-rules">
-            <li>Every live domain is compared with the other domains on its own Smartlead tag, over the last 7 days (14 for one that sends under {int(REPLACE_RULES.minSent)} a week).</li>
+            <li>Every live domain is compared with the other domains on its own Smartlead tag, over the last 7 days (14 for one that sends under {int(REPLACE_RULES.minSent)} a week). {int(data.healthy)} are fine and {int(data.early)} sent too little to judge.</li>
             <li><b>Replace</b>: spam, policy and block list bounces at {REPLACE_RULES.replaceRatio}× the others, or replies of any kind at half or less, or the domain is on a block list.</li>
             <li><b>Watch</b>: those bounces at {REPLACE_RULES.watchRatio}× the others. Two weeks running moves it to Replace.</li>
             <li><b>Fix first</b>: bad numbers, but its DNS, records or inboxes are failing. Or the bounces are addresses that don&apos;t exist, which is the list, not the domain.</li>
-            <li>Warm-up reputation, domain age and a few quiet days never put a domain here. {int(data.early)} domains sent too little to judge.</li>
-            <li>The AI never makes the call. It reads the same numbers and says whether it agrees.</li>
+            <li>Warm-up reputation, domain age and a few quiet days never put a domain here. The AI never makes the call: it reads the same numbers and says whether it agrees.</li>
           </ul>
           <button type="button" className="btn btn-sm" disabled={!shown.length} onClick={() => download("replace-list.csv", replaceCsv(shown))}>
             <Download size={14} strokeWidth={1.75} aria-hidden="true" />Download CSV
