@@ -1,9 +1,9 @@
 "use client";
 
-import { ArrowRightLeft, Plus, Search, Tags as TagsIcon, TriangleAlert, Wand2, X } from "lucide-react";
+import { ArrowRightLeft, Plus, Search, Tags as TagsIcon, TriangleAlert, UserRound, Wand2, X } from "lucide-react";
 import { Dialog } from "radix-ui";
 import { useSearchParams } from "next/navigation";
-import { Fragment, useMemo, useState, useTransition, type ReactNode } from "react";
+import { Fragment, useLayoutEffect, useMemo, useRef, useState, useTransition, type ReactNode } from "react";
 import { toast } from "sonner";
 import { addDomainsToTag, removeDomainsFromTag, saveTagTarget } from "@/app/actions";
 import { ColumnsMenu, useColumns, type ColumnDef } from "@/components/Columns";
@@ -20,7 +20,7 @@ type Result = { ok: true; data: { message: string } } | { ok: false; error: stri
 type Widths = ReturnType<typeof useColumnWidths>;
 
 // ── Tag list columns ────────────────────────────────────────────────────────
-type TagCol = "tag" | "sender" | "domains" | "inboxes" | "volume" | "target" | "gap" | "sent" | "rep";
+type TagCol = "tag" | "sender" | "domains" | "inboxes" | "volume" | "target" | "gap" | "progress" | "sent" | "rep";
 const TAG_COLS: (ColumnDef<TagCol> & { width: number; num?: boolean; title?: string })[] = [
   { key: "tag", label: "Tag", locked: true, width: 170 },
   { key: "sender", label: "Sender", width: 190, title: "The sender name most of its inboxes use; the badge counts domains with an inbox under another name" },
@@ -29,22 +29,24 @@ const TAG_COLS: (ColumnDef<TagCol> & { width: number; num?: boolean; title?: str
   { key: "volume", label: "Volume / day", width: 118, num: true, locked: true, title: "Campaign emails a day: the daily limits of the connected inboxes, added up" },
   { key: "target", label: "Target", width: 96, num: true, locked: true, title: "The volume you want this tag to reach. Type to change it" },
   { key: "gap", label: "vs target", width: 86, num: true, title: "Volume minus target" },
+  { key: "progress", label: "Toward target", width: 220, title: "Volume as a share of the target" },
   { key: "sent", label: "Sent today", width: 88, num: true, hidden: true },
   { key: "rep", label: "Rep.", width: 66, num: true },
 ];
 const TAG_WIDTHS = Object.fromEntries(TAG_COLS.map((c) => [c.key, c.width]));
-/** With a tag open, the list keeps only what you need to pick and set targets. */
+/** With a tag open, the list keeps only what you need to pick and set targets, at these widths. */
 const COMPACT: TagCol[] = ["tag", "volume", "target"];
+const RAIL_WIDTHS: Partial<Record<TagCol, number>> = { volume: 104, target: 84 };
 
 // ── Domain table columns (inside a tag) ────────────────────────────────────
 const ON_COLS = [
-  { key: "domain", label: "Domain", width: 210 }, { key: "status", label: "Status", width: 168 },
+  { key: "domain", label: "Domain", width: 200 }, { key: "status", label: "Status", width: 196 },
   { key: "inboxes", label: "Inboxes", width: 74, num: true }, { key: "volume", label: "Volume", width: 74, num: true },
   { key: "rep", label: "Rep.", width: 62, num: true }, { key: "sender", label: "Sender", width: 160 },
   { key: "campaigns", label: "Camp.", width: 64, num: true, title: "Campaigns its inboxes are in" },
 ] as const;
 const POOL_COLS = [
-  { key: "domain", label: "Domain", width: 210 }, { key: "from", label: "Pool", width: 76 },
+  { key: "domain", label: "Domain", width: 200 }, { key: "from", label: "Pool", width: 76 },
   { key: "warmup", label: "Warm-up", width: 104 }, { key: "inboxes", label: "Inboxes", width: 74, num: true },
   { key: "adds", label: "Adds / day", width: 86, num: true, title: "Its connected inboxes at this tag's usual daily limit" },
   { key: "rep", label: "Rep.", width: 62, num: true }, { key: "sender", label: "Sender", width: 160 },
@@ -103,14 +105,18 @@ function Th({ col, label, w, num, title, children }: { col: string; label: strin
 }
 
 const tableWidth = (w: Widths, keys: string[], extra = 0) => keys.reduce((a, k) => a + (w.width(k) ?? 0), extra);
+/** Fills its panel: the `flex` column takes whatever the others leave, down to `floor`. */
+const fillStyle = (w: Widths, keys: string[], flex: string, floor: number, extra = 0) =>
+  ({ width: "100%", minWidth: tableWidth(w, keys.filter((k) => k !== flex), extra) + floor });
+const colWidth = (w: Widths, key: string, flex: string) => (key === flex ? undefined : w.width(key));
 
 /** The target, typed straight into the list: saved on Enter or when you leave the field. */
-function TargetInput({ tag, disabled }: { tag: BoardTag; disabled?: boolean }) {
-  const [v, setV] = useState(tag.target ? String(tag.target) : "");
+function TargetInput({ tag, disabled, tile }: { tag: BoardTag; disabled?: boolean; tile?: boolean }) {
+  const [v, setV] = useState(tag.target ? int(tag.target) : "");
   const [pending, start] = useTransition();
   const save = () => {
     const n = v.trim() ? Math.round(Number(v.replace(/[, ]/g, ""))) : 0;
-    if (!Number.isFinite(n) || n < 0) { toast.error("Enter a number of emails a day"); setV(tag.target ? String(tag.target) : ""); return; }
+    if (!Number.isFinite(n) || n < 0) { toast.error("Enter a number of emails a day"); setV(tag.target ? int(tag.target) : ""); return; }
     if ((tag.target ?? 0) === n) return;
     start(async () => {
       const r = await saveTagTarget(tag.name, n || null);
@@ -118,9 +124,10 @@ function TargetInput({ tag, disabled }: { tag: BoardTag; disabled?: boolean }) {
     });
   };
   return (
-    <input className="input num tg-target-in" inputMode="numeric" value={v} placeholder="Set" disabled={disabled || pending}
+    <input className={`input num tg-target-in${tile ? " is-tile" : ""}`} inputMode="numeric" value={v} placeholder={tile ? "Set a target" : "—"} disabled={disabled || pending}
+      title="The emails a day this tag should reach. Type a number; Enter saves"
       onClick={(e) => e.stopPropagation()} onChange={(e) => setV(e.target.value)} onBlur={save}
-      onKeyDown={(e) => { if (e.key === "Enter") e.currentTarget.blur(); if (e.key === "Escape") { setV(tag.target ? String(tag.target) : ""); e.currentTarget.blur(); } }}
+      onKeyDown={(e) => { if (e.key === "Enter") e.currentTarget.blur(); if (e.key === "Escape") { setV(tag.target ? int(tag.target) : ""); e.currentTarget.blur(); } }}
       aria-label={`Volume target for ${tag.name}`} />
   );
 }
@@ -144,6 +151,16 @@ export function TagsView({ domains, campaigns, targets, dryRun, appProblem }: {
   const [fillOpen, setFillOpen] = useState(false);
   const [pending, start] = useTransition();
   const blocked = Boolean(appProblem);
+  // The panels run to the bottom of the window: measure where they start.
+  const layoutRef = useRef<HTMLDivElement>(null);
+  useLayoutEffect(() => {
+    const el = layoutRef.current;
+    if (!el) return;
+    const set = () => el.style.setProperty("--tg-top", `${Math.round(el.getBoundingClientRect().top + window.scrollY) + 32}px`);
+    set();
+    window.addEventListener("resize", set);
+    return () => window.removeEventListener("resize", set);
+  }, [dryRun, appProblem]);
 
   const pick = (key: string | null) => {
     setPicked(key);
@@ -158,7 +175,10 @@ export function TagsView({ domains, campaigns, targets, dryRun, appProblem }: {
   const clientTags = tags.filter((t) => !t.pool);
   const total = clientTags.reduce((a, t) => a + t.volume, 0);
   const offTotal = clientTags.reduce((a, t) => a + t.offSender, 0);
+  const targetTotal = clientTags.reduce((a, t) => a + (t.target ?? 0), 0);
   const visible = TAG_COLS.filter((c) => (tag ? COMPACT.includes(c.key) : cols.on(c.key)));
+  // The progress bar (or the sender, or the tag name) takes the list's spare width.
+  const flexCol: TagCol = (["progress", "sender", "tag"] as TagCol[]).find((k) => visible.some((c) => c.key === k))!;
 
   const createTag = () => {
     const name = (newTag ?? "").trim();
@@ -174,7 +194,12 @@ export function TagsView({ domains, campaigns, targets, dryRun, appProblem }: {
 
   const cell = (t: BoardTag, k: TagCol) => {
     switch (k) {
-      case "tag": return <span className="strong">{t.name}</span>;
+      case "tag": return (
+        <span className="tg-name-cell">
+          <span className="strong tg-clip">{t.name}</span>
+          {tag && t.offSender ? <span className="tg-off" title={`${t.offSender} domains with an inbox under another sender name`}><TriangleAlert size={11} />{t.offSender}</span> : null}
+        </span>
+      );
       case "sender": return t.pool ? <span className="zero">Each its own</span> : (
         <span className="tg-sender-cell">
           <span className="tg-clip">{t.sender ?? <span className="zero">—</span>}</span>
@@ -183,7 +208,13 @@ export function TagsView({ domains, campaigns, targets, dryRun, appProblem }: {
       );
       case "domains": return int(t.domains.length);
       case "inboxes": return <>{int(t.connected)}{t.disconnected ? <span className="tg-disc"> +{int(t.disconnected)}</span> : null}</>;
-      case "volume": return <span className="tg-vol">{int(t.volume)}<VolumeBar volume={t.volume} target={t.target} /></span>;
+      case "volume": return tag ? <span className="tg-vol">{int(t.volume)}<VolumeBar volume={t.volume} target={t.target} /></span> : int(t.volume);
+      case "progress": return t.target ? (
+        <span className="tg-prog">
+          <VolumeBar volume={t.volume} target={t.target} />
+          <span className={t.volume >= t.target ? "tg-met" : undefined}>{Math.round((100 * t.volume) / t.target)}%</span>
+        </span>
+      ) : <span className="zero">{t.pool ? "—" : "No target"}</span>;
       case "target": return t.pool ? <span className="zero">—</span> : <TargetInput key={`${t.key}:${t.target ?? ""}`} tag={t} />;
       case "gap": {
         if (!t.target) return <span className="zero">—</span>;
@@ -210,11 +241,18 @@ export function TagsView({ domains, campaigns, targets, dryRun, appProblem }: {
           <Search size={14} strokeWidth={1.5} />
           <input className="input" value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search tags, senders or domains" aria-label="Search tags" />
         </label>
-        <span className="tg-total">
-          {int(clientTags.length)} tags · {int(total)} a day
-          {offTotal ? <> · <span className="tg-gap">{int(offTotal)} domains off-sender</span></> : null}
-          {" · "}pool <b>{int(poolReady.length)}</b> ready
-        </span>
+        <dl className="inb-kpis tg-kpistrip" aria-label="Tag numbers">
+          <div className="inb-kpi" title="Client tags (Free and warmup are the pool)"><dt>Tags</dt><dd>{int(clientTags.length)}</dd></div>
+          <div className="inb-kpi" title={targetTotal ? `${int(total)} of the ${int(targetTotal)} a day the targets add up to` : "Campaign emails a day across client tags"}>
+            <dt>Volume / day</dt><dd>{int(total)}</dd>{targetTotal ? <span>of {int(targetTotal)}</span> : null}
+          </div>
+          <div className="inb-kpi" title="Domains with an inbox under a sender name other than their tag's">
+            <dt>Off-sender</dt><dd className={offTotal ? "tg-gap" : undefined}>{int(offTotal)}</dd>
+          </div>
+          <div className="inb-kpi" title={`${int(pool.length)} domains tagged Free or warmup, ${int(poolReady.length)} warmed up`}>
+            <dt>Pool ready</dt><dd>{int(poolReady.length)}</dd><span>of {int(pool.length)}</span>
+          </div>
+        </dl>
         <span className="spacer-auto" />
         <button type="button" className="btn btn-sm" disabled={!plan.length} onClick={() => setFillOpen(true)}
           title={plan.length ? "Shows which pool domains would go to which tag to reach the targets, before anything changes" : "Every tag with a target has reached it, or the pool has nothing ready"}>
@@ -235,11 +273,11 @@ export function TagsView({ domains, campaigns, targets, dryRun, appProblem }: {
       {dryRun ? <p className="tg-note">Dry run is on: tag changes are made in the app only, Smartlead isn&apos;t changed.</p> : null}
       {appProblem ? <p className="tg-note is-warn">{appProblem}</p> : null}
 
-      <div className={`tg-layout${tag ? " has-detail" : ""}`}>
+      <div ref={layoutRef} className={`tg-layout${tag ? " has-detail" : ""}`}>
         <div className="table-wrap tg-list">
-          <div className="table-scroll" style={{ maxHeight: "calc(100dvh - 190px)" }}>
-            <table className="data-table is-main is-fixed tg-table" style={{ width: tableWidth(widths, visible.map((c) => c.key)) }}>
-              <colgroup>{visible.map((c) => <col key={c.key} style={{ width: widths.width(c.key) }} />)}</colgroup>
+          <div className="table-scroll">
+            <table className="data-table is-main is-fixed tg-table" style={tag ? { width: "100%" } : fillStyle(widths, visible.map((c) => c.key), flexCol, 120)}>
+              <colgroup>{visible.map((c) => <col key={c.key} style={{ width: tag ? (c.key === "tag" ? undefined : RAIL_WIDTHS[c.key]) : colWidth(widths, c.key, flexCol) }} />)}</colgroup>
               <thead>
                 <tr>{visible.map((c) => <Th key={c.key} col={c.key} label={c.label} w={widths} num={c.num} title={c.title} />)}</tr>
               </thead>
@@ -247,7 +285,7 @@ export function TagsView({ domains, campaigns, targets, dryRun, appProblem }: {
                 {shownClient.map(row)}
                 {shownPool.length ? (
                   <Fragment>
-                    <tr className="tg-group"><td colSpan={visible.length}>Pool · domains waiting for a tag ({int(pool.length)}, {int(poolReady.length)} warmed up)</td></tr>
+                    <tr className="tg-group"><td colSpan={visible.length}>Pool <span>· waiting for a tag · {int(poolReady.length)} of {int(pool.length)} warmed up</span></td></tr>
                     {shownPool.map(row)}
                   </Fragment>
                 ) : null}
@@ -307,16 +345,49 @@ function TagDetail({ tag, tags, pool, campaignName, blocked, onClose }: {
         <div className="tg-dtitle">
           <span className="tg-dname">{tag.name}</span>
           {tag.pool ? <span className="badge">Pool</span> : null}
-          <span className="tg-dsender">{tag.pool ? "Domains waiting for a client tag" : tag.sender ? `Sender ${tag.sender}` : "No sender name yet"}</span>
-        </div>
-        <div className="tg-dstats">
-          <span><b>{int(tag.volume)}</b>{tag.target ? ` / ${int(tag.target)}` : ""} a day</span>
-          <VolumeBar volume={tag.volume} target={tag.target} />
-          <span>{int(tag.domains.length)} domains · {int(tag.connected)} inboxes{tag.disconnected ? <span className="tg-disc"> · {int(tag.disconnected)} disconnected</span> : null}</span>
-          {need ? <span className="tg-gap">{int(need)} short</span> : tag.target ? <span className="tg-met">Target met</span> : null}
+          <span className="tg-pill" title={tag.pool ? undefined : "The sender name most of its inboxes use"}>
+            <UserRound size={12} />{tag.pool ? "Domains waiting for a client tag" : tag.sender ?? "No sender name yet"}
+          </span>
         </div>
         <button type="button" className="btn btn-sm btn-ghost btn-icon" onClick={onClose} aria-label="Close"><X size={14} /></button>
       </div>
+
+      <dl className={`tg-dkpis${tag.pool ? " is-pool" : ""}`}>
+        <div className="tg-dkpi is-wide">
+          <dt>Volume / day</dt>
+          <dd><b>{int(tag.volume)}</b>{tag.target ? <span className="tg-of"> of {int(tag.target)}</span> : null}</dd>
+          {tag.target ? (
+            <div className="tg-dprog">
+              <VolumeBar volume={tag.volume} target={tag.target} />
+              {need ? <span className="tg-gap">{int(need)} short</span> : <span className="tg-met">Target met</span>}
+            </div>
+          ) : <span className="tg-dsub">{tag.pool ? "Across the pool" : "No target yet"}</span>}
+        </div>
+        {tag.pool ? null : (
+          <div className="tg-dkpi">
+            <dt>Target</dt>
+            <dd><TargetInput key={`${tag.key}:${tag.target ?? ""}`} tag={tag} tile /></dd>
+            <span className="tg-dsub">{tag.perInbox ? `${int(tag.perInbox)} a day per inbox` : "emails a day"}</span>
+          </div>
+        )}
+        <div className="tg-dkpi">
+          <dt>Domains</dt>
+          <dd><b>{int(tag.domains.length)}</b></dd>
+          <span className={`tg-dsub${tag.offSender ? " tg-gap" : ""}`}>
+            {tag.pool ? `${int(pool.filter((d) => freeState(d).ready).length)} warmed up` : tag.offSender ? `${int(tag.offSender)} off-sender` : "Senders match"}
+          </span>
+        </div>
+        <div className="tg-dkpi">
+          <dt>Inboxes</dt>
+          <dd><b>{int(tag.connected)}</b></dd>
+          <span className={`tg-dsub${tag.disconnected ? " tg-disc" : ""}`}>{tag.disconnected ? `${int(tag.disconnected)} disconnected` : "All connected"}</span>
+        </div>
+        <div className="tg-dkpi">
+          <dt>Reputation</dt>
+          <dd><b><Rep value={tag.rep} /></b></dd>
+          <span className="tg-dsub">{int(tag.sentToday)} sent today</span>
+        </div>
+      </dl>
 
       <div className="tg-bar-row">
         <div className="seg" role="group" aria-label="Domains on this tag or in the pool">
@@ -384,8 +455,8 @@ function TagDetail({ tag, tags, pool, campaignName, blocked, onClose }: {
 
       <div className="table-scroll tg-sub-table">
         {pane === "on" ? (
-          <table className="data-table is-fixed" style={{ width: tableWidth(onW, ON_COLS.map((c) => c.key), CHECK_W) }}>
-            <colgroup><col style={{ width: CHECK_W }} />{ON_COLS.map((c) => <col key={c.key} style={{ width: onW.width(c.key) }} />)}</colgroup>
+          <table className="data-table is-fixed" style={fillStyle(onW, ON_COLS.map((c) => c.key), "domain", 170, CHECK_W)}>
+            <colgroup><col style={{ width: CHECK_W }} />{ON_COLS.map((c) => <col key={c.key} style={{ width: colWidth(onW, c.key, "domain") }} />)}</colgroup>
             <thead>
               <tr>
                 <th className="col-check">
@@ -414,8 +485,8 @@ function TagDetail({ tag, tags, pool, campaignName, blocked, onClose }: {
             </tbody>
           </table>
         ) : (
-          <table className="data-table is-fixed" style={{ width: tableWidth(poolW, POOL_COLS.map((c) => c.key), CHECK_W) }}>
-            <colgroup><col style={{ width: CHECK_W }} />{POOL_COLS.map((c) => <col key={c.key} style={{ width: poolW.width(c.key) }} />)}</colgroup>
+          <table className="data-table is-fixed" style={fillStyle(poolW, POOL_COLS.map((c) => c.key), "domain", 170, CHECK_W)}>
+            <colgroup><col style={{ width: CHECK_W }} />{POOL_COLS.map((c) => <col key={c.key} style={{ width: colWidth(poolW, c.key, "domain") }} />)}</colgroup>
             <thead>
               <tr>
                 <th className="col-check" />

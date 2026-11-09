@@ -1944,15 +1944,25 @@ body.is-col-resizing { cursor: col-resize; user-select: none; }
 .tg-met { color: var(--success-ink); }
 .tg-gap { color: var(--warning-ink); }
 
-/* The list sizes to its columns; an open tag takes the rest of the row. */
-.tg-layout { display: flex; gap: 12px; align-items: flex-start; min-width: 0; }
-.tg-list { flex: none; max-width: 100%; }
-.tg-layout.has-detail .tg-list { max-width: 42%; }
+/* The list fills the page; with a tag open it becomes a fixed rail and both
+   panels run to the same height, each scrolling on its own. */
+.tg-layout { --tg-h: calc(100dvh - var(--tg-top, 132px)); display: grid; grid-template-columns: minmax(0, 1fr); align-items: start; gap: 12px; min-width: 0; }
+.tg-layout.has-detail { grid-template-columns: 340px minmax(0, 1fr); align-items: stretch; height: var(--tg-h); min-height: 440px; }
+.tg-list { min-width: 0; min-height: 0; max-height: var(--tg-h); display: flex; flex-direction: column; }
+.tg-list > .table-scroll { flex: 1; min-height: 0; overflow: auto; }
+.tg-layout.has-detail .tg-list { max-height: none; }
+.tg-kpistrip { flex: none; }
+.tg-prog { display: flex; align-items: center; gap: 10px; min-width: 0; color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
+.tg-prog .tg-bar { flex: 1; width: auto; max-width: 420px; height: 6px; border-radius: 3px; }
+.tg-prog > span:last-child { min-width: 36px; text-align: right; }
+.tg-name-cell { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.tg-off { display: inline-flex; align-items: center; gap: 2px; flex: none; color: var(--warning-ink); font-size: 11.5px; font-variant-numeric: tabular-nums; }
 .tg-table tbody tr[data-selected="true"] td { background: var(--row-selected); }
 /* No checkbox column here, so the sticky first column sits at the edge. */
 .data-table.is-fixed.is-main.tg-table td.col-first { left: 0; }
 .tg-table tbody td { height: 34px; }
-.tg-table .tg-group td { height: 28px; background: var(--surface-2); color: var(--muted); font-size: 12px; font-weight: 500; letter-spacing: .01em; }
+.tg-table .tg-group td { height: 28px; background: var(--surface-2); color: var(--ink-soft); font-size: 12px; font-weight: 600; letter-spacing: .01em; }
+.tg-table .tg-group td span { color: var(--muted); font-weight: 400; }
 .tg-sender-cell { display: flex; align-items: center; gap: 6px; min-width: 0; }
 .tg-sender-cell .badge { flex: none; }
 .tg-vol { display: inline-flex; flex-direction: column; align-items: flex-end; gap: 3px; }
@@ -1962,17 +1972,31 @@ body.is-col-resizing { cursor: col-resize; user-select: none; }
 .tg-target-in { width: 100%; height: 24px; padding: 0 6px; text-align: right; font-variant-numeric: tabular-nums; background: transparent; border-color: transparent; }
 .tg-table tr:hover .tg-target-in, .tg-target-in:focus { background: var(--surface); border-color: var(--line-strong); }
 .tg-target-in::placeholder { color: var(--faint); }
+.tg-target-in.is-tile { width: 132px; height: 30px; margin-left: -7px; padding: 0 6px; text-align: left; font-size: 19px; font-weight: 600; letter-spacing: -.02em; color: var(--ink); }
+.tg-target-in.is-tile::placeholder { font-size: 13px; font-weight: 400; letter-spacing: 0; }
+.tg-dkpi:hover .tg-target-in.is-tile { background: var(--surface); border-color: var(--line-strong); }
 
-/* An open tag */
-.tg-detail { flex: 1; min-width: 0; display: flex; flex-direction: column; max-height: calc(100dvh - 190px); }
-.tg-dhead { display: flex; align-items: flex-start; gap: 12px; padding: 10px 12px 8px 14px; border-bottom: 1px solid var(--line); }
-.tg-dtitle { display: flex; align-items: baseline; gap: 8px; min-width: 0; flex-wrap: wrap; }
-.tg-dname { font-size: 15px; font-weight: 600; color: var(--ink); }
-.tg-dsender { color: var(--muted); font-size: 12.5px; }
-.tg-dstats { margin-left: auto; display: flex; align-items: center; gap: 10px; flex-wrap: wrap; justify-content: flex-end; color: var(--muted); font-size: 12.5px; font-variant-numeric: tabular-nums; }
-.tg-dstats b { color: var(--ink); font-size: 14px; font-weight: 600; }
-.tg-dstats .tg-bar { width: 96px; height: 5px; }
-.tg-bar-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 8px 12px; }
+/* An open tag: a title row, a band of numbers, the actions, then its domains. */
+.tg-detail { min-width: 0; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
+.tg-dhead { display: flex; align-items: center; gap: 12px; padding: 12px 12px 10px 16px; }
+.tg-dtitle { display: flex; align-items: center; gap: 10px; min-width: 0; flex: 1; }
+.tg-dname { font-size: 17px; font-weight: 600; letter-spacing: -.015em; color: var(--ink); white-space: nowrap; }
+.tg-pill { display: inline-flex; align-items: center; gap: 5px; height: 22px; padding: 0 9px 0 7px; border-radius: 999px; background: var(--surface-2); box-shadow: inset 0 0 0 1px var(--line); color: var(--ink-soft); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.tg-pill svg { flex: none; color: var(--muted); }
+.tg-dkpis { display: grid; grid-template-columns: minmax(0, 1.7fr) repeat(4, minmax(0, 1fr)); margin: 0 14px; border-radius: 10px; background: var(--surface-2); box-shadow: inset 0 0 0 1px var(--line); }
+.tg-dkpis.is-pool { grid-template-columns: minmax(0, 1.7fr) repeat(3, minmax(0, 1fr)); }
+.tg-dkpi { display: flex; flex-direction: column; gap: 2px; min-width: 0; padding: 10px 14px; }
+.tg-dkpi + .tg-dkpi { border-left: 1px solid var(--line); }
+.tg-dkpi dt { color: var(--muted); font-size: 11.5px; letter-spacing: .01em; }
+.tg-dkpi dd { margin: 0; display: flex; align-items: baseline; gap: 4px; height: 30px; line-height: 30px; color: var(--ink); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.tg-dkpi dd b { font-size: 19px; font-weight: 600; letter-spacing: -.02em; }
+.tg-of { color: var(--muted); font-size: 13px; }
+.tg-dsub { color: var(--faint); font-size: 11.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-variant-numeric: tabular-nums; }
+.tg-dsub.tg-gap { color: var(--warning-ink); }
+.tg-dsub.tg-disc { color: var(--danger-ink); }
+.tg-dprog { display: flex; align-items: center; gap: 10px; font-size: 11.5px; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.tg-dprog .tg-bar { flex: 1; max-width: 220px; width: auto; height: 5px; }
+.tg-bar-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 10px 14px; }
 .tg-chip { display: inline-flex; align-items: center; gap: 5px; height: 26px; padding: 0 9px; border-radius: 999px; border: 1px solid var(--warning-line); background: var(--warning-soft); color: var(--warning-ink); font-size: 12px; cursor: pointer; }
 .tg-chip.is-on { background: var(--warning-solid); border-color: var(--warning-solid); color: #fff; }
 .tg-sel { color: var(--muted); font-size: 12.5px; font-variant-numeric: tabular-nums; }
@@ -1983,7 +2007,7 @@ body.is-col-resizing { cursor: col-resize; user-select: none; }
 .tg-camps { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 12px; padding: 0 12px 8px; font-size: 12px; color: var(--ink-soft); }
 .tg-camps-label { color: var(--muted); }
 .tg-camp { display: inline-flex; align-items: center; gap: 5px; max-width: 240px; }
-.tg-sub-table { border-top: 1px solid var(--line); overflow: auto; min-height: 160px; }
+.tg-sub-table { flex: 1; border-top: 1px solid var(--line); overflow: auto; min-height: 160px; }
 .tg-sub-table tbody td { height: 32px; }
 .tg-state { display: flex; align-items: center; gap: 5px; min-width: 0; overflow: hidden; }
 .tg-state .badge, .data-table.is-fixed .tg-state .status-dot { flex: none; }
@@ -2005,4 +2029,9 @@ body.is-col-resizing { cursor: col-resize; user-select: none; }
 .tg-fill-dom em { font-style: normal; color: var(--success-ink); }
 .tg-fill-dom.is-other { border-style: dashed; }
 .tg-fill-camps { padding-left: 24px; font-size: 12px; }
-@media (max-width: 900px) { .tg-layout { flex-direction: column; } .tg-layout.has-detail .tg-list { max-width: 100%; } }
+@media (max-width: 1100px) { .tg-dkpis { grid-template-columns: repeat(4, minmax(0, 1fr)); } .tg-dkpis.is-pool { grid-template-columns: repeat(3, minmax(0, 1fr)); } .tg-dkpi.is-wide { grid-column: 1 / -1; } .tg-dkpi:nth-child(2) { border-left: 0; } .tg-dkpi.is-wide { border-bottom: 1px solid var(--line); } }
+@media (max-width: 900px) {
+  .tg-layout.has-detail { grid-template-columns: minmax(0, 1fr); height: auto; }
+  .tg-layout.has-detail .tg-list { max-height: 320px; }
+  .tg-detail { max-height: none; }
+}
