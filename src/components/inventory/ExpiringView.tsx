@@ -19,7 +19,8 @@ import { Select } from "@/components/Select";
 // What's running out among the domains in use: how long is left, whether the
 // registrar will renew it, what's riding on it, and whether a swap has started.
 
-type Window = (typeof EXPIRY_WINDOWS)[number] | "none";
+// "expired" lists only the ones already past their date; every window includes them too.
+type Window = (typeof EXPIRY_WINDOWS)[number] | "none" | "expired";
 const USE: Partial<Record<DomainRow["status"], { label: string; tone: "success" | "info" }>> = {
   active: { label: "Active", tone: "success" },
   warming: { label: "Warming", tone: "info" },
@@ -27,6 +28,7 @@ const USE: Partial<Record<DomainRow["status"], { label: string; tone: "success" 
 };
 const money = (cents: number) => `$${(cents / 100).toLocaleString("en-US", { maximumFractionDigits: 0 })}`;
 const vendorText = (d: DomainRow) => htOf(d) ? `Hypertide · ${htOf(d)?.label}` : d.icemailMailboxes ? `Icemail · ${int(d.icemailMailboxes)}` : null;
+const isExpired = (d: DomainRow) => d.daysToExpiry !== null && d.daysToExpiry < 0;
 const accountKey = (d: DomainRow) => `${d.registrar ?? "No registrar"}${d.registrarAccount ? ` · ${d.registrarAccount}` : ""}`;
 
 type SortKey = "name" | "expires" | "renew" | "use" | "client" | "inboxes" | "capacity" | "vendor" | "replacement" | "registrar" | "account" | "cost";
@@ -92,7 +94,7 @@ export function ExpiringView({ domains, free }: { domains: DomainRow[]; free: nu
   }, [domains, client, account, renew, q]);
 
   const rows = useMemo(() => filteredRows
-    .filter((d) => (within === "none" ? d.daysToExpiry === null : isWithin(d, within)))
+    .filter((d) => (within === "none" ? d.daysToExpiry === null : within === "expired" ? isExpired(d) : isWithin(d, within)))
     .sort((a, b) => {
       const x = sortValue(a, sort.key), y = sortValue(b, sort.key);
       if (x === y) return a.name.localeCompare(b.name);
@@ -102,12 +104,13 @@ export function ExpiringView({ domains, free }: { domains: DomainRow[]; free: nu
     }), [filteredRows, within, sort]);
 
   const noDate = filteredRows.filter((d) => d.daysToExpiry === null).length;
+  const expiredCount = filteredRows.filter(isExpired).length;
   const stats = useMemo(() => {
     const dated = rows.filter((d) => d.daysToExpiry !== null);
     const expired = dated.filter((d) => (d.daysToExpiry as number) < 0);
     return {
       // The first number is what's listed: with no date, that's all of them.
-      upcoming: rows.length - expired.length,
+      upcoming: within === "expired" ? rows.length : rows.length - expired.length,
       expired: expired.length,
       action: dated.filter(needsAction).length,
       inboxes: rows.reduce((a, d) => a + d.inboxCount, 0),
@@ -115,7 +118,7 @@ export function ExpiringView({ domains, free }: { domains: DomainRow[]; free: nu
       replacing: rows.filter((d) => d.replacedById).length,
       cost: rows.reduce((a, d) => a + (d.costCents ?? 0), 0),
     };
-  }, [rows]);
+  }, [rows, within]);
 
   const selectedRows = useMemo(() => domains.filter((d) => selected.has(d.id)), [domains, selected]);
   const replaceable = selectedRows.filter((d) => canReplace(d.status, d.beingReplaced));
@@ -125,7 +128,7 @@ export function ExpiringView({ domains, free }: { domains: DomainRow[]; free: nu
   const pick = useRangeSelect(rowIds, setSelected);
   const sortBy = (key: SortKey) => setSort((s) => (s.key === key ? { key, dir: (s.dir * -1) as 1 | -1 } : { key, dir: 1 }));
   const filtered = !!(q || client || account || renew);
-  const windowName = within === "none" ? "No renewal date" : `Next ${within} days`;
+  const windowName = within === "none" ? "No renewal date" : within === "expired" ? "Expired, still in use" : `Next ${within} days`;
 
   const exportCsv = () => {
     const list = selectedRows.length ? selectedRows : rows;
@@ -165,6 +168,11 @@ export function ExpiringView({ domains, free }: { domains: DomainRow[]; free: nu
       <div className="flex flex-col gap-3">
         <div className="free-bar">
           <div className="tld-chips" role="group" aria-label="How far ahead to look">
+            {expiredCount || within === "expired" ? (
+              <button type="button" className="tld-chip is-danger" aria-pressed={within === "expired"} title="Only the domains already past their date at the registrar and still in use: select them all and replace them in one go" onClick={() => setWithin("expired")}>
+                Expired <span>{int(expiredCount)}</span>
+              </button>
+            ) : null}
             {EXPIRY_WINDOWS.map((w) => (
               <button key={w} type="button" className="tld-chip" aria-pressed={within === w} title={`Expired, or expiring within ${w} days`} onClick={() => setWithin(w)}>
                 {w} days <span>{int(filteredRows.filter((d) => isWithin(d, w)).length)}</span>
@@ -269,7 +277,7 @@ export function ExpiringView({ domains, free }: { domains: DomainRow[]; free: nu
               </tbody>
             </table>
             {rows.length === 0 ? (
-              <Empty icon={CalendarCheck} title={filtered ? "No domains match" : within === "none" ? "Every domain in use has a date" : `Nothing expires in the next ${within} days`}>
+              <Empty icon={CalendarCheck} title={filtered ? "No domains match" : within === "none" ? "Every domain in use has a date" : within === "expired" ? "Nothing in use has expired" : `Nothing expires in the next ${within} days`}>
                 {filtered ? "Try a longer window or clear the filters." : "Domains in use show up here as they get close."}
               </Empty>
             ) : null}

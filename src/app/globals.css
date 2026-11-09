@@ -1828,6 +1828,9 @@ a.kpi:hover { border-color: var(--accent-line, var(--line-strong)); }
 .tld-chip:hover { background: var(--surface-2); }
 .tld-chip[aria-pressed="true"] { border-color: var(--ink); background: var(--ink); color: var(--surface); }
 .tld-chip[aria-pressed="true"] > span { color: inherit; opacity: .7; }
+/* Expiring: the Expired chip reads as urgent until it's picked */
+.tld-chip.is-danger:not([aria-pressed="true"]) { border-color: var(--danger-line, var(--line)); color: var(--danger-ink); }
+.tld-chip.is-danger:not([aria-pressed="true"]) > span { color: var(--danger-ink); opacity: .8; }
 
 /* Column resizing: a handle on each header's right edge. */
 /* Inside its own header: a neighbouring sticky header would paint over anything that pokes out. */
