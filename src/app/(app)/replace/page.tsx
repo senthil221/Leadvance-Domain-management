@@ -10,7 +10,7 @@ export const metadata: Metadata = { title: "Replace list" };
 export default function ReplacePage() {
   return (
     <>
-      <PageHead title="Replace list" sub="The sending domains worth replacing this week, with the numbers behind each call" />
+      <PageHead title="Replace list" sub="Which sending domains to replace, from the last 7 days up to today. Check it any day" />
       <div className="page-body">
         <Suspense fallback={<TableSkeleton rows={10} />}>
           <ReplaceData />
