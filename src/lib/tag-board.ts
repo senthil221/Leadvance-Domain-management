@@ -34,6 +34,10 @@ export type BoardTag = {
   connected: number; disconnected: number; volume: number; sentToday: number; rep: number | null;
   /** The sender name most of its inboxes use. */
   sender: string | null;
+  /** The client most of its domains belong to (null on the pool, or with no client yet). */
+  client: string | null;
+  /** Every client among its domains, most domains first. */
+  clients: { name: string; domains: number }[];
   /** Its domains with an inbox under another sender name. */
   offSender: number;
   /** What one connected inbox sends a day here, on average (the limit a domain moved here gets). */
@@ -100,6 +104,10 @@ export function buildTags(domains: BoardDomain[], targets: Record<string, number
     const volume = e.domains.reduce((a, d) => a + d.volume, 0);
     const sender = [...senders.entries()].filter(([n]) => n !== NO_SENDER).sort((a, b) => b[1] - a[1])[0]?.[0] ?? null;
     const pool = isPoolTag(key);
+    const byClient = new Map<string, number>();
+    for (const d of e.domains) if (d.clientName) byClient.set(d.clientName, (byClient.get(d.clientName) ?? 0) + 1);
+    const clients = [...byClient.entries()].map(([name, domains]) => ({ name, domains }))
+      .sort((a, b) => b.domains - a.domains || a.name.localeCompare(b.name));
     return {
       key, name: e.name, domains: e.domains, pool,
       connected,
@@ -108,6 +116,8 @@ export function buildTags(domains: BoardDomain[], targets: Record<string, number
       sentToday: e.domains.reduce((a, d) => a + d.sentToday, 0),
       rep: weight ? reps.reduce((a, d) => a + (d.rep ?? 0) * d.connected, 0) / weight : null,
       sender,
+      client: pool ? null : clients[0]?.name ?? null,
+      clients,
       // The pool has no one sender: every domain in it keeps its own.
       offSender: pool ? 0 : e.domains.filter((d) => senderOff(d, sender)).length,
       perInbox: connected && volume ? Math.round(volume / connected) : null,

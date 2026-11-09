@@ -7,6 +7,7 @@ import { Fragment, useLayoutEffect, useMemo, useRef, useState, useTransition, ty
 import { toast } from "sonner";
 import { addDomainsToTag, removeDomainsFromTag, saveTagTarget } from "@/app/actions";
 import { ColumnsMenu, useColumns, type ColumnDef } from "@/components/Columns";
+import { Select } from "@/components/Select";
 import { ColResizer, useColumnWidths } from "@/components/table-tools";
 import { Empty, Rep, StatusDot } from "@/components/ui";
 import { int } from "@/lib/format";
@@ -20,9 +21,10 @@ type Result = { ok: true; data: { message: string } } | { ok: false; error: stri
 type Widths = ReturnType<typeof useColumnWidths>;
 
 // ── Tag list columns ────────────────────────────────────────────────────────
-type TagCol = "tag" | "sender" | "domains" | "inboxes" | "volume" | "target" | "gap" | "progress" | "sent" | "rep";
+type TagCol = "tag" | "client" | "sender" | "domains" | "inboxes" | "volume" | "target" | "gap" | "progress" | "sent" | "rep";
 const TAG_COLS: (ColumnDef<TagCol> & { width: number; num?: boolean; title?: string })[] = [
   { key: "tag", label: "Tag", locked: true, width: 170 },
+  { key: "client", label: "Client", width: 130, title: "The client most of its domains belong to" },
   { key: "sender", label: "Sender", width: 190, title: "The sender name most of its inboxes use; the badge counts domains with an inbox under another name" },
   { key: "domains", label: "Domains", width: 78, num: true },
   { key: "inboxes", label: "Inboxes", width: 84, num: true, title: "Connected inboxes, and disconnected ones in red" },
@@ -139,13 +141,13 @@ export function TagsView({ domains, campaigns, targets, dryRun, appProblem }: {
   const tags = useMemo(() => buildTags(domains, targets), [domains, targets]);
   const pool = useMemo(() => domains.filter((d) => freeState(d).free), [domains]);
   const poolReady = useMemo(() => pool.filter((d) => freeState(d).ready), [pool]);
-  const plan = useMemo(() => fillPlan(tags, pool), [tags, pool]);
   const campaignName = useMemo(() => new Map(campaigns.map((c) => [c.id, c.name])), [campaigns]);
   const cols = useColumns<TagCol>("tags", TAG_COLS);
   const widths = useColumnWidths("tags", TAG_WIDTHS);
   const [q, setQ] = useState("");
   const params = useSearchParams();
   const [picked, setPicked] = useState<string | null>(() => params.get("tag"));
+  const [client, setClient] = useState(() => params.get("client") ?? "");
   const tag = tags.find((t) => t.key === picked) ?? null;
   const [newTag, setNewTag] = useState<string | null>(null);
   const [fillOpen, setFillOpen] = useState(false);
@@ -162,17 +164,23 @@ export function TagsView({ domains, campaigns, targets, dryRun, appProblem }: {
     return () => window.removeEventListener("resize", set);
   }, [dryRun, appProblem]);
 
-  const pick = (key: string | null) => {
-    setPicked(key);
+  const setParam = (name: string, value: string | null) => {
     const p = new URLSearchParams(window.location.search);
-    if (key) p.set("tag", key); else p.delete("tag");
+    if (value) p.set(name, value); else p.delete(name);
     window.history.replaceState(null, "", p.toString() ? `?${p}` : window.location.pathname);
   };
+  const pick = (key: string | null) => { setPicked(key); setParam("tag", key); };
+  const pickClient = (name: string) => { setClient(name); setParam("client", name || null); };
 
+  // The client filter keeps that client's tags (and tags with no domains yet, which have no client) plus the pool.
+  const clientNames = useMemo(() => [...new Set(tags.flatMap((t) => (t.client ? [t.client] : [])))].sort((a, b) => a.localeCompare(b)), [tags]);
+  const forClient = (t: BoardTag) => t.pool || !client || t.client === client || (!t.domains.length && !t.client);
+  const inScope = tags.filter(forClient);
+  const plan = fillPlan(inScope, pool);
   const needle = normTag(q);
-  const shown = tags.filter((t) => !needle || t.key.includes(needle) || normTag(t.sender ?? "").includes(needle)
-    || t.domains.some((d) => d.name.includes(needle)));
-  const clientTags = tags.filter((t) => !t.pool);
+  const shown = tags.filter((t) => forClient(t) && (!needle || t.key.includes(needle) || normTag(t.sender ?? "").includes(needle)
+    || normTag(t.client ?? "").includes(needle) || t.domains.some((d) => d.name.includes(needle))));
+  const clientTags = inScope.filter((t) => !t.pool);
   const total = clientTags.reduce((a, t) => a + t.volume, 0);
   const offTotal = clientTags.reduce((a, t) => a + t.offSender, 0);
   const targetTotal = clientTags.reduce((a, t) => a + (t.target ?? 0), 0);
@@ -200,6 +208,12 @@ export function TagsView({ domains, campaigns, targets, dryRun, appProblem }: {
           {tag && t.offSender ? <span className="tg-off" title={`${t.offSender} domains with an inbox under another sender name`}><TriangleAlert size={11} />{t.offSender}</span> : null}
         </span>
       );
+      case "client": return t.pool ? <span className="zero">—</span> : t.client ? (
+        <span className="tg-sender-cell" title={t.clients.map((c) => `${c.name}: ${c.domains} domain${c.domains === 1 ? "" : "s"}`).join("\n")}>
+          <span className="tg-clip">{t.client}</span>
+          {t.clients.length > 1 ? <span className="tg-also">+{t.clients.length - 1}</span> : null}
+        </span>
+      ) : <span className="zero">—</span>;
       case "sender": return t.pool ? <span className="zero">Each its own</span> : (
         <span className="tg-sender-cell">
           <span className="tg-clip">{t.sender ?? <span className="zero">—</span>}</span>
@@ -241,8 +255,13 @@ export function TagsView({ domains, campaigns, targets, dryRun, appProblem }: {
           <Search size={14} strokeWidth={1.5} />
           <input className="input" value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search tags, senders or domains" aria-label="Search tags" />
         </label>
+        <Select className="select tg-client" style={{ width: 150 }} value={client} onChange={(e) => pickClient(e.target.value)} aria-label="Filter by client"
+          title="Only this client's tags; the totals and Fill to targets follow">
+          <option value="">All clients</option>
+          {clientNames.map((c) => <option key={c} value={c}>{c}</option>)}
+        </Select>
         <dl className="inb-kpis tg-kpistrip" aria-label="Tag numbers">
-          <div className="inb-kpi" title="Client tags (Free and warmup are the pool)"><dt>Tags</dt><dd>{int(clientTags.length)}</dd></div>
+          <div className="inb-kpi" title={client ? `${client}'s tags` : "Client tags (Free and warmup are the pool)"}><dt>Tags</dt><dd>{int(clientTags.length)}</dd></div>
           <div className="inb-kpi" title={targetTotal ? `${int(total)} of the ${int(targetTotal)} a day the targets add up to` : "Campaign emails a day across client tags"}>
             <dt>Volume / day</dt><dd>{int(total)}</dd>{targetTotal ? <span>of {int(targetTotal)}</span> : null}
           </div>

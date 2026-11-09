@@ -26,6 +26,22 @@ describe("tag board", () => {
     expect(tags.some((t) => t.key === "replaced" || t.key === "new")).toBe(false);
   });
 
+  it("gives each tag the client most of its domains belong to, and none to the pool", () => {
+    const tags = buildTags([
+      dom("a.com", { tags: ["1-Qualifi"], clientName: "Qualifi" }),
+      dom("b.com", { tags: ["1-Qualifi"], clientName: "Qualifi" }),
+      dom("c.com", { tags: ["1-Qualifi"], clientName: "Westshore" }),
+      dom("d.com", { tags: ["Free"], clientName: "Qualifi" }),
+      dom("e.com", { tags: ["Unassigned"] }),
+    ], { kapable: 50 });
+    const q = tags.find((t) => t.key === "1-qualifi")!;
+    expect(q.client).toBe("Qualifi");
+    expect(q.clients).toEqual([{ name: "Qualifi", domains: 2 }, { name: "Westshore", domains: 1 }]);
+    expect(tags.find((t) => t.key === "free")?.client).toBeNull();
+    expect(tags.find((t) => t.key === "unassigned")?.client).toBeNull();
+    expect(tags.find((t) => t.key === "kapable")).toMatchObject({ client: null, clients: [] });
+  });
+
   it("puts a domain in the pool when it's tagged Free or warmup and nothing else, connected and not being replaced", () => {
     expect(freeState(dom("a.com", { tags: ["Free"] }))).toEqual({ free: true, ready: true });
     expect(freeState(dom("a.com", { tags: ["warmup", "New"] })).free).toBe(true);
