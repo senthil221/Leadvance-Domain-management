@@ -100,7 +100,7 @@ export const SIGNAL_META: Record<Signal, { label: string; hint: string; strike?:
   nosend: { label: "Not sending", hint: `Nothing sent for ${RULES.idleDays}+ sending days in a row. Weekends count only for clients that send on them, and today only once it's over` },
   spam: { label: "Spam", hint: `Spam rejections: at least ${RULES.watchSpam} and ${RULES.watchSpamRate}% of sent`, strike: true },
   rising: { label: "Spam rising", hint: "Spam share at least doubled since the same days before" },
-  blocklist: { label: "Blocklisted", hint: `On a blocklist in Smartlead's scan, or ${RULES.restBlocklist}+ blocklist bounces`, strike: true },
+  blocklist: { label: "Blocklist", hint: `On a blocklist in Smartlead's scan (Blocklisted), or ${RULES.restBlocklist}+ bounces that name one (Blocklist bounces: often a shared sending IP or a link in the copy, not the domain)`, strike: true },
   lowrep: { label: "Low rep", hint: `Average warmup reputation under ${RULES.lowRep}. On its own it isn't a reason to replace: it didn't predict replies in this agency's data` },
   quiet: { label: "No reply", hint: `No reply of any kind (out of office included) for ${RULES.quietDays}+ days with ${RULES.quietSent}+ sent since. Worth a look, not a reason to replace on its own` },
   silent: { label: "No response", hint: `${RULES.silentSent}+ sent in the range and not one reply, not even an out of office: the mail is likely landing in spam`, strike: true },
@@ -205,9 +205,9 @@ export function judge(d: ReviewDomain): Judged {
     add("spam", `Spam ${p(rate)}`, heavySpam ? "danger" : "warning", `${n(spam)} spam/blocklist rejections, ${p(rate)} of ${n(d.sent)} sent`);
   }
   if (worse) add("rising", `Spam ↑ from ${p(prevRate)}`, "warning", `up from ${p(prevRate)}`);
-  if (d.blacklisted || (c.blocklist ?? 0) >= RULES.restBlocklist) {
-    add("blocklist", "Blocklisted", "danger", d.blacklisted ? `on ${s(d.blacklisted, "blocklist")}` : `${n(c.blocklist ?? 0)} blocklist bounces`);
-  }
+  // On a blocklist, or only bounces that name one: not the same thing, so not the same tag.
+  if (d.blacklisted) add("blocklist", "Blocklisted", "danger", `on ${s(d.blacklisted, "blocklist")}`);
+  else if ((c.blocklist ?? 0) >= RULES.restBlocklist) add("blocklist", `Blocklist bounces ${n(c.blocklist ?? 0)}`, "warning", `${n(c.blocklist ?? 0)} blocklist bounces`);
   if (d.rep != null && d.rep < RULES.lowRep) {
     add("lowrep", `Rep ${d.rep.toFixed(0)}`, d.rep < RULES.lowRep - 5 ? "danger" : "warning",
       `warmup reputation ${d.rep.toFixed(1)}${d.lowRepInboxes ? ` (${s(d.lowRepInboxes, "inbox", "inboxes")} under ${RULES.lowRep})` : ""}`);

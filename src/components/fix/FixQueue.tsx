@@ -153,7 +153,7 @@ export function FixQueue({ data, startClient = "", startKind = null }: { data: F
                   {snoozed.map((i) => (
                     <tr key={`${i.name}|${i.top.kind}`}>
                       <td><DomainLink id={i.domainId} className="hover:underline">{i.name}</DomainLink></td>
-                      <td>{FIX_META[i.top.kind].label}</td>
+                      <td>{i.top.label}</td>
                       <td className="fx-evidence">{i.top.evidence}</td>
                       <td className="num">{new Date(i.until).toLocaleDateString("en-GB", { day: "numeric", month: "short" })}</td>
                       <td className="is-num">
@@ -187,11 +187,11 @@ export function FixQueue({ data, startClient = "", startKind = null }: { data: F
                           </span>
                         </td>
                         <td className="fx-problem">
-                          <b>{FIX_META[i.top.kind].label}</b>
+                          <b>{i.top.label}</b>
                           <span className="fx-evidence">{i.top.evidence}</span>
                           {i.problems.length > 1 ? (
                             <span className="fx-also">
-                              {i.problems.slice(1).map((p) => <span key={p.kind} className="fx-chip" title={`${p.evidence}. ${p.next}.`}>{FIX_META[p.kind].label}</span>)}
+                              {i.problems.slice(1).map((p) => <span key={p.kind} className="fx-chip" title={`${p.evidence}. ${p.next}.`}>{p.label}</span>)}
                             </span>
                           ) : null}
                         </td>
@@ -200,7 +200,7 @@ export function FixQueue({ data, startClient = "", startKind = null }: { data: F
                           {i.risk ? <><span className="num">{int(i.risk)}</span><span className="fx-risk-track" aria-hidden="true"><span style={{ width: `${(100 * i.risk) / maxRisk}%` }} /></span></> : <span className="zero" title="Nothing sending through it, but you're paying for it">Unused</span>}
                         </td>
                         <td className="fx-snooze">
-                          <Select className="select" aria-label={`Snooze ${FIX_META[i.top.kind].label} on ${i.name}`} value="" disabled={busy} onChange={(e) => { if (e.target.value) snooze([{ name: i.name, kind: i.top.kind }], Number(e.target.value)); }}>
+                          <Select className="select" aria-label={`Snooze ${i.top.label} on ${i.name}`} value="" disabled={busy} onChange={(e) => { if (e.target.value) snooze([{ name: i.name, kind: i.top.kind }], Number(e.target.value)); }}>
                             <option value="">Snooze</option>
                             {SNOOZE_DAYS.map((d) => <option key={d} value={d}>{d} day{d === 1 ? "" : "s"}</option>)}
                           </Select>

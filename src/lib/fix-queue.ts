@@ -25,7 +25,7 @@ export const FIX_META: Record<FixKind, { label: string; hint: string }> = {
   expiring: { label: "Expiring", hint: "The registration runs out soon, and auto-renew isn't confirmed on" },
   grace_ending: { label: "Grace ending", hint: "The provider takes these inboxes down soon" },
   paid_unused: { label: "Paid, not connected", hint: "The order is live, but Smartlead has no inboxes for it" },
-  blocklisted: { label: "Block listed", hint: `On a block list, or ${RULES.restBlocklist}+ block list bounces in 7 days` },
+  blocklisted: { label: "Block list", hint: `On a block list, or ${RULES.restBlocklist}+ bounces in 7 days that name one` },
   spam: { label: "Spam rejections", hint: `${RULES.restSpam}+ spam rejections and ${RULES.restSpamRate}%+ of sent, in 7 days` },
   silent: { label: "No replies at all", hint: `${RULES.silentSent}+ sent in 7 days and not one reply, not even an out of office` },
   low_rep: { label: "Low reputation", hint: `Warm-up reputation under ${RULES.lowRep}` },
@@ -48,6 +48,7 @@ export type FixFact = {
 
 export type FixProblem = {
   kind: FixKind; tier: FixTier;
+  /** What to call it. The kind's own name, unless one kind covers two different things. */ label: string;
   /** What was seen. */ evidence: string;
   /** What to do. */ next: string;
   /** Emails a day that depend on this being fixed. */ risk: number;
@@ -71,7 +72,7 @@ const END_WORDS: Partial<Record<Standing, string>> = {
 /** Every problem on one domain, worst first. Nothing for a domain that's meant to be going away, unless it's still sending. */
 export function problemsOf(f: FixFact): FixProblem[] {
   const out: FixProblem[] = [];
-  const add = (kind: FixKind, tier: FixTier, evidence: string, next: string, risk: number) => out.push({ kind, tier, evidence, next, risk: Math.round(risk) });
+  const add = (kind: FixKind, tier: FixTier, evidence: string, next: string, risk: number, label = FIX_META[kind].label) => out.push({ kind, tier, label, evidence, next, risk: Math.round(risk) });
   const perDay = f.daysSent ? f.sent7 / f.daysSent : 0;
   const volume = perDay || f.capacity;
   const sendingNow = f.connected > 0 && f.sent7 > 0 && f.daysSinceSent != null && f.daysSinceSent <= 2;
@@ -122,7 +123,9 @@ export function problemsOf(f: FixFact): FixProblem[] {
   }
   if (f.listed > 0 || f.blockBounces >= RULES.restBlocklist) {
     const said = [f.listed ? `On ${plural(f.listed, "block list")}` : "", f.blockBounces >= RULES.restBlocklist ? `${plural(f.blockBounces, "block list bounce")} in 7 days` : ""].filter(Boolean).join("; ");
-    add("blocklisted", "soon", said, "Rest it, check the listing, and check the links in the copy", volume);
+    // Being on a block list and a few bounces that name one aren't the same thing: the bounces are often a shared sending IP or a link in the copy.
+    if (f.listed) add("blocklisted", "soon", said, "Rest it, check the listing, and check the links in the copy", volume, "Block listed");
+    else add("blocklisted", "soon", said, "Check the links in the copy and which list the bounces name. The Replace list says whether the domain itself should go", volume, "Block list bounces");
   }
   const spamRate = f.sent7 ? (100 * f.spamBounces) / f.sent7 : 0;
   if (f.spamBounces >= RULES.restSpam && spamRate >= RULES.restSpamRate) {
@@ -187,8 +190,8 @@ export function fixCsv(items: FixItem[]) {
   const esc = (v: string | number | null) => { const s = v == null ? "" : String(v); return /^[=+\-@]/.test(s) ? `'${s}` : /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s; };
   const head = ["Domain", "Client", "Provider", "When", "Problem", "What was seen", "Next step", "Emails a day at risk", "Other problems"];
   return [head.join(","), ...items.map((i) => [
-    i.name, i.clientName, i.provider, TIER_META[i.tier].label, FIX_META[i.top.kind].label, i.top.evidence, i.top.next, i.risk,
-    i.problems.slice(1).map((p) => FIX_META[p.kind].label).join("; "),
+    i.name, i.clientName, i.provider, TIER_META[i.tier].label, i.top.label, i.top.evidence, i.top.next, i.risk,
+    i.problems.slice(1).map((p) => p.label).join("; "),
   ].map(esc).join(","))].join("\n");
 }
 

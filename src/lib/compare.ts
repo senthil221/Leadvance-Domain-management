@@ -303,8 +303,8 @@ const CAUSE_FINDINGS: { cause: BounceReason; title: (n: number, m: number) => st
   {
     cause: "blocklist",
     title: (n, m) => `${int2(n)} bounces across ${int2(m)} domains name a block list`,
-    verdict: "The domain, its IP or a link in the email is listed, so more volume only makes it worse.",
-    action: "Rest these domains, check the listing, and check the links in the copy.",
+    verdict: "A link in the email, a sending IP or the domain itself is listed. A link or a shared IP hits many domains at once.",
+    action: "Check the links in the copy and which list the bounces name. The Replace list shows which of these domains are worse than the others on their tag.",
   },
 ];
 

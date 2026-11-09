@@ -4,7 +4,7 @@
 
 import { z } from "zod";
 import { MIN_SENT, zScore } from "./compare";
-import { fixQueue, FIX_META, problemsOf, type FixFact } from "./fix-queue";
+import { fixQueue, problemsOf, type FixFact } from "./fix-queue";
 import { RULES } from "./review";
 
 export const VERDICT_KEYS = ["healthy", "watch", "underperforming", "failing", "not_enough_data"] as const;
@@ -149,7 +149,7 @@ export function buildFacts(input: DiagnosisInput, fact: FixFact): DiagnosisFacts
       bouncesThisWeekVsBefore: gapBetween(weeks[0].bounces, weeks[0].sent, before.bounces, before.sent),
     },
     rules: {
-      problems: (queue?.problems ?? []).map((p) => `${FIX_META[p.kind].label}: ${p.evidence}`),
+      problems: (queue?.problems ?? []).map((p) => `${p.label}: ${p.evidence}`),
       replaceCall: input.replace?.call ?? null, replaceReasons: input.replace?.reasons ?? [],
     },
     statusChanges: input.changes,

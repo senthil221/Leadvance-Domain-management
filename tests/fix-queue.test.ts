@@ -88,6 +88,13 @@ describe("what counts as a problem", () => {
   it("flags block lists, heavy spam and total silence on real volume", () => {
     expect(kinds({ listed: 1 })).toEqual(["blocklisted"]);
     expect(kinds({ blockBounces: 5 })).toEqual(["blocklisted"]);
+    // On a block list and a few bounces that name one go by different names, with different next steps.
+    expect(problemsOf(fact({ listed: 1, blockBounces: 6 }))[0]).toMatchObject({ label: "Block listed", evidence: "On 1 block list; 6 block list bounces in 7 days" });
+    const bounced = problemsOf(fact({ blockBounces: 6 }))[0];
+    expect(bounced).toMatchObject({ label: "Block list bounces", evidence: "6 block list bounces in 7 days" });
+    expect(bounced.next).toContain("Replace list");
+    expect(problemsOf(fact({ nameserversAnswering: false }))[0].label).toBe("DNS down");
+    expect(fixCsv(fixQueue([fact({ blockBounces: 6, warmupOff: 1 })]).items).split("\n")[1]).toContain("Block list bounces,6 block list bounces in 7 days");
     expect(kinds({ blockBounces: 4 })).toEqual([]);
     expect(kinds({ spamBounces: 10, sent7: 500 })).toEqual(["spam"]);
     expect(kinds({ spamBounces: 10, sent7: 5000 })).toEqual([]);

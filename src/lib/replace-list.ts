@@ -1,5 +1,5 @@
 import { zScore } from "./compare";
-import { FIX_META, problemsOf, type FixFact, type FixKind } from "./fix-queue";
+import { problemsOf, type FixFact, type FixKind } from "./fix-queue";
 
 // Which sending domains to replace, from this week's numbers. A domain is
 // compared with the other domains on its own Smartlead tag (the same client,
@@ -217,16 +217,14 @@ export function replaceList(facts: FixFact[], stats: ReplaceStat[], passes: 1 | 
 
     const problems = problemsOf(f);
     const blocking = problems.filter((x) => BLOCKING.includes(x.kind) && x.tier !== "watch");
-    // The fix queue's "Block listed" also covers a handful of block list bounces. Here that would read as
-    // being on a block list, which is Replace now, so it's named for what it is.
-    const minor = problems.filter((x) => !blocking.includes(x) && !(x.kind === "blocklisted" && f.listed > 0))
-      .map((x) => (x.kind === "blocklisted" ? "Block list bounces" : FIX_META[x.kind].label));
+    // A listed domain is Replace now, and says so in its reasons already.
+    const minor = problems.filter((x) => !blocking.includes(x) && !(x.kind === "blocklisted" && f.listed > 0)).map((x) => x.label);
     const also = [...(badList && perf ? ["Bad list too"] : []), ...minor];
 
     if (f.listed > 0) {
       put("replace_now", [`On ${plural(f.listed, "block list")}`, ...(perf?.reasons ?? [])], "Replace it now, and check the links in the copy it was sending", also);
     } else if (perf && blocking.length) {
-      put("fix", [...blocking.map((x) => `${FIX_META[x.kind].label}: ${x.evidence}`), ...perf.reasons], `${blocking[0].next}. Then see whether its numbers recover`, also);
+      put("fix", [...blocking.map((x) => `${x.label}: ${x.evidence}`), ...perf.reasons], `${blocking[0].next}. Then see whether its numbers recover`, also);
     } else if (perf?.call === "replace") {
       put("replace", perf.reasons, "Replace it this week", also);
     } else if (perf) {

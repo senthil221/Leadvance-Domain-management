@@ -91,7 +91,7 @@ function FacetSelect({ label, all, items, value, onPick }: { label: string; all:
   );
 }
 
-/** The signals (Spam, Blocklisted, Low rep…) as a menu of checkboxes: a domain must have every one ticked. */
+/** The signals (Spam, Blocklist, Low rep…) as a menu of checkboxes: a domain must have every one ticked. */
 function SignalMenu({ counts, value, onToggle, onClear }: { counts: Map<Signal, number>; value: Set<Signal>; onToggle: (k: Signal) => void; onClear: () => void }) {
   const keys = SIGNAL_ORDER.filter((k) => counts.get(k) || value.has(k));
   const picked = SIGNAL_ORDER.filter((k) => value.has(k));

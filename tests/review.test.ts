@@ -140,6 +140,12 @@ describe("weekly review calls", () => {
     expect([j.verdict, j.strikes]).toEqual(["ok", 1]);
   });
 
+  it("tells being on a blocklist from a few bounces that name one", () => {
+    expect(judge(domain({ blacklisted: 2, causes: { blocklist: 9 } })).chips.find((c) => c.key === "blocklist")).toMatchObject({ key: "blocklist", text: "Blocklisted", tone: "danger" });
+    expect(judge(domain({ causes: { blocklist: 9 } })).chips.find((c) => c.key === "blocklist")).toMatchObject({ key: "blocklist", text: "Blocklist bounces 9", tone: "warning" });
+    expect(judge(domain({ causes: { blocklist: 4 } })).chips).toEqual([]);
+  });
+
   it("tells tenant and DNS problems apart", () => {
     const j = judge(domain({ causes: { dns: 5 }, disconnected: 1 }));
     expect(j.verdict).toBe("fix");
