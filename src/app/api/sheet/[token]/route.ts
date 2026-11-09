@@ -1,17 +1,11 @@
-import { timingSafeEqual } from "node:crypto";
 import { connection } from "next/server";
 import { sql } from "@/lib/db";
 import { sheetFeed } from "@/lib/sheet-capacity";
+import { sheetTokenOk as tokenOk } from "@/lib/sheet-token";
 
 // Read-only feed for the campaign volume Google Sheet: one row per client and
 // tag with the inbox count and the daily limit per inbox, active domains only.
 // The sheet's script calls https://<app>/api/sheet/<SHEET_SYNC_TOKEN> every hour.
-
-function tokenOk(given: string) {
-  const expected = process.env.SHEET_SYNC_TOKEN ?? "";
-  if (expected.length < 16 || given.length !== expected.length) return false;
-  return timingSafeEqual(Buffer.from(given), Buffer.from(expected));
-}
 
 export async function GET(_request: Request, ctx: RouteContext<"/api/sheet/[token]">) {
   await connection();

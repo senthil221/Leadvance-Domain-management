@@ -113,6 +113,10 @@ export function createSmartlead({ apiKey, sql, dryRun = true, baseUrl = "https:/
         query: { start_date: startDate, end_date: endDate, timezone, full_data: true },
       }),
 
+    /** One page of master-inbox replies Smartlead couldn't tie to a campaign lead, with their text. */
+    untrackedReplies: (offset: number, limit = 50) =>
+      request<unknown>("GET", "/master-inbox/untracked-replies", { query: { limit, offset, fetchAttachments: false, fetchBody: true } }),
+
     // Writes: logged but not sent while dry-run is on.
     updateDailyLimit: (accountId: number, maxEmailPerDay: number) =>
       request("POST", `/email-accounts/${accountId}`, { body: { max_email_per_day: maxEmailPerDay } }),

@@ -14,6 +14,7 @@ import { advanceReplacements, trackHypertideOrders } from "./replacements";
 import { syncAllRegistrars } from "./registrar-sync";
 import { enrolNewDomains } from "./warmup-program";
 import { syncAccounts, syncCampaigns, syncClients, syncDomainStats, dayIn } from "./smartlead-sync";
+import { syncUntrackedReplies } from "./untracked-replies";
 
 // The worker's jobs and how often each runs. A job that needs an integration
 // whose key is missing reports "skipped" instead of failing.
@@ -101,6 +102,12 @@ export const JOBS: Job[] = [
     label: "Warm up new domains",
     everyMinutes: 30,
     run: ({ sql, smartleadApp }) => enrolNewDomains(sql, smartleadApp),
+  },
+  {
+    name: "untracked-replies",
+    label: "Smartlead untracked replies",
+    everyMinutes: 15,
+    run: needsSmartlead(({ sql, smartlead }) => syncUntrackedReplies(sql, smartlead)),
   },
   {
     name: "smartlead-campaigns",

@@ -1,4 +1,4 @@
-import { Activity, ArrowLeftRight, BarChart3, CalendarClock, CircleCheck, ClipboardCheck, Columns2, Globe, Inbox, LayoutGrid, MailX, MessageSquareText, Settings2, Tags, Users, Wrench, type LucideIcon } from "lucide-react";
+import { Activity, ArrowLeftRight, BarChart3, CalendarClock, CircleCheck, ClipboardCheck, Columns2, Globe, Inbox, LayoutGrid, MailQuestion, MailX, MessageSquareText, Settings2, Tags, Users, Wrench, type LucideIcon } from "lucide-react";
 
 export type NavItem = { href: string; label: string; icon: LucideIcon; key: string };
 export type NavGroup = NavItem & { pages: NavItem[] };
@@ -15,6 +15,7 @@ export const PAGES = {
   expiring: { href: "/expiring", label: "Expiring", icon: CalendarClock, key: "e" },
   inboxes: { href: "/inboxes", label: "Smartlead", icon: Inbox, key: "i" },
   tags: { href: "/tags", label: "Tags", icon: Tags, key: "m" },
+  untracked: { href: "/untracked", label: "Untracked replies", icon: MailQuestion, key: "u" },
   review: { href: "/review", label: "Weekly review", icon: ClipboardCheck, key: "w" },
   compare: { href: "/compare", label: "Compare", icon: Columns2, key: "c" },
   stats: { href: "/stats", label: "Stats", icon: BarChart3, key: "t" },
@@ -36,7 +37,7 @@ export const NAV: { label: string; items: NavGroup[] }[] = [
       { ...P.overview, pages: [] },
       { ...P.fix, pages: [] },
       { ...P.clients, pages: [] },
-      { ...P.inboxes, pages: [{ ...P.inboxes, label: "Inboxes" }, P.tags] },
+      { ...P.inboxes, pages: [{ ...P.inboxes, label: "Inboxes" }, P.tags, P.untracked] },
       { ...P.inventory, pages: [{ ...P.inventory, label: "Inventory" }, P.replacements, P.freeDomains, P.expiring] },
       { ...P.review, label: "Performance", icon: BarChart3, pages: [P.review, P.compare, P.stats, P.replies, P.bounces] },
     ],

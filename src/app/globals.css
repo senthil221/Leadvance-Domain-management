@@ -2035,3 +2035,29 @@ body.is-col-resizing { cursor: col-resize; user-select: none; }
   .tg-layout.has-detail .tg-list { max-height: 320px; }
   .tg-detail { max-height: none; }
 }
+
+/* Smartlead → Untracked replies: one bar of search, filters, numbers and Check now, then the replies; a reply opens in place. */
+.ur { display: flex; flex-direction: column; gap: 10px; }
+.ur-bar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.ur-bar .search-input { width: 260px; max-width: 100%; }
+.ur-bar .search-input .input, .ur-bar .select { height: 30px; }
+.ur-bar .select { width: auto; flex: none; }
+.ur-sync { color: var(--muted); font-size: 12px; white-space: nowrap; }
+.ur-sync.is-bad { color: var(--danger-ink); }
+.spin { animation: dx-spin .9s linear infinite; }
+.ur-wrap .table-scroll { max-height: calc(100dvh - 170px); }
+.ur-table { table-layout: fixed; width: 100%; }
+.ur-table tbody td { height: 44px; padding-top: 4px; padding-bottom: 4px; }
+.ur-two { display: flex; flex-direction: column; justify-content: center; min-width: 0; line-height: 17px; }
+.ur-clip { display: block; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ur-sub { color: var(--muted); font-size: 12px; }
+.ur-when { white-space: nowrap; color: var(--ink-soft); font-variant-numeric: tabular-nums; }
+.ur-new { display: inline-block; width: 6px; height: 6px; margin-right: 6px; border-radius: 50%; background: var(--info-solid); vertical-align: 1px; }
+.ur-caret { padding-left: 10px !important; padding-right: 0 !important; color: var(--faint); }
+.ur-caret svg { transition: transform 120ms var(--t-ease); }
+.ur-caret svg.is-open { transform: rotate(90deg); color: var(--ink); }
+.ur-table tr[data-selected="true"] td { background: var(--row-selected); }
+.ur-open td { background: var(--surface-2); border-top: 0; }
+.ur-msg { padding: 6px 0 12px; display: flex; flex-direction: column; gap: 8px; max-width: 920px; }
+.ur-msg-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; font-size: 12.5px; color: var(--ink); }
+.ur-body { margin: 0; padding: 12px 14px; border-radius: 8px; background: var(--surface); box-shadow: inset 0 0 0 1px var(--line); font: inherit; font-size: 13px; line-height: 1.55; color: var(--ink); white-space: pre-wrap; word-break: break-word; max-height: 420px; overflow: auto; }
