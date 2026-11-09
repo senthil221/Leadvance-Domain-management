@@ -1,4 +1,4 @@
-import { Activity, ArrowLeftRight, BarChart3, CalendarClock, CircleCheck, ClipboardCheck, Columns2, Globe, Inbox, LayoutGrid, ListChecks, MailQuestion, MailX, MessageSquareText, Settings2, Tags, Users, Wrench, type LucideIcon } from "lucide-react";
+import { Activity, ArrowLeftRight, BarChart3, CalendarClock, CircleCheck, ClipboardCheck, Columns2, FlaskConical, Globe, Inbox, LayoutGrid, ListChecks, MailQuestion, MailX, MessageSquareText, Settings2, Tags, Users, Wrench, type LucideIcon } from "lucide-react";
 
 export type NavItem = { href: string; label: string; icon: LucideIcon; key: string };
 export type NavGroup = NavItem & { pages: NavItem[] };
@@ -22,6 +22,7 @@ export const PAGES = {
   stats: { href: "/stats", label: "Stats", icon: BarChart3, key: "t" },
   replies: { href: "/activity", label: "Replies", icon: MessageSquareText, key: "a" },
   bounces: { href: "/bounces", label: "Bounces", icon: MailX, key: "b" },
+  placement: { href: "/placement", label: "Placement", icon: FlaskConical, key: "n" },
   health: { href: "/health", label: "Health rules", icon: Activity, key: "h" },
   settings: { href: "/settings", label: "Settings", icon: Settings2, key: "s" },
 } satisfies Record<string, NavItem>;
@@ -41,7 +42,7 @@ export const NAV: { label: string; items: NavGroup[] }[] = [
       { ...P.clients, pages: [] },
       { ...P.inboxes, pages: [{ ...P.inboxes, label: "Inboxes" }, P.tags, P.untracked] },
       { ...P.inventory, pages: [{ ...P.inventory, label: "Inventory" }, P.replacements, P.freeDomains, P.expiring] },
-      { ...P.review, label: "Performance", icon: BarChart3, pages: [P.review, P.compare, P.stats, P.replies, P.bounces] },
+      { ...P.review, label: "Performance", icon: BarChart3, pages: [P.review, P.compare, P.stats, P.replies, P.bounces, P.placement] },
     ],
   },
   { label: "Manage", items: [{ ...P.settings, pages: [P.settings, P.health] }] },

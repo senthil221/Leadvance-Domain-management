@@ -14,6 +14,7 @@ import { advanceReplacements, trackHypertideOrders } from "./replacements";
 import { syncAllRegistrars } from "./registrar-sync";
 import { enrolNewDomains } from "./warmup-program";
 import { syncAccounts, syncCampaigns, syncClients, syncDomainStats, dayIn } from "./smartlead-sync";
+import { syncPlacementSeeds } from "./placement-seeds";
 import { syncUntrackedReplies } from "./untracked-replies";
 
 // The worker's jobs and how often each runs. A job that needs an integration
@@ -108,6 +109,12 @@ export const JOBS: Job[] = [
     label: "Smartlead untracked replies",
     everyMinutes: 15,
     run: needsSmartlead(({ sql, smartlead }) => syncUntrackedReplies(sql, smartlead)),
+  },
+  {
+    name: "placement-seeds",
+    label: "Placement test seeds",
+    everyMinutes: 60,
+    run: ({ sql }) => syncPlacementSeeds(sql),
   },
   {
     name: "smartlead-campaigns",

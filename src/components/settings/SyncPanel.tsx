@@ -19,7 +19,7 @@ const SECTIONS: { key: string; title: string; sub: string; jobs: string[] }[] = 
   { key: "domains", title: "Domains and registrars", sub: "Registrar accounts, nameserver changes and lookups, drained domains",
     jobs: ["registrar-domains", "nameserver-requests", "nameserver-check", "retire-drained"] },
   { key: "stats", title: "Stats", sub: "Bounce reasons, daily numbers and health rules",
-    jobs: ["bounce-causes", "rollup"] },
+    jobs: ["bounce-causes", "placement-seeds", "rollup"] },
 ];
 
 type Outcome = { ok: boolean; text: string | null };
