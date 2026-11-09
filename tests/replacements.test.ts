@@ -274,6 +274,7 @@ describe("replacement through Hypertide's replace queue", () => {
   });
 
   it("by default leaves the new inboxes out of campaigns to warm, then adds them on request", async () => {
+    await sql`update domains set dns_spf = true, dns_dkim = true, dns_dmarc = true, dns_mx = true where id = ${newId}`;
     await sql`update replacement_batches set add_to_campaigns = false`;
     await sql`update replacement_items set step_nameservers = 'done', step_inboxes = 'done' where id = ${itemId}`;
     await sql`insert into inboxes (domain_id, email, status, smartlead_account_id) values
@@ -306,6 +307,17 @@ describe("replacement through Hypertide's replace queue", () => {
     // In campaigns: out of Warming up.
     expect((await sql`select warmup_done_at from domains where id = ${newId}`)[0].warmup_done_at).not.toBeNull();
     await expect(addReplacementToCampaigns(sql, sl, itemId, "me")).rejects.toThrow(/already in the campaigns/);
+  });
+
+  it("doesn't start the new domain's warm-up until its DNS is valid", async () => {
+    await sql`update replacement_batches set add_to_campaigns = false`;
+    await sql`update replacement_items set step_nameservers = 'done', step_inboxes = 'done' where id = ${itemId}`;
+    await sql`update domains set dns_spf = true, dns_dkim = true, dns_dmarc = false, dns_mx = true where id = ${newId}`;
+    await sql`insert into inboxes (domain_id, email, status, smartlead_account_id) values
+      (${newId}, 'a@freshsend.com', 'connected', 31), (${newId}, 'b@freshsend.com', 'connected', 32), (${newId}, 'c@freshsend.com', 'connected', 33)`;
+    await advanceItem(sql, { porkbun: null, smartlead: fakeSmartlead() }, itemId);
+    expect(await status(newId)).toBe("warming");
+    expect((await sql`select warmup_started_at from domains where id = ${newId}`)[0].warmup_started_at).toBeNull();
   });
 
   it("tags the domains, starts the old domain's grace when Hypertide has the swap, and mirrors the tags in Smartlead", async () => {

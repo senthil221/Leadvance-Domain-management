@@ -108,9 +108,10 @@ async function startGrace(sql: Sql, item: Item, actor: string) {
 }
 
 /**
- * The new domain joins Smartlead → Warming up like any other new domain,
- * counted from its first inbox in Smartlead, for the days in Settings →
- * Warming up. It stays there until it's moved to active or added to campaigns.
+ * The new domain joins Smartlead → Warming up like any other new domain once
+ * its DNS is valid (SPF, DKIM, DMARC and MX), counted from its first inbox in
+ * Smartlead, for the days in Settings → Warming up. It stays there until it's
+ * moved to active or added to campaigns.
  */
 async function startWarmupClock(sql: Sql, domainId: string) {
   await sql`
@@ -119,7 +120,8 @@ async function startWarmupClock(sql: Sql, domainId: string) {
         where i.domain_id = d.id and i.status <> 'removed' and i.smartlead_account_id is not null), now()),
       warmup_days = coalesce((select (value ->> 'days')::int from settings where key = 'warmup_program'), 18),
       warmup_done_at = null, warmup_moved_to = null
-    where d.id = ${domainId} and d.warmup_started_at is null`;
+    where d.id = ${domainId} and d.warmup_started_at is null
+      and d.dns_spf and d.dns_dkim and d.dns_dmarc and d.dns_mx`;
 }
 
 /** In campaigns: the warm-up is over. */

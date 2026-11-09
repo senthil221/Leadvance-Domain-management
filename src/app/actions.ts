@@ -1350,8 +1350,13 @@ export async function saveWarmupProgram(input: z.input<typeof warmupProgramInput
   try {
     await requireActor();
     const v = warmupProgramInput.parse(input);
-    await sql`insert into settings (key, value) values ('warmup_program', ${JSON.stringify(v)}::text::jsonb)
-      on conflict (key) do update set value = excluded.value, updated_at = now()`;
+    await sql.begin(async (tx) => {
+      await tx`insert into settings (key, value) values ('warmup_program', ${JSON.stringify(v)}::text::jsonb)
+        on conflict (key) do update set value = excluded.value, updated_at = now()`;
+      // The days apply to every domain still warming, not just new ones.
+      await tx`update domains set warmup_days = ${v.days}
+        where warmup_started_at is not null and warmup_done_at is null and warmup_days is distinct from ${v.days}`;
+    });
     refresh();
     return { ok: true, data: undefined };
   } catch (e) {

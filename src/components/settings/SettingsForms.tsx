@@ -111,7 +111,7 @@ export function WarmupProgramForm({ program }: { program: WarmupProgram }) {
               <button key={d} type="button" aria-pressed={v.days === d} onClick={() => setV((x) => ({ ...x, days: d }))}>{d} days</button>
             ))}
           </div>
-          <span className="field-hint">Days counted from the start of warm-up, shown as a day-by-day track. Replacement domains warm for the same days. A domain stays in Warming up until you move it to active or add it to campaigns.</span>
+          <span className="field-hint">Days counted from the start of warm-up, shown as a day-by-day track. Applies to every domain warming now too, replacement domains included. A domain stays in Warming up until you move it to active or add it to campaigns.</span>
         </div>
         {field("maxAgeDays", "New means at most", "days old", "Age counts from the first inbox added to Smartlead. 0 is only today's.")}
         {field("perDay", "Warmup emails a day", "per inbox", "Smartlead's total warmup per day.")}
