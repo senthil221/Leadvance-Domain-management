@@ -141,6 +141,8 @@ type Group = {
   inboxes: InboxListRow[];
   count: number; warmupOff: number; avgWarmup: number | null; avgLimit: number | null; capacity: number;
   avgRep: number | null; minRep: number | null; lowRep: number; campaigns: number;
+  /** Inboxes in a running campaign, and in a paused one only; the campaigns by name. */
+  camp: { live: number; paused: number; liveNames: string[]; pausedNames: string[] };
   sent7: number; replies7: number; human7: number; bounces7: number;
   sentToday: number; avgWait: number | null; pending: number; tags: string[]; esp: string | null;
   domainTags: string[]; graceDaysLeft: number | null; alerts: number;
@@ -176,6 +178,12 @@ function group(rows: InboxListRow[]): Group[] {
       minRep: reps.length ? Math.min(...reps) : null,
       lowRep: reps.filter((r) => r < 90).length,
       campaigns: Math.max(0, ...list.map((i) => i.campaigns)),
+      camp: {
+        live: list.filter((i) => i.liveCampaigns.length).length,
+        paused: list.filter((i) => !i.liveCampaigns.length && i.pausedCampaigns.length).length,
+        liveNames: [...new Set(list.flatMap((i) => i.liveCampaigns))].sort(),
+        pausedNames: [...new Set(list.flatMap((i) => i.pausedCampaigns))].sort(),
+      },
       sent7: list.reduce((a, i) => a + i.sent7, 0),
       replies7: list.reduce((a, i) => a + i.replies7, 0),
       human7: list.reduce((a, i) => a + i.human7, 0),
@@ -228,7 +236,7 @@ function setupGroup(s: SetupRow): Group {
     : checks.every(([, v]) => v == null) ? { state: "unknown", missing: [], checks } : { state: missing.length ? "missing" : "ok", missing, checks };
   return {
     domainId: s.domainId, domain: s.domain, status: s.status, clientName: s.clientName, clientHue: s.clientHue,
-    inboxes: [], count: 0, warmupOff: 0, avgWarmup: null, avgLimit: null, capacity: 0, avgRep: null, minRep: null, lowRep: 0, campaigns: 0,
+    inboxes: [], count: 0, warmupOff: 0, avgWarmup: null, avgLimit: null, capacity: 0, avgRep: null, minRep: null, lowRep: 0, campaigns: 0, camp: { live: 0, paused: 0, liveNames: [], pausedNames: [] },
     sent7: 0, replies7: 0, human7: 0, bounces7: 0, sentToday: 0, avgWait: null, pending: 0, tags: [], esp: null,
     domainTags: s.tags.filter((t) => MARK_TAGS.includes(t.toLowerCase())), graceDaysLeft: null, alerts: 0, warm: null, ageDays: null, dns,
     bl: null, blListings: [], blocked: 0, paused: 0, disconnected: 0, order: null, orderStatus: null, provider: null,
@@ -245,6 +253,8 @@ type ClientGroup = Group & {
   key: string; domains: Group[]; dnsBad: number; listed: number; tagGroups: ClientGroup[] | null;
   /** Active domains, and those of them that really are: order active, every inbox connected. */
   activeDomains: number; liveDomains: number;
+  /** Domains with inboxes and none in a running campaign, and those with only some in one. */
+  campFree: string[]; campPartial: number;
 };
 function roll(key: string, label: string, clientName: string | null, domains: Group[]): ClientGroup {
   const list = domains.flatMap((d) => d.inboxes);
@@ -273,6 +283,8 @@ function roll(key: string, label: string, clientName: string | null, domains: Gr
     all: { inboxes: domains.reduce((a, d) => a + d.all.inboxes, 0), disconnected: domains.reduce((a, d) => a + d.all.disconnected, 0) },
     activeDomains: domains.filter((d) => d.status === "active").length,
     liveDomains: domains.filter((d) => d.status === "active" && !notLive(d)).length,
+    campFree: domains.filter((d) => d.count > 0 && !d.camp.live).map((d) => d.domain),
+    campPartial: domains.filter((d) => d.camp.live > 0 && d.camp.live < d.count).length,
     tagGroups: null,
   };
 }
@@ -325,6 +337,7 @@ const sortValue = (g: Group, k: SortKey): string | number | null => {
     case "warmupState": return g.blocked * 100 + g.paused;
     case "blacklist": return g.bl;
     case "connection": return g.disconnected;
+    case "campaigns": return g.count ? g.camp.live / g.count : null;
     case "replyRate": return rate(g.replies7, g.sent7);
     case "bounceRate": return rate(g.bounces7, g.sent7);
     default: return g[k];
@@ -345,7 +358,7 @@ const inboxValue = (i: InboxListRow, k: SortKey): string | number | null => {
     case "sentToday": return i.dailySent;
     case "avgWait": return i.minWaitMins;
     case "avgRep": return i.warmupReputation;
-    case "campaigns": return i.campaigns;
+    case "campaigns": return i.liveCampaigns.length ? i.liveCampaigns.length : i.pausedCampaigns.length ? 0.5 : 0;
     case "sent7": return i.sent7;
     case "replyRate": return rate(i.replies7, i.sent7);
     case "bounceRate": return rate(i.bounces7, i.sent7);
@@ -368,7 +381,7 @@ const COLUMNS: ColumnDef[] = [
   { key: "capacity", label: "Per day" }, { key: "today", label: "Sent today" }, { key: "gap", label: "Gap", hidden: true },
   { key: "rep", label: "Reputation" },
   { key: "age", label: "Domain age" }, { key: "dns", label: "DNS" }, { key: "warmupState", label: "Warmup status" },
-  { key: "blacklist", label: "Blacklist" }, { key: "connection", label: "Connection" },
+  { key: "blacklist", label: "Blacklist" }, { key: "campaigns", label: "Campaigns" }, { key: "connection", label: "Connection" },
 ];
 
 const espLabel = (t: string) => (t === "OUTLOOK" ? "Outlook" : t === "GMAIL" || t === "GOOGLE" ? "Google" : t === "MIXED" ? "Mixed" : t === "SMTP" ? "SMTP" : t.charAt(0) + t.slice(1).toLowerCase());
@@ -393,6 +406,24 @@ const warmupOf = (i: InboxListRow) => (i.warmupBlockedReason || /BLOCK/i.test(i.
 /** A healthy value: quiet, so problems in the same column stand out. */
 function Ok({ children, title }: { children: ReactNode; title?: string }) {
   return <span className="ok-cell" title={title}>{children}</span>;
+}
+
+const campaignWord = (n: number) => `${n} campaign${n === 1 ? "" : "s"}`;
+
+/** Whether the inboxes are in a running campaign: a domain in none sends nothing, so it has no numbers in Performance. */
+function CampaignCell({ camp, total }: { camp: Group["camp"]; total: number }) {
+  if (!total) return <span className="zero">—</span>;
+  if (camp.live === total) return <Ok title={camp.liveNames.join("\n")}>{total === 1 && camp.liveNames.length === 1 ? camp.liveNames[0] : `In ${campaignWord(camp.liveNames.length)}`}</Ok>;
+  if (camp.live) return <span className="ns-status tone-warning" title={`${total - camp.live} of ${total} inboxes aren't in a running campaign\n\nRunning: ${camp.liveNames.join(", ")}`}>{camp.live}/{total} inboxes</span>;
+  if (camp.paused) return <span className="ns-status tone-warning" title={`Only in paused campaigns: ${camp.pausedNames.join(", ")}`}>Paused</span>;
+  return <span className="ns-status tone-warning" title="Not in any running Smartlead campaign, so nothing is sent from it">Not in a campaign</span>;
+}
+
+function CampaignRollCell({ free, partial, domains }: { free: string[]; partial: number; domains: number }) {
+  if (!domains) return <span className="zero">—</span>;
+  if (!free.length && !partial) return <Ok title={`All ${domains} domains are in a running campaign`}>All in campaigns</Ok>;
+  const said = [free.length ? `${free.length} of ${domains} not in one` : "", partial ? `${partial} partly` : ""].filter(Boolean).join(" · ");
+  return <span className="ns-status tone-warning" title={free.length ? `Not in a running campaign:\n${free.join("\n")}` : undefined}>{said}</span>;
 }
 
 function DnsCell({ dns }: { dns: Dns }) {
@@ -703,6 +734,7 @@ export function InboxesView({ inboxes, setups = [], clients, plans, smartleadCon
       {on("dns") ? <td>{c.dnsBad ? <span className="ns-status tone-danger" title={`Missing: ${c.dns.missing.join(", ")}`}>{c.dnsBad} with gaps</span> : c.dns.state === "unknown" ? <span className="zero">—</span> : <Ok>Valid</Ok>}</td> : null}
       {on("warmupState") ? <td><WarmupCell blocked={c.blocked} paused={c.paused} total={c.count} /></td> : null}
       {on("blacklist") ? <td>{c.bl == null ? <span className="zero">—</span> : c.listed ? <span className="ns-status tone-danger" title={c.blListings.join(", ")}>{c.listed} listed</span> : <Ok>Clean</Ok>}</td> : null}
+      {on("campaigns") ? <td><CampaignRollCell free={c.campFree} partial={c.campPartial} domains={c.domains.filter((d) => d.count > 0).length} /></td> : null}
       {on("connection") ? <td>{c.disconnected ? <span className="ns-status tone-danger">{c.disconnected} disconnected</span> : <Ok title={`All ${c.count} inboxes connected`}>{c.count}/{c.count}</Ok>}</td> : null}
     </>
   );
@@ -751,6 +783,7 @@ export function InboxesView({ inboxes, setups = [], clients, plans, smartleadCon
           {on("dns") ? <td><DnsCell dns={g.dns} /></td> : null}
           {on("warmupState") ? <td><WarmupCell blocked={g.blocked} paused={g.paused} total={g.count} /></td> : null}
           {on("blacklist") ? <td><BlacklistCell count={g.bl} listings={g.blListings} /></td> : null}
+          {on("campaigns") ? <td><CampaignCell camp={g.camp} total={g.count} /></td> : null}
           {on("connection") ? <td>{g.disconnected ? <span className="ns-status tone-danger">{g.disconnected} disconnected</span> : <Ok title={`All ${g.count} inboxes connected`}>{g.count}/{g.count}</Ok>}</td> : null}
         </tr>
         {isOpen ? [...g.inboxes].sort(byValue((i: InboxListRow) => inboxValue(i, sort.key), (a, b) => a.email.localeCompare(b.email), sort.dir)).map((i) => (
@@ -783,6 +816,7 @@ export function InboxesView({ inboxes, setups = [], clients, plans, smartleadCon
             {on("dns") ? <td /> : null}
             {on("warmupState") ? <td><WarmupCell blocked={warmupOf(i) === "blocked" ? 1 : 0} paused={warmupOf(i) === "paused" ? 1 : 0} total={1} reason={i.warmupBlockedReason} /></td> : null}
             {on("blacklist") ? <td /> : null}
+            {on("campaigns") ? <td><CampaignCell camp={{ live: i.liveCampaigns.length ? 1 : 0, paused: !i.liveCampaigns.length && i.pausedCampaigns.length ? 1 : 0, liveNames: i.liveCampaigns, pausedNames: i.pausedCampaigns }} total={1} /></td> : null}
             {on("connection") ? <td>{i.status === "disconnected" ? <span className="ns-status tone-danger" title={i.connectError ?? undefined}>{i.connectError ? i.connectError.slice(0, 32) : "Disconnected"}</span> : <Ok>Connected</Ok>}</td> : null}
           </tr>
         )) : null}
@@ -1127,6 +1161,7 @@ export function InboxesView({ inboxes, setups = [], clients, plans, smartleadCon
                 {on("dns") ? <SortTh k="dnsMissing" sort={sort} onSort={sortBy}>DNS</SortTh> : null}
                 {on("warmupState") ? <SortTh k="warmupState" sort={sort} onSort={sortBy}>Warmup status</SortTh> : null}
                 {on("blacklist") ? <SortTh k="blacklist" sort={sort} onSort={sortBy}>Blacklist</SortTh> : null}
+                {on("campaigns") ? <SortTh k="campaigns" sort={sort} onSort={sortBy} title="Whether the inboxes are in a running Smartlead campaign. A domain in none sends nothing, so it shows no numbers in Performance">Campaigns</SortTh> : null}
                 {on("connection") ? <SortTh k="connection" sort={sort} onSort={sortBy}>Connection</SortTh> : null}
               </tr>
             </thead>

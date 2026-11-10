@@ -832,6 +832,7 @@ export type InboxListRow = InboxRow & {
   domainTags: string[]; domainGraceDaysLeft: number | null; domainTld: string | null; domainAlerts: number;
   domainWarmupStartedAt: Date | null; domainWarmupDays: number | null; domainWarmupDoneAt: Date | null;
   sent7: number; replies7: number; human7: number; bounces7: number; campaigns: number;
+  /** Running campaigns the inbox is in (active or scheduled), and paused ones, by name. */ liveCampaigns: string[]; pausedCampaigns: string[];
   smartleadTags: string[]; providerType: string | null; minWaitMins: number | null; dailySent: number | null;
   warmupMin: number | null; warmupReplyRate: number | null; warmupStatus: string | null;
   warmupTag: string | null; warmupRampupOn: boolean | null;
@@ -868,7 +869,11 @@ export async function listInboxes() {
       from email_events where occurred_at > now() - interval '7 days' and inbox_id is not null
       group by inbox_id
     ), camp as (
-      select inbox_id, count(*)::int as n from campaign_inboxes group by inbox_id
+      -- Every campaign the inbox is in, and which of them are running or paused.
+      select ci.inbox_id, count(*)::int as n,
+        coalesce(array_agg(c.name order by c.name) filter (where upper(coalesce(c.status, '')) in ('ACTIVE', 'START', 'STARTED', 'SCHEDULED')), '{}') as live,
+        coalesce(array_agg(c.name order by c.name) filter (where upper(coalesce(c.status, '')) = 'PAUSED'), '{}') as paused
+      from campaign_inboxes ci join campaigns c on c.id = ci.campaign_id group by ci.inbox_id
     ), dom as (
       -- Every inbox on the domain, whatever the view shows.
       select domain_id, count(*)::int as n, count(*) filter (where status = 'disconnected')::int as disconnected
@@ -892,6 +897,7 @@ export async function listInboxes() {
       (select count(*)::int from alerts a where a.domain_id = d.id and a.status = 'open') as domain_alerts,
       coalesce(ev.sent7, 0) as sent7, coalesce(ev.replies7, 0) as replies7, coalesce(ev.human7, 0) as human7,
       coalesce(ev.bounces7, 0) as bounces7, coalesce(camp.n, i.campaign_count, 0) as campaigns,
+      coalesce(camp.live, '{}') as live_campaigns, coalesce(camp.paused, '{}') as paused_campaigns,
       i.smartlead_tags, i.provider_type, i.min_wait_mins, i.daily_sent, i.warmup_min, i.warmup_reply_rate, i.warmup_status,
       i.warmup_tag, i.warmup_rampup_on,
       ch.change,
