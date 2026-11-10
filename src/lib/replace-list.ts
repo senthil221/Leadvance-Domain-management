@@ -89,7 +89,8 @@ export type ReplaceList = {
   /** Live sending domains looked at, those with nothing against them, and those that sent too little to judge. */
   judged: number; healthy: number; early: number;
   /** Every live domain's call, for the pages that show one domain. */
-  calls: Map<string, { call: ReplaceCall | "keep" | "early"; reasons: string[] }>;
+  /** tagNotes: what the domain's whole tag shows, when it's weak. Numbers only, no names, so it can go to the AI. */
+  calls: Map<string, { call: ReplaceCall | "keep" | "early"; reasons: string[]; tagNotes?: string[] }>;
   /** Every live domain, worst first. */
   domains: DomainRow[];
 };
@@ -161,6 +162,8 @@ export function replaceList(facts: FixFact[], stats: ReplaceStat[], passes: 1 | 
   type WeakTag = { bounces: boolean; replies: string | null };
   const tagNotes: GroupNote[] = [];
   const weakTags = new Map<string, WeakTag>();
+  const tagTexts = new Map<string, string[]>();
+  const noteTag = (key: string, text: string) => tagTexts.set(key, [...(tagTexts.get(key) ?? []), text]);
   for (const [key, g] of everyone.byTag) {
     if (g.domains < 2 || g.sent7 < R.peerSent) continue;
     const clientId = key.slice(0, key.indexOf("|"));
@@ -178,10 +181,12 @@ export function replaceList(facts: FixFact[], stats: ReplaceStat[], passes: 1 | 
     const before = g.sentPrev >= R.minSent ? ` (${p(g.senderPrev, g.sentPrev)} the week before)` : "";
     if (bounces) {
       tagNotes.push({ kind: "tag", id: key, name, text: `Spam, policy and block list bounces ${p(g.sender7, g.sent7)} ${across}${before}, ${times(g.sender7, g.sent7, fleet.sender7, fleet.sent7)} all other live domains (${p(fleet.sender7, fleet.sent7)}). Its domains are judged against the healthy tags instead of each other. Check the links in its copy before replacing many of them` });
+      noteTag(key, tagNotes[tagNotes.length - 1].text);
     }
     if (replies) {
       const quietBounces = g.sender7 / g.sent7 <= fleet.sender7 / Math.max(1, fleet.sent7);
       tagNotes.push({ kind: "tag", id: key, name, text: `Replies of any kind ${p(g.replies7, g.sent7)} ${across}, against ${p(base.replies7, base.sent7)} for ${base === client ? "the client's other domains" : "all other live domains"}.${quietBounces ? " With so few bounces the mail is delivered but not answered: likely the spam folder. Test placement on a few before replacing them all" : ""}` });
+      noteTag(key, tagNotes[tagNotes.length - 1].text);
     }
   }
   // Left out of the healthy baseline: every domain on a weak tag, whichever way it's weak.
@@ -272,7 +277,8 @@ export function replaceList(facts: FixFact[], stats: ReplaceStat[], passes: 1 | 
     const put = (call: ReplaceCall, reasons: string[], shortList: string[], next: string, also: string[] = []) => {
       short = shortList.join(" · ");
       items.push({ ...base, call, reasons: reasons.slice(0, 3), short, next, also });
-      calls.set(f.domainId, { call, reasons: reasons.slice(0, 3) });
+      const onWeak = k ? tagTexts.get(k) : undefined;
+      calls.set(f.domainId, { call, reasons: reasons.slice(0, 3), ...(onWeak ? { tagNotes: onWeak } : {}) });
       row(call);
     };
 

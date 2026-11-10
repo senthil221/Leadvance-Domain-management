@@ -26,7 +26,8 @@ const pct = (k: number, of: number) => { const v = of ? (100 * k) / of : 0; retu
 
 // What the AI would have to say to back each call.
 const AGREES: Record<ReplaceCall, DiagnosisAction[]> = {
-  replace_now: ["replace", "rest"], replace: ["replace", "rest"], watch: ["lower_volume", "keep_sending", "wait_for_data"], fix: ["fix_setup"], list: ["check_lists"],
+  replace_now: ["replace", "rest"], replace: ["replace", "rest"], // Watch means "not yet": any step short of replacing backs it, checking the lists or the setup included.
+  watch: ["lower_volume", "keep_sending", "wait_for_data", "check_lists", "fix_setup"], fix: ["fix_setup"], list: ["check_lists"],
 };
 
 type Verdict = "agrees" | "disagrees" | "sooner";

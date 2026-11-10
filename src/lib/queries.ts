@@ -440,7 +440,7 @@ export async function getDiagnosisInput(id: string): Promise<DiagnosisInput | nu
   const call = replaceList([...facts], [...stats]).calls.get(id);
   return {
     fact: facts.find((f) => f.domainId === id) ?? null,
-    replace: call ? { call: call.call === "keep" ? "Keep" : call.call === "early" ? "Too early to judge" : CALL_META[call.call].label, reasons: call.reasons } : null,
+    replace: call ? { call: call.call === "keep" ? "Keep" : call.call === "early" ? "Too early to judge" : CALL_META[call.call].label, reasons: call.reasons, tagNotes: call.tagNotes ?? [] } : null,
     own: { tld: own.tld, ageDays: own.ageDays, daysInSmartlead: own.daysInSmartlead },
     weeks: [...weeks], causes: [...causes], peers: [...peers], changes: [...changes],
   };

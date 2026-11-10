@@ -237,6 +237,10 @@ describe("a whole tag that's worse than everyone", () => {
     expect(list.notes[0].text).toBe("Spam, policy and block list bounces 1.2% across its 5 domains (1.2% the week before), 4.0× all other live domains (0.30%). Its domains are judged against the healthy tags instead of each other. Check the links in its copy before replacing many of them");
     expect(weak.map((f) => list.calls.get(f.domainId)?.call)).toEqual(["replace", "replace", "replace", "replace", "replace"]);
     expect(list.items[0].reasons[0]).toContain("4.0× live domains on healthy tags (0.30%)");
+    // The AI is told the whole tag is weak, in numbers, without the client's or the tag's name.
+    const notes = list.calls.get(weak[0].domainId)?.tagNotes ?? [];
+    expect(notes).toEqual([list.notes[0].text]);
+    expect(notes.join(" ")).not.toMatch(/Client One|weak/);
   });
 
   it("only notes a tag that gets few replies, without replacing its domains on it", () => {

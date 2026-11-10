@@ -68,6 +68,13 @@ describe("the facts", () => {
   it("passes on what the rules already found", () => {
     expect(buildFacts(input(), fact({ listed: 2 })).rules.problems[0]).toContain("Block listed");
   });
+
+  it("says when the domain's whole tag is weak", () => {
+    const facts = buildFacts(input({ replace: { call: "Replace", reasons: ["r"], tagNotes: ["Spam, policy and block list bounces 1.2% across its 5 domains"] } }), fact());
+    expect(facts.rules.tagNotes).toEqual(["Spam, policy and block list bounces 1.2% across its 5 domains"]);
+    expect(buildFacts(input(), fact()).rules.tagNotes).toEqual([]);
+    expect(factLabel("rules.tagNotes.0")).toBe("Its whole tag");
+  });
 });
 
 describe("answers that need no AI", () => {
