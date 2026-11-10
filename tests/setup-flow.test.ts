@@ -83,6 +83,19 @@ describe("nameserver requests", () => {
     expect(r.message).toMatch(/Hypertide isn't connected/);
   });
 
+  it("moves a replacement stuck on its nameserver step on, once a pasted pair is set", async () => {
+    const [old] = await sql`insert into domains (name, status) values ('oldsend.com', 'active') returning id`;
+    const fresh = await domain("freeone.com");
+    const [b] = await sql`select start_replacement(array[${old.id}]::uuid[], array[${fresh.id}]::uuid[], 'high_bounce', null, 'me') as id`;
+    await sql`update replacement_items set step_nameservers = 'failed', last_error = 'No changes would occur' where batch_id = ${b.id}`;
+    await sql`insert into nameserver_requests (domain_id, source, target, actor) values (${fresh.id}, 'custom', ${PAIR}, 'me')`;
+    const pb = fakePorkbun();
+    await processNameserverRequests(sql, { porkbun: pb, hypertide: null });
+    expect(pb.updateNs).toHaveBeenCalledWith("freeone.com", PAIR);
+    const [item] = await sql`select step_nameservers, last_error from replacement_items where batch_id = ${b.id}`;
+    expect(item).toMatchObject({ step_nameservers: "done", last_error: null });
+  });
+
   it("flags a change Porkbun didn't apply", async () => {
     await sql`insert into nameserver_requests (domain_id, source, actor) select id, 'hypertide', 'me' from domains where name = 'freeone.com'`;
     await processNameserverRequests(sql, { porkbun: fakePorkbun({ getNs: vi.fn(async () => ["curitiba.porkbun.com"]) }), hypertide: fakeHypertide() });

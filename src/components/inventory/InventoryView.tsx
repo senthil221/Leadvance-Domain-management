@@ -23,6 +23,7 @@ import { SlBadge } from "@/components/domains/SlStatus";
 import { SL_META, SL_ORDER, slState, slText, type SlState } from "@/lib/smartlead-state";
 import { canReplace } from "@/lib/status";
 import { Select } from "@/components/Select";
+import { PasteNameservers } from "@/components/domains/PasteNameservers";
 
 // Ownership view of every domain: where it is in its life (free, setting up,
 // active, replaced, retired), where it is registered, where its nameservers
@@ -255,6 +256,7 @@ export function InventoryView({ domains, clients }: { domains: DomainRow[]; clie
           </label>
           <PasteSelect rows={domains} selected={selected} where="in your domains"
             onSelect={(s) => { setSelected(s); if ([...s].some((id) => !rows.some((r) => r.id === id))) { setView("all"); setQ(""); } }} />
+          <PasteNameservers />
           <button type="button" className="btn btn-sm" onClick={exportCsv}><Download size={14} /> Export</button>
           <ColumnsMenu cols={cols} widths={widths} />
         </div>

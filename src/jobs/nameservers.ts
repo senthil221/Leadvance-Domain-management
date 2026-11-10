@@ -83,6 +83,11 @@ export async function processNameserverRequests(sql: Sql, ctx: NsContext, limit 
       if (res.outcome === "done" || res.outcome === "pending") {
         await sql`update domains set nameservers = ${res.outcome === "done" ? res.now : ns}, nameservers_checked_at = now() where id = ${r.domainid}`;
         await finish(sql, id, "done", res.outcome === "pending" ? `${at} accepted the change; it can take a few minutes to show` : null, ns);
+        // A replacement stuck on this domain's nameserver step (Hypertide's pair set
+        // here instead, e.g. pasted from its sheet) goes on to the next step.
+        await sql`
+          update replacement_items set step_nameservers = 'done', note = null, last_error = null
+          where new_domain_id = ${r.domainid} and completed_at is null and step_nameservers in ('failed', 'manual')`;
         count("done");
       } else {
         await finish(sql, id, "failed", `${at} accepted the change but still reports ${res.now.join(", ") || "no nameservers"}`, ns);

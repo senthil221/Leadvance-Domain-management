@@ -793,6 +793,58 @@ export async function setupDomains(input: z.input<typeof setupInput>): Promise<A
   }
 }
 
+const pastedInput = z.object({
+  rows: z.array(z.object({
+    domain: z.string().trim().toLowerCase().min(3).max(253),
+    nameservers: z.array(nsName).min(2, "Give at least two nameservers").max(13),
+  })).min(1).max(2000),
+});
+
+/**
+ * Each domain to its own nameservers, as pasted from a sheet (Hypertide sends
+ * one pair per domain). Queued like Set up's, so each is switched at its
+ * registrar and read back; a replacement waiting on its nameserver step moves
+ * on once its pair is set.
+ */
+export async function pasteNameservers(input: z.input<typeof pastedInput>): Promise<ActionResult<{ queued: { domainId: string; domain: string }[]; notFound: string[]; skipped: string[] }>> {
+  try {
+    const actor = await requireActor();
+    const { rows } = pastedInput.parse(input);
+    // The last line for a domain wins.
+    const want = new Map(rows.map((r) => [r.domain, r.nameservers]));
+    const names = [...want.keys()];
+    const result = await sql.begin(async (tx) => {
+      await tx`select set_config('app.actor', ${actor}, true)`;
+      const found = await tx<{ id: string; name: string; status: string }[]>`
+        select id, name, status from domains where lower(name) = any(${names}::text[]) and archived_at is null`;
+      const usable = found.filter((d) => d.status !== "burned" && d.status !== "resting");
+      if (usable.length) {
+        await tx`delete from nameserver_requests where domain_id in ${tx(usable.map((d) => d.id))} and status = 'pending'`;
+        for (const d of usable) {
+          await tx`insert into nameserver_requests (domain_id, source, target, actor) values (${d.id}, 'custom', ${want.get(d.name.toLowerCase())!}::text[], ${actor})`;
+        }
+      }
+      const seen = new Set(found.map((d) => d.name.toLowerCase()));
+      return {
+        queued: usable.map((d) => ({ domainId: d.id, domain: d.name })),
+        notFound: names.filter((n) => !seen.has(n)),
+        skipped: found.filter((d) => !usable.includes(d)).map((d) => d.name),
+      };
+    });
+    if (result.queued.length) {
+      after(async () => {
+        const { JOBS, runJob } = await import("@/jobs");
+        const job = JOBS.find((j) => j.name === "nameserver-requests");
+        if (job) await runJob(jobSql, job);
+      });
+    }
+    refresh();
+    return { ok: true, data: result };
+  } catch (e) {
+    return fail(e);
+  }
+}
+
 export async function loadNameserverStatus(domainIds: string[]) {
   await requireActor();
   const list = z.array(z.uuid()).max(2000).parse(domainIds);

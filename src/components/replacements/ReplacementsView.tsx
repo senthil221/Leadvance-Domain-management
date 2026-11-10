@@ -8,6 +8,7 @@ import { ArrowLeftRight, ChevronRight, CircleAlert, Search, TriangleAlert } from
 import { AddToCampaigns } from "@/components/replacements/AddToCampaigns";
 import { ApprovePayment } from "@/components/replacements/ApprovePayment";
 import { StepActions } from "@/components/replacements/StepActions";
+import { PasteNameservers } from "@/components/domains/PasteNameservers";
 import { ClientCell, Empty } from "@/components/ui";
 import type { ReplacementRow } from "@/lib/queries";
 import { STATUS_META, isStepFinished as finished, reasonsLabel, stepWaitsOnPerson } from "@/lib/status";
@@ -113,6 +114,7 @@ export function ReplacementsView({ rows, now, smartleadLive, graceDays }: { rows
           <Search size={14} strokeWidth={1.5} />
           <input className="input" value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search" aria-label="Search replacements" />
         </label>
+        <PasteNameservers />
       </div>
 
       <div className="table-wrap">
