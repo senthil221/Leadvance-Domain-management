@@ -95,6 +95,36 @@ export async function setWarming(input: { ids: string[]; warming: boolean }): Pr
 }
 
 /**
+ * Archives domains we don't want: left out of every list and count and the free
+ * pool, kept with their history. One still in use is refused, with the reason.
+ */
+export async function archiveDomains(input: { ids: string[]; reason: string }): Promise<ActionResult<{ archived: number; refused: { name: string; why: string }[] }>> {
+  try {
+    const actor = await requireActor();
+    const v = z.object({ ids, reason: z.string().trim().max(300) }).parse(input);
+    const rows = await sql<{ name: string; archived: boolean; why: string | null }[]>`select name, archived, why from archive_domains(${v.ids}::uuid[], ${v.reason}, ${actor})`;
+    refresh();
+    return { ok: true, data: { archived: rows.filter((r) => r.archived).length, refused: rows.filter((r) => !r.archived).map((r) => ({ name: r.name, why: r.why ?? "" })) } };
+  } catch (e) {
+    return fail(e);
+  }
+}
+
+/** Brings archived domains back into the lists. */
+export async function restoreDomains(input: { ids: string[] }): Promise<ActionResult<{ restored: number }>> {
+  try {
+    await requireActor();
+    const v = z.object({ ids }).parse(input);
+    const rows = await sql`update domains set archived_at = null, archived_reason = null, archived_by = null
+      where id = any(${v.ids}::uuid[]) and archived_at is not null returning id`;
+    refresh();
+    return { ok: true, data: { restored: rows.length } };
+  } catch (e) {
+    return fail(e);
+  }
+}
+
+/**
  * Records domains as replaced (burned) without running a replacement, for old
  * data, or moves them to recovery (resting).
  */

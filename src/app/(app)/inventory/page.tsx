@@ -42,7 +42,7 @@ async function InventoryContent() {
   await getCurrentUser();
   const [{ accounts, tlds, renewals, totals }, domains, clients, ht] = await Promise.all([getInventory(), listDomains(), listClients(), getHypertideSummary()]);
   const money = (c: number) => `$${(c / 100).toLocaleString("en-US", { maximumFractionDigits: 0 })}`;
-  const life = { active: 0, setup: 0, free: 0, cooling: 0, replaced: 0, recovery: 0, expired: 0 };
+  const life = { active: 0, setup: 0, free: 0, cooling: 0, replaced: 0, recovery: 0, expired: 0, unregistered: 0 };
   for (const d of domains) life[lifeOf(d)]++;
   const activeCapacity = domains.filter((d) => lifeOf(d) === "active").reduce((a, d) => a + d.capacity, 0);
   const activeInboxes = domains.filter((d) => lifeOf(d) === "active").reduce((a, d) => a + d.inboxCount, 0);
@@ -87,6 +87,7 @@ async function InventoryContent() {
           <span className="stat-foot">
             {totals.annualCents ? <span title="Yearly cost, excluding replaced domains">{money(totals.annualCents)} a year</span> : `in ${accounts.length} account${accounts.length === 1 ? "" : "s"}`}
             {totals.expired ? <> · <Link href="/inventory?view=expired#domains" className="hover:underline">{int(totals.expired)} expired</Link></> : null}
+            {totals.unregistered ? <> · <Link href="/inventory?view=unregistered#domains" className="hover:underline" title="Listed by a registrar account with no expiry date: never registered, so not counted as owned">{int(totals.unregistered)} not registered</Link></> : null}
           </span>
         </div>
       </section>

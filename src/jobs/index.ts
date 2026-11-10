@@ -12,6 +12,8 @@ import { processInboxChanges, runDuePlans } from "./inbox-settings";
 import { checkNameservers, processNameserverRequests } from "./nameservers";
 import { advanceReplacements, trackHypertideOrders } from "./replacements";
 import { syncAllRegistrars } from "./registrar-sync";
+import { checkRegistry } from "./registry-check";
+import { createRdap } from "../integrations/rdap";
 import { enrolNewDomains } from "./warmup-program";
 import { syncAccounts, syncCampaigns, syncClients, syncDomainStats, dayIn } from "./smartlead-sync";
 import { syncPlacementSeeds } from "./placement-seeds";
@@ -39,6 +41,9 @@ export type Job = { name: string; label: string; everyMinutes: number; run: (ctx
 
 const needsSmartlead = (fn: (ctx: JobContext & { smartlead: Smartlead }) => Promise<Record<string, unknown>>) =>
   async (ctx: JobContext) => (ctx.smartlead ? fn({ ...ctx, smartlead: ctx.smartlead }) : { skipped: "SMARTLEAD_API_KEY not set" });
+
+// One client for the worker's life, so IANA's list of registry servers is read once a day.
+const rdap = createRdap();
 
 export const JOBS: Job[] = [
   {
@@ -146,6 +151,12 @@ export const JOBS: Job[] = [
     label: "Registrar domains",
     everyMinutes: 360,
     run: ({ sql, registrars, brokenRegistrars }) => syncAllRegistrars(sql, registrars, brokenRegistrars),
+  },
+  {
+    name: "registry-check",
+    label: "Registry check (does each domain exist, its registrar and expiry)",
+    everyMinutes: 10,
+    run: ({ sql }) => checkRegistry(sql, rdap),
   },
   {
     name: "bounce-causes",

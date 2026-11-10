@@ -11,6 +11,7 @@ import { sql } from "./db";
 import type { ConnectionProblem } from "@/lib/connections";
 import type { DomainStatus, ReplacementReason, StepStatus } from "./status";
 import { REPLACEMENT_TLDS } from "./tlds";
+import { PROVIDERS, isProvider } from "./registrar-providers";
 
 // ---------------------------------------------------------------------------
 // Shared lookups
@@ -376,6 +377,7 @@ export async function listDomains() {
       select ri.new_domain_id, nd.name, ri.created_at from replacement_items ri
       join replacement_batches rb on rb.id = ri.batch_id join domains nd on nd.id = ri.new_domain_id
       where ri.old_domain_id = d.id and rb.status <> 'cancelled' order by ri.created_at desc limit 1) rp on true
+    where d.archived_at is null
     order by d.name`;
 }
 
@@ -570,6 +572,7 @@ export async function listStorageCandidates(limit = 200) {
       coalesce(d.purchased_at, d.registered_at)::timestamptz as born_at, d.last_used_on
     from domains d left join vendors v on v.id = d.registrar_id
     where d.status = 'in_storage' and (d.expires_at is null or d.expires_at > current_date + free_min_days()) and not domain_unregistered(d)
+      and d.archived_at is null and d.registry_found is not false
       and (d.last_used_on is null or d.last_used_on + reuse_after_days() <= current_date)
       and lower(d.tld) = any(${[...REPLACEMENT_TLDS]}::text[])
     order by domain_is_free(d) desc, (d.last_used_on is not null), (d.registrar_id is null), coalesce(d.purchased_at, d.registered_at) nulls last, d.created_at, d.name
@@ -590,10 +593,10 @@ export type Breakdown = {
 
 // An expired domain counts only as expired, never as owned, active or free.
 const breakdownCounts = (s: typeof sql) => s`
-  count(*) filter (where d.expires_at is null or d.expires_at >= current_date)::int as total,
+  count(*) filter (where (d.expires_at is null or d.expires_at >= current_date) and not domain_unregistered(d))::int as total,
   count(*) filter (where d.status = 'active' and (d.expires_at is null or d.expires_at >= current_date))::int as active,
   count(*) filter (where d.status in ('provisioning', 'warming') and (d.expires_at is null or d.expires_at >= current_date))::int as setup,
-  count(*) filter (where d.status = 'in_storage' and (d.expires_at is null or d.expires_at > current_date + free_min_days()) and not domain_unregistered(d) and (d.last_used_on is null or d.last_used_on + reuse_after_days() <= current_date))::int as free,
+  count(*) filter (where d.status = 'in_storage' and (d.expires_at is null or d.expires_at > current_date + free_min_days()) and not domain_unregistered(d) and d.registry_found is not false and (d.last_used_on is null or d.last_used_on + reuse_after_days() <= current_date))::int as free,
   count(*) filter (where d.status = 'in_storage' and (d.expires_at is null or d.expires_at >= current_date) and d.last_used_on + reuse_after_days() > current_date)::int as cooling,
   count(*) filter (where d.status in ('draining', 'burned', 'resting') and (d.expires_at is null or d.expires_at >= current_date))::int as replaced,
   count(*) filter (where d.status = 'in_storage' and (d.expires_at is null or d.expires_at >= current_date) and d.last_used_on is not null)::int as used_before,
@@ -606,26 +609,70 @@ export async function getInventory() {
     sql<Breakdown[]>`
       select coalesce(ra.id::text, v.name, 'none') as key, coalesce(v.name, 'No registrar account') as label, ra.label as sub, ${breakdownCounts(sql)}
       from domains d left join vendors v on v.id = d.registrar_id left join registrar_accounts ra on ra.id = d.registrar_account_id
+      where d.archived_at is null
       group by ra.id, v.name, ra.label order by (v.name is null), total desc`,
     sql<Breakdown[]>`
       select coalesce(d.tld, '?') as key, '.' || coalesce(d.tld, '?') as label, null as sub, ${breakdownCounts(sql)}
-      from domains d group by d.tld order by total desc`,
+      from domains d where d.archived_at is null group by d.tld order by total desc`,
     sql<RenewalRow[]>`
       select d.id, d.name, d.status, v.name as registrar, d.expires_at, d.cost_cents, c.name as client_name, c.hue as client_hue
       from domains d left join vendors v on v.id = d.registrar_id left join clients c on c.id = d.client_id
-      where d.expires_at between current_date and current_date + 60
+      where d.expires_at between current_date and current_date + 60 and d.archived_at is null
       order by d.expires_at, d.name`,
-    sql<{ owned: number; expired: number; storage: number; cooling: number; reuseAfterDays: number; annualCents: number; retiredRenewing: number }[]>`
-      select count(*) filter (where expires_at is null or expires_at >= current_date)::int as owned,
+    sql<{ owned: number; expired: number; unregistered: number; storage: number; cooling: number; reuseAfterDays: number; annualCents: number; retiredRenewing: number }[]>`
+      select count(*) filter (where (expires_at is null or expires_at >= current_date) and not domain_unregistered(d))::int as owned,
+        count(*) filter (where domain_unregistered(d))::int as unregistered,
         count(*) filter (where expires_at < current_date)::int as expired,
         count(*) filter (where status = 'in_storage' and (expires_at is null or expires_at >= current_date))::int as storage,
         count(*) filter (where status = 'in_storage' and (expires_at is null or expires_at >= current_date) and last_used_on + reuse_after_days() > current_date)::int as cooling,
         reuse_after_days() as reuse_after_days,
         coalesce(sum(cost_cents) filter (where status not in ('burned', 'resting') and (expires_at is null or expires_at >= current_date)), 0)::int as annual_cents,
         count(*) filter (where status in ('burned', 'resting') and auto_renew is not false and expires_at between current_date and current_date + 60)::int as retired_renewing
-      from domains`,
+      from domains d where archived_at is null`,
   ]);
   return { accounts, tlds, renewals, totals };
+}
+
+export type AuditAccount = {
+  id: string; vendor: string; label: string;
+  /** What the account's last list held, and when it was read in full. */
+  listed: number | null; listedAt: Date | null; lastSyncedAt: Date | null; lastOk: boolean | null; lastError: string | null;
+  /** Domains the app has on the account, and how many of those the last list didn't have. */
+  inApp: number; gone: number;
+};
+export type AuditProgress = { total: number; checked: number; found: number; missing: number; failed: number; lastCheckedAt: Date | null };
+
+/** Every domain with what its registrar account and the registry say, the accounts, and how far the registry check has got. */
+export async function getDomainAudit() {
+  const [rows, accounts, [progress]] = await Promise.all([
+    sql<import("./audit").AuditRow[]>`
+      select d.id, d.name, d.tld, d.status, c.name as client_name, c.hue as client_hue,
+        v.name as registrar, ra.label as registrar_account, d.expires_at,
+        domain_unregistered(d) as unregistered, domain_gone_from_registrar(d) as gone,
+        ra.listed_at as account_listed_at, d.registrar_seen_at, domain_in_use(d) as in_use,
+        (select count(*)::int from inboxes i where i.domain_id = d.id and i.status <> 'removed') as inbox_count,
+        d.registry_checked_at, d.registry_found, d.registry_expires_at, d.registry_registrar, d.registry_status, d.registry_error,
+        d.archived_at, d.archived_reason, d.archived_by
+      from domains d
+      left join clients c on c.id = d.client_id
+      left join vendors v on v.id = d.registrar_id
+      left join registrar_accounts ra on ra.id = d.registrar_account_id
+      order by d.name`,
+    sql<AuditAccount[]>`
+      select ra.id, ra.provider as vendor, ra.label, ra.domain_count as listed, ra.listed_at, ra.last_synced_at, ra.last_ok, ra.last_error,
+        (select count(*)::int from domains d where d.registrar_account_id = ra.id and d.archived_at is null) as in_app,
+        (select count(*)::int from domains d where d.registrar_account_id = ra.id and d.archived_at is null and domain_gone_from_registrar(d)) as gone
+      from registrar_accounts ra
+      order by ra.provider, ra.label`,
+    sql<AuditProgress[]>`
+      select count(*)::int as total, count(registry_checked_at)::int as checked,
+        (count(*) filter (where registry_found))::int as found, (count(*) filter (where registry_found = false))::int as missing,
+        (count(*) filter (where registry_error is not null and registry_error not like 'Not a domain name%'))::int as failed, max(registry_checked_at) as last_checked_at
+      from domains where archived_at is null`,
+  ]);
+  // The provider's vendor name, as domains show it.
+  const named = accounts.map((a) => ({ ...a, vendor: isProvider(a.vendor) ? PROVIDERS[a.vendor].vendor : a.vendor }));
+  return { rows, accounts: named, progress };
 }
 
 export type HypertideSummary = {

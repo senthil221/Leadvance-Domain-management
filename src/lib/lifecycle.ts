@@ -8,7 +8,7 @@ import { HT_DONE, inRecoveryPool, isHtCancelled } from "./states";
 // Where a domain is in its life: sending, being set up, free in storage,
 // cooling down (in storage but used too recently to pick again), replaced
 // (draining or burned) or in recovery (resting, or in Hypertide's recovery pool).
-export type Life = "active" | "setup" | "free" | "cooling" | "replaced" | "recovery" | "expired";
+export type Life = "active" | "setup" | "free" | "cooling" | "replaced" | "recovery" | "expired" | "unregistered";
 export const LIFE: Record<Life, { label: string; tone: Tone }> = {
   active: { label: "Active", tone: "success" },
   setup: { label: "Setting up", tone: "info" },
@@ -17,10 +17,11 @@ export const LIFE: Record<Life, { label: string; tone: Tone }> = {
   replaced: { label: "Replaced", tone: "warning" },
   recovery: { label: "Recovery", tone: "violet" },
   expired: { label: "Expired", tone: "danger" },
+  unregistered: { label: "Not registered", tone: "danger" },
 };
-export const LIFE_ORDER: Life[] = ["active", "setup", "free", "cooling", "replaced", "recovery", "expired"];
+export const LIFE_ORDER: Life[] = ["active", "setup", "free", "cooling", "replaced", "recovery", "expired", "unregistered"];
 /** The Inventory tabs. */
-export const LIFE_TABS: Life[] = ["active", "setup", "free", "cooling", "replaced", "recovery", "expired"];
+export const LIFE_TABS: Life[] = ["active", "setup", "free", "cooling", "replaced", "recovery", "expired", "unregistered"];
 
 export { inRecoveryPool };
 
@@ -30,7 +31,9 @@ export { inRecoveryPool };
  * everything; storage splits on the reuse cool-down; draining and burned are
  * Replaced unless the domain sits in Hypertide's recovery pool.
  */
-export function lifeOf(d: Pick<DomainRow, "status" | "htPayment"> & { coolingUntil?: Date | string | null; expired?: boolean }): Life {
+export function lifeOf(d: Pick<DomainRow, "status" | "htPayment"> & { coolingUntil?: Date | string | null; expired?: boolean; unregistered?: boolean }): Life {
+  // Never registered (its registrar lists it with no expiry date): a tab of its own, whatever its status.
+  if (d.unregistered) return "unregistered";
   // Past its renewal date, it's expired whatever else it says: never Active or Free.
   if (d.expired) return "expired";
   if (d.status === "in_storage") return d.coolingUntil ? "cooling" : "free";

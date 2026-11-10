@@ -17,7 +17,7 @@ const SECTIONS: { key: string; title: string; sub: string; jobs: string[] }[] = 
   { key: "providers", title: "Hypertide and Icemail", sub: "Orders, mailboxes and replacements in progress",
     jobs: ["hypertide-orders", "icemail", "replacement-steps"] },
   { key: "domains", title: "Domains and registrars", sub: "Registrar accounts, nameserver changes and lookups, drained domains",
-    jobs: ["registrar-domains", "nameserver-requests", "nameserver-check", "retire-drained"] },
+    jobs: ["registrar-domains", "registry-check", "nameserver-requests", "nameserver-check", "retire-drained"] },
   { key: "stats", title: "Stats", sub: "Bounce reasons, daily numbers and health rules",
     jobs: ["bounce-causes", "placement-seeds", "rollup"] },
 ];
