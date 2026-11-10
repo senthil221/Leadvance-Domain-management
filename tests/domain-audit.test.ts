@@ -6,7 +6,7 @@ import { loadMigrations } from "../scripts/migrations";
 import { createRdap, isBeingDeleted, parseBootstrap, parseRdapDomain, parseWhois, type RdapClient } from "../src/integrations/rdap";
 import type { RegistrarAccount, RegistrarClient } from "../src/integrations/registrars";
 import { syncRegistrarDomains } from "../src/jobs/registrar-sync";
-import { checkRegistry } from "../src/jobs/registry-check";
+import { checkRegistry, type HostPace } from "../src/jobs/registry-check";
 import { auditIssues, issueText, registrarKey, type AuditRow } from "../src/lib/audit";
 
 describe("RDAP answers", () => {
@@ -21,6 +21,16 @@ describe("RDAP answers", () => {
     expect(await rdap.lookup("gone.co")).toEqual({ found: false, host: "whois.registry.co" });
     expect(whoisImpl.mock.calls.filter((c) => c[0] === "whois.iana.org")).toHaveLength(1);
     expect(parseWhois("% rate limited\n")).toMatchObject({ found: null });
+  });
+
+  it("takes a WHOIS answer with nothing in it but a limit message as slow down, and a real one as an answer", async () => {
+    const fetchImpl = (async () => Response.json({ services: [] })) as unknown as typeof fetch;
+    const whoisImpl = async (host: string, query: string) => host === "whois.iana.org" ? "whois: whois.nic.io\n"
+      : query === "busy.io" ? "Query rate limit exceeded. Try again later.\n"
+      : "Registry Expiry Date: 2027-05-01T00:00:00Z\nRegistrar: Spaceship, Inc.\nUse of this service is subject to a query rate limit.\n";
+    const rdap = createRdap({ fetchImpl, whoisImpl });
+    expect(await rdap.lookup("busy.io")).toMatchObject({ found: null, throttled: true, host: "whois.nic.io" });
+    expect(await rdap.lookup("fine.io")).toMatchObject({ found: true, registrar: "Spaceship, Inc.", expiresAt: "2027-05-01" });
   });
 
   it("reads the registrar, expiry and status, and the bootstrap's servers", () => {
@@ -42,12 +52,12 @@ describe("RDAP answers", () => {
       const u = String(url);
       if (u.includes("iana")) return Response.json({ services: [[["com"], ["https://rdap.example/"]]] });
       if (u.endsWith("/gone.com")) return new Response("", { status: 404 });
-      if (u.endsWith("/busy.com")) return new Response("", { status: 429 });
+      if (u.endsWith("/busy.com")) return new Response("", { status: 429, headers: { "Retry-After": "120" } });
       return Response.json({ events: [{ eventAction: "expiration", eventDate: "2027-01-01T00:00:00Z" }], entities: [] });
     }) as unknown as typeof fetch;
     const rdap = createRdap({ fetchImpl });
     expect(await rdap.lookup("gone.com")).toEqual({ found: false, host: "rdap.example" });
-    expect(await rdap.lookup("busy.com")).toMatchObject({ found: null, throttled: true });
+    expect(await rdap.lookup("busy.com")).toMatchObject({ found: null, throttled: true, retryAfterSec: 120 });
     expect(await rdap.lookup("here.com")).toMatchObject({ found: true, expiresAt: "2027-01-01" });
     expect(await rdap.lookup("x.com-old")).toMatchObject({ found: null, error: "Not a domain name: .com-old isn't a real ending" });
     // The bootstrap is read once.
@@ -172,8 +182,10 @@ describe("domain audit in the database", () => {
         : name === "busy.info" ? { found: null, error: "slow down", host: "rdap.info", throttled: true }
         : { found: null, error: ".zz has no RDAP server", host: null },
     };
-    const r = await checkRegistry(sql, rdap, { gapMs: 0 });
-    expect(r).toEqual({ due: 4, checked: 3, found: 1, missing: 1, failed: 1, skipped: 1 });
+    let clock = Date.parse("2026-11-11T10:00:00Z");
+    const paces = new Map<string, HostPace>();
+    const r = await checkRegistry(sql, rdap, { gapMs: 0, paces, now: () => clock });
+    expect(r).toEqual({ due: 4, checked: 3, found: 1, missing: 1, failed: 1, waiting: 1, note: "rdap.info asked us to slow down, resting 1m" });
     const rows = Object.fromEntries((await sql`select name, registry_found, registry_registrar, to_char(registry_expires_at, 'YYYY-MM-DD') as exp, registry_status, registry_error,
         registry_checked_at is not null as asked, registry_checked_at < now() - interval '5 days' as retry_soon from domains`).map((x) => [x.name, x]));
     expect(rows["here.com"]).toMatchObject({ registry_found: true, registry_registrar: "Dynadot Inc", exp: "2027-03-01", registry_status: ["redemption period"], registry_error: null });
@@ -181,10 +193,39 @@ describe("domain audit in the database", () => {
     expect(rows["busy.info"]).toMatchObject({ asked: false });
     expect(rows["odd.zz"]).toMatchObject({ registry_found: null, registry_error: ".zz has no RDAP server", retry_soon: true });
 
+    // The server that asked us to slow down rests: the next run leaves it alone and the others go on.
+    await sql`insert into domains (name, status) values ('next.com', 'in_storage')`;
+    const lookups: string[] = [];
+    const counting: RdapClient = { ...rdap, lookup: async (name) => { lookups.push(name); return rdap.lookup(name); } };
+    expect(await checkRegistry(sql, counting, { gapMs: 0, paces, now: () => clock })).toMatchObject({ due: 2, checked: 1, waiting: 1 });
+    expect(lookups).toEqual(["next.com"]);
+    // Asked again after its rest and told to slow down again, it rests twice as long and is asked at a wider gap.
+    clock += 61_000;
+    expect(await checkRegistry(sql, counting, { gapMs: 0, paces, now: () => clock })).toMatchObject({ checked: 0, waiting: 1, note: "rdap.info asked us to slow down, resting 2m" });
+    expect(paces.get("rdap.info")).toMatchObject({ strikes: 2, gapMs: 2000 });
+
     // A domain the registry has no record of is never free and can't be a replacement.
     await sql`insert into domains (name, status) values ('old.com', 'active')`;
     await expect(sql`select start_replacement(array[(select id from domains where name = 'old.com')], array[(select id from domains where name = 'gone.com')], 'other', null, 'me')`)
       .rejects.toThrow(/gone\.com isn't registered: the registry has no record/);
     expect((await sql`select name from domains d where domain_is_free(d)`).map((x) => x.name)).not.toContain("gone.com");
+  });
+});
+
+describe("registry check pacing", () => {
+  it("takes the servers in turn, each at its own gap, instead of one after another", async () => {
+    let clock = 0;
+    const slept: number[] = [];
+    const asked: string[] = [];
+    const rows = ["a.com", "b.com", "c.com", "x.info"].map((name, i) => ({ id: String(i), name, total: 4 }));
+    const fake = Object.assign(async (strings: TemplateStringsArray) => (strings.join("").includes("count(*) over") ? rows : []), {}) as unknown as postgres.Sql;
+    const rdap: RdapClient = {
+      hostFor: async (tld) => `rdap.${tld}`,
+      lookup: async (name) => { asked.push(`${name}@${clock}`); return { found: false, host: `rdap.${name.split(".").pop()}` }; },
+    };
+    const r = await checkRegistry(fake, rdap, { gapMs: 1000, paces: new Map(), now: () => clock, sleep: async (ms) => { slept.push(ms); clock += ms; } });
+    expect(r).toMatchObject({ due: 4, checked: 4, missing: 4, waiting: 0 });
+    expect(asked).toEqual(["a.com@0", "x.info@0", "b.com@1000", "c.com@2000"]);
+    expect(slept).toEqual([1000, 1000]);
   });
 });

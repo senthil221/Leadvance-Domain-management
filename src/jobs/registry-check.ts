@@ -3,53 +3,103 @@ import type { RdapClient } from "../integrations/rdap";
 
 type Sql = postgres.Sql;
 
+/** How gently to ask one registry server: the gap between questions, and a rest after it asked us to slow down. */
+export type HostPace = { gapMs: number; restUntil: number; strikes: number };
+
+// Kept for the life of the process (the worker), so a server that asked us to
+// slow down rests across runs and is asked more gently afterwards.
+const PACES = new Map<string, HostPace>();
+
+const MAX_GAP_MS = 10_000;
+const MAX_REST_MS = 30 * 60_000;
+
 /**
  * Asks the registry about the domains checked longest ago (never checked
- * first), a batch per run, and keeps what it says on each domain: found or not,
- * registrar of record, expiry and status. Each registry server gets one question
- * at a time with a gap between, and one that asks us to slow down is left alone
- * until the next run. A domain is asked again after a week; one the registry
- * couldn't answer for, after a day. A run stops after 75 seconds, since the
- * worker runs its jobs one after another.
+ * first) and keeps what it says on each domain: found or not, registrar of
+ * record, expiry and status. Domains are queued by the server that answers for
+ * them and the servers are taken in turn, each with its own gap between
+ * questions, so a slow or strict one doesn't hold up the rest. A server that
+ * asks us to slow down rests (a minute, doubling each time it asks again, up to
+ * half an hour, or as long as it says) and is asked at twice the gap after.
+ * A domain is asked again after a week; one the registry couldn't answer for,
+ * after a day. A run stops after 75 seconds, since the worker runs its jobs one
+ * after another.
  */
-export async function checkRegistry(sql: Sql, rdap: RdapClient, opts: { limit?: number; gapMs?: number; maxMs?: number; sleep?: (ms: number) => Promise<void> } = {}) {
-  const { limit = 120, gapMs = 500, maxMs = 75_000, sleep = (ms: number) => new Promise((r) => setTimeout(r, ms)) } = opts;
-  const due = await sql<{ id: string; name: string }[]>`
-    select id, name from domains
+export async function checkRegistry(
+  sql: Sql,
+  rdap: RdapClient,
+  opts: { limit?: number; pool?: number; gapMs?: number; maxMs?: number; sleep?: (ms: number) => Promise<void>; now?: () => number; paces?: Map<string, HostPace> } = {},
+) {
+  const {
+    limit = 400, pool = 2000, gapMs = 500, maxMs = 75_000,
+    sleep = (ms: number) => new Promise((r) => setTimeout(r, ms)), now = () => Date.now(), paces = PACES,
+  } = opts;
+  const due = await sql<{ id: string; name: string; total: number }[]>`
+    select id, name, count(*) over ()::int as total from domains
     where archived_at is null and (registry_checked_at is null or registry_checked_at < now() - interval '7 days')
-    order by registry_checked_at nulls first, name limit ${limit}`;
-  const started = Date.now();
-  const lastAt = new Map<string, number>();
-  const slowed = new Set<string>();
-  let checked = 0, found = 0, missing = 0, failed = 0, skipped = 0;
+    order by registry_checked_at nulls first, name limit ${pool}`;
+  const started = now();
+  const pace = (host: string) => {
+    let p = paces.get(host);
+    if (!p) paces.set(host, (p = { gapMs, restUntil: 0, strikes: 0 }));
+    return p;
+  };
 
+  // One queue per server, oldest-checked first within each. "" holds the
+  // domains no server was found for; the lookup says why.
+  const hosts = new Map<string, string>();
+  const queues = new Map<string, { id: string; name: string }[]>();
   for (const d of due) {
-    if (Date.now() - started > maxMs) break;
-    const tld = d.name.split(".").pop() ?? "";
-    let host: string | null = null;
-    try {
-      host = await rdap.hostFor(tld);
-    } catch {
-      // The lookup below reports it.
+    const tld = (d.name.split(".").pop() ?? "").toLowerCase();
+    if (!hosts.has(tld)) hosts.set(tld, (await rdap.hostFor(tld).catch(() => null)) ?? "");
+    const host = hosts.get(tld)!;
+    const q = queues.get(host);
+    if (q) q.push(d);
+    else queues.set(host, [d]);
+  }
+  let waiting = 0;
+  for (const [host, q] of queues) {
+    if (host && pace(host).restUntil > now()) {
+      waiting += q.length;
+      queues.delete(host);
     }
-    if (host && slowed.has(host)) { skipped++; continue; }
-    if (host) {
-      const wait = (lastAt.get(host) ?? 0) + gapMs - Date.now();
-      if (wait > 0) await sleep(wait);
-      lastAt.set(host, Date.now());
+  }
+
+  const lastAt = new Map<string, number>();
+  let asked = 0, checked = 0, found = 0, missing = 0, failed = 0;
+  while (queues.size && asked < limit && now() - started < maxMs) {
+    // The server we may ask soonest.
+    let host = "", at = Infinity;
+    for (const h of queues.keys()) {
+      const t = h && lastAt.has(h) ? lastAt.get(h)! + pace(h).gapMs : -Infinity;
+      if (t < at) [host, at] = [h, t];
     }
+    if (at - now() > 0) await sleep(at - now());
+    const q = queues.get(host)!;
+    const d = q.shift()!;
+    if (!q.length) queues.delete(host);
+    if (host) lastAt.set(host, now());
+    asked++;
 
     let r: Awaited<ReturnType<RdapClient["lookup"]>>;
     try {
       r = await rdap.lookup(d.name);
     } catch (e) {
-      r = { found: null, error: e instanceof Error ? e.message : String(e), host };
+      r = { found: null, error: e instanceof Error ? e.message : String(e), host: host || null };
     }
     if (r.found === null && r.throttled) {
-      if (r.host) slowed.add(r.host);
-      skipped++;
+      const h = r.host ?? host;
+      if (h) {
+        const p = pace(h);
+        p.strikes++;
+        p.gapMs = Math.min(Math.max(p.gapMs * 2, 1000), MAX_GAP_MS);
+        p.restUntil = now() + Math.max((r.retryAfterSec ?? 0) * 1000, Math.min(60_000 * 2 ** (p.strikes - 1), MAX_REST_MS));
+      }
+      waiting += 1 + (queues.get(h)?.length ?? 0);
+      queues.delete(h);
       continue;
     }
+    if (host) pace(host).strikes = 0;
     checked++;
     if (r.found === true) {
       found++;
@@ -71,5 +121,8 @@ export async function checkRegistry(sql: Sql, rdap: RdapClient, opts: { limit?: 
       await sql`update domains set registry_checked_at = now() - interval '6 days', registry_error = ${r.error.slice(0, 300)} where id = ${d.id}`;
     }
   }
-  return { due: due.length, checked, found, missing, failed, skipped };
+
+  const resting = [...new Set(hosts.values())].filter((h) => h && (paces.get(h)?.restUntil ?? 0) > now())
+    .map((h) => `${h} asked us to slow down, resting ${Math.ceil((paces.get(h)!.restUntil - now()) / 60_000)}m`);
+  return { due: due[0]?.total ?? 0, checked, found, missing, failed, waiting, ...(resting.length ? { note: resting.join("; ") } : {}) };
 }

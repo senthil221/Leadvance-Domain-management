@@ -83,12 +83,15 @@ function whois(host: string, query: string, timeoutMs: number): Promise<string> 
 const DELETING = ["redemption period", "pending delete", "pending restore"];
 export const isBeingDeleted = (status: readonly string[]) => status.some((s) => DELETING.includes(s.toLowerCase()));
 
+/** A WHOIS server saying we asked too often. */
+const WHOIS_LIMITED = /rate limit|limit exceeded|too many (?:requests|queries)|query quota|exceeded the (?:maximum|allowed)/i;
+
 const BOOTSTRAP_URL = "https://data.iana.org/rdap/dns.json";
 
 export type RdapClient = {
   /** The server that answers for a TLD (RDAP, else WHOIS), or null when there's none. */
   hostFor(tld: string): Promise<string | null>;
-  lookup(name: string): Promise<RegistryRecord & { host: string | null; throttled?: boolean }>;
+  lookup(name: string): Promise<RegistryRecord & { host: string | null; throttled?: boolean; retryAfterSec?: number }>;
 };
 
 type WhoisFn = (host: string, query: string, timeoutMs: number) => Promise<string>;
@@ -129,7 +132,11 @@ export function createRdap({ fetchImpl = fetch, timeoutMs = 15_000, whoisImpl = 
         const host = await whoisFor(tld).catch(() => null);
         if (!host) return { found: null, error: `.${tld} has no RDAP or WHOIS server`, host: null };
         try {
-          return { ...parseWhois(await whoisImpl(host, name, timeoutMs)), host };
+          const text = await whoisImpl(host, name, timeoutMs);
+          const r = parseWhois(text);
+          // Only an answer with nothing in it counts: the terms of use in a real one can mention limits too.
+          if (r.found === null && WHOIS_LIMITED.test(text)) return { found: null, error: `${host} asked us to slow down`, host, throttled: true };
+          return { ...r, host };
         } catch (e) {
           return { found: null, error: `${host} didn't answer: ${e instanceof Error ? e.message : String(e)}`, host };
         }
@@ -142,7 +149,10 @@ export function createRdap({ fetchImpl = fetch, timeoutMs = 15_000, whoisImpl = 
         return { found: null, error: `${host} didn't answer: ${e instanceof Error ? e.message : String(e)}`, host };
       }
       if (res.status === 404) return { found: false, host };
-      if (res.status === 429) return { found: null, error: `${host} asked us to slow down`, host, throttled: true };
+      if (res.status === 429) {
+        const wait = Number(res.headers.get("retry-after"));
+        return { found: null, error: `${host} asked us to slow down`, host, throttled: true, ...(wait > 0 ? { retryAfterSec: wait } : {}) };
+      }
       if (!res.ok) return { found: null, error: `${host} answered ${res.status}`, host };
       try {
         return { ...parseRdapDomain(await res.json()), host };

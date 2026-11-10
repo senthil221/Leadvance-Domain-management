@@ -53,6 +53,7 @@ export function summarize(detail: Record<string, unknown> | null | undefined) {
   const parts = Object.entries(detail)
     .filter(([, v]) => typeof v === "number")
     .map(([k, v]) => `${v} ${k.replace(/([A-Z])/g, " $1").toLowerCase()}`);
+  if (typeof detail.note === "string" && detail.note) parts.push(detail.note);
   return parts.length ? parts.join(", ") : null;
 }
 
