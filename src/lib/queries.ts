@@ -55,8 +55,26 @@ const fixFacts = async () => [...(await sql.unsafe<FixFact[]>(FIX_FACTS_SQL))];
 
 /** The call on every live sending domain: replace, watch, fix first, or leave alone. */
 export async function getReplaceCalls(facts: Promise<FixFact[]> = fixFacts()): Promise<ReplaceList> {
-  const [f, stats] = await Promise.all([facts, sql.unsafe<ReplaceStat[]>(REPLACE_STATS_SQL)]);
-  return replaceList(f, [...stats]);
+  const [f, stats, was] = await Promise.all([facts, sql.unsafe<ReplaceStat[]>(REPLACE_STATS_SQL), weakTagsBefore()]);
+  const list = replaceList(f, [...stats], 2, was);
+  // Written only when it changed: this runs on most pages, for the nav counts.
+  const now = list.weakBounceTags;
+  if (now.length !== was.size || now.some((k) => !was.has(k))) await keepWeakTags(now);
+  return list;
+}
+
+/** The tags weak on bounces last time the list was worked out: they stay weak until they fall well under the bar. */
+async function weakTagsBefore() {
+  const rows = await sql<{ tagKey: string }[]>`select tag_key from replace_weak_tags`.catch(() => []);
+  return new Set(rows.map((r) => r.tagKey));
+}
+
+/** Remembers which tags are weak now. A failure only loses the memory, never the list. */
+async function keepWeakTags(keys: string[]) {
+  await sql.begin(async (tx) => {
+    await tx`delete from replace_weak_tags where tag_key <> all(${keys}::text[])`;
+    if (keys.length) await tx`insert into replace_weak_tags (tag_key) select unnest(${keys}::text[]) on conflict (tag_key) do nothing`;
+  }).catch(() => undefined);
 }
 
 /** What the AI last said about a domain, cut down to what the list shows. */
@@ -437,7 +455,7 @@ export async function getDiagnosisInput(id: string): Promise<DiagnosisInput | nu
       select from_status as "from", to_status as "to", (${today}::date - at::date)::int as days_ago
       from domain_status_history where domain_id = ${id} and at >= ${today}::date - 60 order by at desc, id desc limit 8`,
   ]);
-  const call = replaceList([...facts], [...stats]).calls.get(id);
+  const call = replaceList([...facts], [...stats], 2, await weakTagsBefore()).calls.get(id);
   return {
     fact: facts.find((f) => f.domainId === id) ?? null,
     replace: call ? { call: call.call === "keep" ? "Keep" : call.call === "early" ? "Too early to judge" : CALL_META[call.call].label, reasons: call.reasons, tagNotes: call.tagNotes ?? [] } : null,

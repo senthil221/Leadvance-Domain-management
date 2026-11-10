@@ -255,6 +255,23 @@ describe("a whole tag that's worse than everyone", () => {
     expect(severityOf(list.domains.find((d) => d.domainId === good[0].domainId)!)).toBe("ok");
   });
 
+  it("keeps a tag weak until it falls well under the bar", () => {
+    // 1.7× the steady tag: under the 2× that makes a tag weak, over the 1.5× that keeps it so.
+    const good = Array.from({ length: 5 }, () => fact()), weak = Array.from({ length: 5 }, () => fact());
+    const big = (tags: string, sender: number) => ({ tags, sent7: 5000, sentPrev: 5000, sent14: 10000, sender7: sender, senderPrev: sender });
+    const stats = [...good.map((f) => stat(f.domainId, big("steady", 15))), ...weak.map((f) => stat(f.domainId, big("weak", 25)))];
+    const key = `${weak[0].clientId}|weak`;
+    const fresh = replaceList([...good, ...weak], stats);
+    expect(fresh.notes).toEqual([]);
+    expect(fresh.weakBounceTags).toEqual([]);
+    const kept = replaceList([...good, ...weak], stats, 2, new Set([key]));
+    expect(kept.weakBounceTags).toEqual([key]);
+    expect(kept.notes[0].text).toContain("and stay so until it falls under 1.5×");
+    // Back near the steady tag: dropped.
+    const calm = [...good.map((f) => stat(f.domainId, big("steady", 15))), ...weak.map((f) => stat(f.domainId, big("weak", 18)))];
+    expect(replaceList([...good, ...weak], calm, 2, new Set([key])).weakBounceTags).toEqual([]);
+  });
+
   it("leaves a steady tag alone", () => {
     expect(twoTags({}).list.notes).toEqual([]);
   });

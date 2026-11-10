@@ -34,6 +34,8 @@ export const REPLACE_RULES = {
   replaceRatio: 3,
   /** The same, lower: Watch, and Replace when the week before was over it too. */
   watchRatio: 2,
+  /** A tag weak on those bounces at watchRatio stays weak until it falls under this, so it doesn't flip its domains week to week. */
+  tagKeepRatio: 1.5,
   /** Replies of any kind at or under this share of the others' rate. */
   replyRatio: 0.5,
   /** Standard errors apart before a gap counts as real. */
@@ -93,6 +95,8 @@ export type ReplaceList = {
   calls: Map<string, { call: ReplaceCall | "keep" | "early"; reasons: string[]; tagNotes?: string[] }>;
   /** Every live domain, worst first. */
   domains: DomainRow[];
+  /** Tags weak on spam, policy and block list bounces now: keep them for the next run as wasWeak. */
+  weakBounceTags: string[];
 };
 
 const R = REPLACE_RULES;
@@ -129,7 +133,8 @@ const BLOCKING: FixKind[] = ["dns_down", "dns_records", "tenant", "disconnected"
  * The list. Each live sending domain is compared with its client's other live
  * domains over the same days; when those sent too little, with all live domains.
  */
-export function replaceList(facts: FixFact[], stats: ReplaceStat[], passes: 1 | 2 = 2): ReplaceList {
+/** wasWeak: the tags weak on bounces last time, which stay weak until they fall under tagKeepRatio. */
+export function replaceList(facts: FixFact[], stats: ReplaceStat[], passes: 1 | 2 = 2, wasWeak: ReadonlySet<string> = new Set()): ReplaceList {
   const statOf = new Map(stats.map((s) => [s.domainId, s]));
   const live = facts.filter(isLive);
   const clientNames = new Map(live.filter((f) => f.clientId).map((f) => [f.clientId!, f.clientName ?? ""]));
@@ -172,7 +177,9 @@ export function replaceList(facts: FixFact[], stats: ReplaceStat[], passes: 1 | 
     const client = own ? sub(own, g) : null;
     const base = client && client.sent7 >= R.peerSent ? client : fleet;
     const name = `${clientNames.get(clientId) || "A client"} · ${key.slice(key.indexOf("|") + 1)}`;
-    const bounces = g.sender7 >= 2 * R.minBounces && over(g.sender7, g.sent7, fleet.sender7, fleet.sent7, R.watchRatio);
+    const fresh = over(g.sender7, g.sent7, fleet.sender7, fleet.sent7, R.watchRatio);
+    const kept = !fresh && wasWeak.has(key) && over(g.sender7, g.sent7, fleet.sender7, fleet.sent7, R.tagKeepRatio);
+    const bounces = g.sender7 >= 2 * R.minBounces && (fresh || kept);
     const replies = base.replies7 > 0 && base.sent7 >= R.peerSent && g.replies7 / g.sent7 <= R.replyRatio * (base.replies7 / base.sent7)
       && zScore(g.replies7, g.sent7, base.replies7, base.sent7) <= -R.z;
     if (!bounces && !replies) continue;
@@ -180,7 +187,7 @@ export function replaceList(facts: FixFact[], stats: ReplaceStat[], passes: 1 | 
     const across = `across its ${n(g.domains)} domains`;
     const before = g.sentPrev >= R.minSent ? ` (${p(g.senderPrev, g.sentPrev)} the week before)` : "";
     if (bounces) {
-      tagNotes.push({ kind: "tag", id: key, name, text: `Spam, policy and block list bounces ${p(g.sender7, g.sent7)} ${across}${before}, ${times(g.sender7, g.sent7, fleet.sender7, fleet.sent7)} all other live domains (${p(fleet.sender7, fleet.sent7)}). Its domains are judged against the healthy tags instead of each other. Check the links in its copy before replacing many of them` });
+      tagNotes.push({ kind: "tag", id: key, name, text: `Spam, policy and block list bounces ${p(g.sender7, g.sent7)} ${across}${before}, ${times(g.sender7, g.sent7, fleet.sender7, fleet.sent7)} all other live domains (${p(fleet.sender7, fleet.sent7)}). Its domains are judged against the healthy tags instead of each other${kept ? `, and stay so until it falls under ${R.tagKeepRatio}×` : ""}. Check the links in its copy before replacing many of them` });
       noteTag(key, tagNotes[tagNotes.length - 1].text);
     }
     if (replies) {
@@ -354,7 +361,8 @@ export function replaceList(facts: FixFact[], stats: ReplaceStat[], passes: 1 | 
   for (const [id, g] of rest.byProvider) shared("provider", id, id, g, everyone.byProvider.get(id)!.domains);
 
   domains.sort((a, b) => severity(a) - severity(b) || b.sent7 - a.sent7 || a.name.localeCompare(b.name));
-  return { items, notes, judged: live.length, healthy, early, calls, domains };
+  const weakBounceTags = [...weakTags].filter(([, w]) => w.bounces).map(([k]) => k);
+  return { items, notes, judged: live.length, healthy, early, calls, domains, weakBounceTags };
 }
 
 /** How bad a domain's standing is, worst first: its call, then a weak tag, then nothing against it, then too little to judge. */
