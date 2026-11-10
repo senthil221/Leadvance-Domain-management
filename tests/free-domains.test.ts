@@ -57,6 +57,21 @@ describe("free domains", () => {
     expect(await free()).toEqual(["renews.com"]);
   });
 
+  it("leaves out a domain its connected registrar lists with no expiry date, which was never registered", async () => {
+    const { rows: [acct] } = await db.query<{ id: string }>(
+      "insert into registrar_accounts (provider, label, credentials, created_by) values ('unstoppable', 'Main', 'x', 'test') on conflict (provider, label) do update set label = excluded.label returning id");
+    const atUd = async (name: string, expires: string | null) =>
+      (await db.query<{ id: string }>("insert into domains (name, status, nameservers, expires_at, registrar_account_id) values ($1, 'in_storage', '{}', $2, $3) returning id", [name, expires, acct.id])).rows[0].id;
+    await atUd("registered.info", "2099-07-06");
+    const ghost = await atUd("ghost.info", null);
+    await add("noaccount.com");
+    expect(await free()).toEqual(["noaccount.com", "registered.info"]);
+
+    // A replacement refuses it, even when picked by hand.
+    const old = await add("old.com", { status: "active" });
+    await expect(db.query("select start_replacement($1, $2, 'other', null, 'test')", [[old], [ghost]])).rejects.toThrow(/ghost\.info isn't registered/);
+  });
+
   it("leaves out domains with any trace of use", async () => {
     const withInbox = await add("deletedinbox.com");
     await inbox(withInbox, "deletedinbox.com", "removed");

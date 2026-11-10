@@ -404,7 +404,7 @@ export function InventoryView({ domains, clients }: { domains: DomainRow[]; clie
                       <td className="is-num text-muted">{d.purchasedAt ? fixedDate(d.purchasedAt) : <span className="zero">—</span>}</td>
                       ) : null}
                       {on("renews") ? (
-                      <td className={`is-num ${d.expired && /redemption/i.test(d.registrarStatus ?? "") ? "text-warning-ink" : "text-muted"}`} title={d.expired && d.registrarStatus ? `The registrar says: ${d.registrarStatus}` : undefined}>{d.expiresAt ? fixedDate(d.expiresAt) : <span className="zero">—</span>}</td>
+                      <td className={`is-num ${d.expired && /redemption/i.test(d.registrarStatus ?? "") ? "text-warning-ink" : "text-muted"}`} title={d.expired && d.registrarStatus ? `The registrar says: ${d.registrarStatus}` : d.unregistered ? "Its registrar lists it with no expiry date: the registration never went through, so it can't be set up or used in a replacement" : undefined}>{d.expiresAt ? fixedDate(d.expiresAt) : d.unregistered ? <span className="text-warning-ink">Not registered</span> : <span className="zero">—</span>}</td>
                       ) : null}
                     </tr>
                   );
