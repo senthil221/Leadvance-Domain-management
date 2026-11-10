@@ -877,6 +877,17 @@ a.kpi:hover { border-color: var(--accent-line, var(--line-strong)); }
 .rs-rules b { font-weight: 500; color: var(--ink); }
 .rs-h3 { margin: 4px 0 0; font-size: 13px; font-weight: 500; color: var(--ink); }
 .rs-note { margin: 0; color: var(--muted); font-size: 12.5px; }
+.rs-tabs { border-bottom: 0; }
+.rs-tabs > button { padding-top: 2px; padding-bottom: 2px; }
+.rs-chips { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 7px 12px; border-bottom: 1px solid var(--line); }
+.rs-chips .rs-sync { margin-left: auto; }
+.rs-sort { padding: 0; border: 0; background: none; font: inherit; color: inherit; cursor: pointer; white-space: nowrap; }
+.rs-sort:hover { color: var(--ink); }
+.rs-all thead .rs-span th { padding-top: 6px; padding-bottom: 0; border-bottom: 0; }
+.rs-all .rs-span-h { text-align: center; color: var(--faint); font-weight: 500; border-bottom: 1px solid var(--line) !important; }
+.rs-all .rs-why { max-width: 230px; }
+.rs-all .rs-client .fx-provider { display: none; }
+.rs-all td.rs-hot { color: var(--danger-ink); font-weight: 600; }
 @media (max-width: 760px) { .rs-actions { margin-left: 0; } .rs-group-what { display: none; } }
 
 /* Domain diagnosis. */

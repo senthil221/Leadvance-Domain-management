@@ -150,7 +150,11 @@ export function ReviewView({ initial, clients }: { initial: ReviewData; clients:
   // What matters now, or what's finished: disconnected, replaced, cancelled, expired or deleted.
   // Filters stay while you move between tabs and pages; Clear resets them.
   const [scope, setScope] = useSticky<"current" | "ended">("review:scope", "current");
-  const [clientId, setClientId] = useSticky<string | null>("review:client", null);
+  // The client is shared with Stats, so picking or clearing it on one tab carries to the other.
+  // Stored as Stats keeps it: "" is every client, and "-" the domains without one.
+  const [sharedClient, setSharedClient] = useSticky("perf:client", "");
+  const clientId = sharedClient === "" ? null : sharedClient === "-" ? "" : sharedClient;
+  const setClientId = (id: string | null) => setSharedClient(id == null ? "" : id === "" ? "-" : id);
   const [slTag, setSlTag] = useSticky<string | null>("review:tag", null);
   const [groupBy, setGroupBy] = useSticky<"client" | "tag" | "provider" | "esp" | "tld">("review:group", "client");
   const [provider, setProvider] = useSticky<string | null>("review:provider", null);
@@ -234,8 +238,10 @@ export function ReviewView({ initial, clients }: { initial: ReviewData; clients:
     }
     return k;
   }, [viewed]);
-  const filtering = esp != null || tld != null || provider != null || signals.size > 0 || !!needle;
   const clearFilters = () => { setEsp(null); setTld(null); setProvider(null); setSignals(new Set()); setQ(""); };
+  // Every filter, the client, the tag and the call too: back to the page as it first opens.
+  const setCount = [clientId != null, slTag != null, !!only, scope !== "current", esp != null, tld != null, provider != null, signals.size > 0, !!needle].filter(Boolean).length;
+  const clearAll = () => { clearFilters(); setClientId(null); setSlTag(null); setOnly(""); setScope("current"); setSelected(new Set()); };
 
   const causes = useMemo(() => {
     const t: Partial<Record<BounceReason, number>> = {};
@@ -382,7 +388,11 @@ export function ReviewView({ initial, clients }: { initial: ReviewData; clients:
             <FacetSelect label="Filter by ESP" all="All ESPs" items={facets.esps} value={esp} onPick={setEsp} />
             <FacetSelect label="Filter by TLD" all="All TLDs" items={facets.tlds} value={tld} onPick={setTld} />
             <SignalMenu counts={facets.sigs} value={signals} onToggle={toggleSignal} onClear={() => setSignals(new Set())} />
-            {filtering ? <button type="button" className="btn btn-ghost btn-sm" onClick={clearFilters}><X size={13} /> Clear</button> : null}
+            {setCount ? (
+              <button type="button" className="btn btn-sm clear-all" data-on title="Clear every filter, the client, the tag and the search" onClick={clearAll}>
+                <X size={13} /> Clear all<span className="clear-all-n">{setCount}</span>
+              </button>
+            ) : null}
             <span className="spacer-auto" />
             <label className="search-input rv-search">
               <Search size={14} strokeWidth={1.5} />

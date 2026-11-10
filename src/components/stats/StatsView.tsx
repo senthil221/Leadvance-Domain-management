@@ -322,7 +322,9 @@ export function StatsView({ initial, initialReview, clients }: { initial: StatsD
   // Filters stay while you move between tabs and pages; Clear resets them. A link's ?client=,
   // ?tag=, ?esp=, ?sender=, ?status=, ?sl= or ?call= opens the page filtered and wins.
   const [q, setQ] = useSticky("stats:q", "");
-  const [clientId, setClientId] = useSticky("stats:client", "", params.get("client"));
+  // Shared with Weekly review, so picking or clearing a client carries between the tabs. "-" is its "no client".
+  const [sharedClient, setClientId] = useSticky("perf:client", "", params.get("client"));
+  const clientId = sharedClient === "-" ? "" : sharedClient;
   // ?sending=0 (from Overview's "sent nothing" line) shows domains that sent nothing too.
   const [onlySending, setOnlySending] = useSticky("stats:sending", true, params.get("sending") === "0" ? false : null);
   const urlCall = params.get("call");
@@ -443,8 +445,14 @@ export function StatsView({ initial, initialReview, clients }: { initial: StatsD
   }, [data.domains, clientId, standing, needle, call, calls, tag, esp, sender, sl, trend, base, sentIn, onlySending]);
   const clearFilters = () => { setCall(""); setTag(""); setEsp(""); setSender(""); setTrend(""); setSl("in"); };
   // Every filter, the client, which domains and the search too: back to the page as it first opens.
-  const setCount = [clientId, standing !== "current", call, trend, tag, esp, sender, sl !== "in", q.trim()].filter(Boolean).length;
-  const clearAll = () => { clearFilters(); setClientId(""); setStanding("current"); setQ(""); };
+  // The range the page opened on: Clear all goes back to it too, so a picked "Yesterday" doesn't stay behind.
+  const firstPreset = matchPreset(initial.from, initial.to, initial.today);
+  const rangeMoved = data.from !== initial.from || data.to !== initial.to;
+  const setCount = [sharedClient, standing !== "current", call, trend, tag, esp, sender, sl !== "in", q.trim(), rangeMoved].filter(Boolean).length;
+  const clearAll = () => {
+    clearFilters(); setClientId(""); setStanding("current"); setQ("");
+    if (rangeMoved || preset !== firstPreset) { setPreset(firstPreset); setFrom(initial.from); setTo(initial.to); load(initial.from, initial.to); }
+  };
 
   const rows = useMemo(() => {
     // Each row's sort value is worked out once, not on every comparison.
@@ -611,7 +619,7 @@ export function StatsView({ initial, initialReview, clients }: { initial: StatsD
           {options.esps.map(([k, n]) => <option key={k} value={k}>{k === NO_ESP ? "No ESP" : k} ({n})</option>)}
         </Select>
         <button type="button" className="btn btn-sm clear-all" data-on={setCount ? true : undefined} disabled={!setCount} onClick={clearAll}
-          title={setCount ? "Clear every filter, the client and the search" : "No filters set"}>
+          title={setCount ? "Clear every filter, the client, the search and the date range" : "No filters set"}>
           <X size={13} /> Clear all{setCount ? <span className="clear-all-n">{setCount}</span> : null}
         </button>
         <Select className="select rv-filter" data-on={sender ? true : undefined} value={sender} onChange={(e) => setSender(e.target.value)} aria-label="Filter by sender name">

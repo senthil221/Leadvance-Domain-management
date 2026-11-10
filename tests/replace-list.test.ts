@@ -2,7 +2,7 @@ import { PGlite } from "@electric-sql/pglite";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { loadMigrations } from "../scripts/migrations";
 import type { FixFact } from "../src/lib/fix-queue";
-import { outcomeOf, REPLACE_OUTCOMES_SQL, REPLACE_STATS_SQL, replaceCsv, replaceList, replaceSummary, type OutcomeRow, type ReplaceStat } from "../src/lib/replace-list";
+import { outcomeOf, REPLACE_OUTCOMES_SQL, REPLACE_STATS_SQL, replaceCsv, replaceList, replaceSummary, severityOf, type OutcomeRow, type ReplaceStat } from "../src/lib/replace-list";
 
 // Made-up domains only. A client's fleet is nine steady domains plus the one under test.
 let seq = 0;
@@ -15,7 +15,7 @@ const fact = (over: Partial<FixFact> = {}): FixFact => ({
 });
 const stat = (domainId: string, over: Partial<ReplaceStat> = {}): ReplaceStat => ({
   domainId, tld: "com", tags: null, sent7: 1000, replies7: 10, sentPrev: 1000, repliesPrev: 10, sent14: 2000, replies14: 20,
-  sender7: 3, senderPrev: 3, missing7: 2, missingPrev: 2, bounces7: 6, sendingDays: 60, beingReplaced: false, ...over,
+  sender7: 3, senderPrev: 3, missing7: 2, missingPrev: 2, bounces7: 6, sentY: 140, repliesY: 1, bouncesY: 1, senderY: 0, sendingDays: 60, beingReplaced: false, ...over,
 });
 /** Nine steady domains of one client, and the facts and stats for one more. */
 function fleet(own: Partial<ReplaceStat> = {}, ownFact: Partial<FixFact> = {}, peers: Partial<ReplaceStat> = {}) {
@@ -222,6 +222,55 @@ describe("many at once", () => {
   });
 });
 
+describe("a whole tag that's worse than everyone", () => {
+  // One client, two tags of five: a steady one, and one under test.
+  const twoTags = (bad: Partial<ReplaceStat>, worst: Partial<ReplaceStat> = bad) => {
+    const good = Array.from({ length: 5 }, () => fact()), weak = Array.from({ length: 5 }, () => fact());
+    const stats = [...good.map((f) => stat(f.domainId, { tags: "steady" })), ...weak.map((f, i) => stat(f.domainId, { tags: "weak", ...(i === 4 ? worst : bad) }))];
+    return { list: replaceList([...good, ...weak], stats), good, weak };
+  };
+
+  it("judges a tag's domains against the healthy tags when its spam and block bounces are high all over", () => {
+    // Every domain on the tag bounces at 1.2%, four times the steady tag: against each other none stands out.
+    const { list, weak } = twoTags({ sender7: 12, senderPrev: 12 });
+    expect(list.notes[0]).toMatchObject({ kind: "tag", name: "Client One · weak" });
+    expect(list.notes[0].text).toBe("Spam, policy and block list bounces 1.2% across its 5 domains (1.2% the week before), 4.0× all other live domains (0.30%). Its domains are judged against the healthy tags instead of each other. Check the links in its copy before replacing many of them");
+    expect(weak.map((f) => list.calls.get(f.domainId)?.call)).toEqual(["replace", "replace", "replace", "replace", "replace"]);
+    expect(list.items[0].reasons[0]).toContain("4.0× live domains on healthy tags (0.30%)");
+  });
+
+  it("only notes a tag that gets few replies, without replacing its domains on it", () => {
+    // Outlook inboxes can rightly get fewer replies than Google ones: the tag is named, its domains aren't replaced for it.
+    const { list, good, weak } = twoTags({ replies7: 1, replies14: 2, repliesPrev: 1 });
+    expect(list.items).toEqual([]);
+    expect(list.notes).toHaveLength(1);
+    expect(list.notes[0].text).toBe("Replies of any kind 0.10% across its 5 domains, against 1.0% for the client's other domains. With so few bounces the mail is delivered but not answered: likely the spam folder. Test placement on a few before replacing them all");
+    const row = list.domains.find((d) => d.domainId === weak[0].domainId)!;
+    expect(row).toMatchObject({ call: "keep", weakTag: "Tag replies 0.10% vs 1.0%" });
+    expect(severityOf(row)).toBe("weak");
+    expect(severityOf(list.domains.find((d) => d.domainId === good[0].domainId)!)).toBe("ok");
+  });
+
+  it("leaves a steady tag alone", () => {
+    expect(twoTags({}).list.notes).toEqual([]);
+  });
+});
+
+describe("every domain", () => {
+  it("lists every live domain worst first, with yesterday's numbers", () => {
+    const peers = Array.from({ length: 9 }, () => fact());
+    const bad = fact({ name: "bad.com" }), quiet = fact({ name: "quiet.com" }), off = fact({ name: "off.com", orderLive: false });
+    const r = replaceList([...peers, bad, quiet, off], [
+      ...peers.map((f) => stat(f.domainId)), stat(bad.domainId, { sender7: 12, sentY: 150, repliesY: 0, bouncesY: 4, senderY: 3 }),
+      stat(quiet.domainId, { sent7: 100, sent14: 150 }), stat(off.domainId),
+    ]);
+    expect(r.domains).toHaveLength(11);
+    expect(r.domains[0]).toMatchObject({ name: "bad.com", call: "replace", short: "Spam/block bounces 1.2% vs 0.33% · 3.6×", sentY: 150, repliesY: 0, bouncesY: 4, senderY: 3, sent7: 1000, sender7: 12 });
+    expect(r.domains[10]).toMatchObject({ name: "quiet.com", call: "early", short: "150 sent in 14 days" });
+    expect(r.domains.slice(1, 10).every((d) => d.call === "keep" && d.short === "" && d.weakTag === null)).toBe(true);
+  });
+});
+
 describe("the list", () => {
   it("puts the most urgent call first, then the most mail", () => {
     const peers = Array.from({ length: 9 }, () => fact());
@@ -278,8 +327,18 @@ describe("the numbers from the database", () => {
     const rows = (await pg.query<Record<string, unknown>>(REPLACE_STATS_SQL)).rows.map((r) => toCamel<ReplaceStat>(r));
     expect(rows.find((r) => r.domainId === id)).toEqual({
       domainId: id, tld: "com", tags: "main group + side", sent7: 300, replies7: 3, sentPrev: 450, repliesPrev: 6, sent14: 750, replies14: 9,
-      sender7: 3, senderPrev: 1, missing7: 1, missingPrev: 1, bounces7: 6, sendingDays: 40, beingReplaced: false,
+      sender7: 3, senderPrev: 1, missing7: 1, missingPrev: 1, bounces7: 6, sentY: 0, repliesY: 0, bouncesY: 0, senderY: 0, sendingDays: 40, beingReplaced: false,
     });
+  });
+
+  it("counts yesterday on its own", async () => {
+    const id = await add("yesterday.com");
+    await pg.query(`insert into domain_daily_stats (domain_id, day, sent, replies, bounces) values ($1, current_date - 1, 210, 2, 5), ($1, current_date, 90, 1, 1), ($1, current_date - 2, 200, 4, 0)`, [id]);
+    await pg.query(`insert into email_events (dedupe_key, kind, occurred_at, domain_id, bounce_cause) values
+      ('y1', 'bounce', (current_date - 1)::timestamp + interval '10 hours', $1, 'spam'), ('y2', 'bounce', (current_date - 1)::timestamp + interval '11 hours', $1, 'missing'),
+      ('y3', 'bounce', current_date::timestamp + interval '1 minute', $1, 'policy')`, [id]);
+    const rows = (await pg.query<Record<string, unknown>>(REPLACE_STATS_SQL)).rows.map((r) => toCamel<ReplaceStat>(r));
+    expect(rows.find((r) => r.domainId === id)).toMatchObject({ sentY: 210, repliesY: 2, bouncesY: 5, senderY: 1, sent7: 500, sender7: 2 });
   });
 
   it("leaves out a domain that sent nothing in 14 days", async () => {

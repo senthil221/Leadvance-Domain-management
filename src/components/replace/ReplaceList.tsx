@@ -7,6 +7,7 @@ import { Fragment, useMemo, useState } from "react";
 import { toast } from "sonner";
 import { DomainLink } from "@/components/domains/DomainLink";
 import { ReplaceDialog } from "@/components/domains/ReplaceDialog";
+import { AllDomains } from "@/components/replace/AllDomains";
 import { Select } from "@/components/Select";
 import { Badge, ClientCell } from "@/components/ui";
 import { DIAGNOSIS_ACTIONS, diagnosisCost, type DiagnosisAction, type StoredDiagnosis } from "@/lib/diagnose";
@@ -106,7 +107,10 @@ export function ReplaceList({ data }: { data: ReplaceListData }) {
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [replaceOpen, setReplaceOpen] = useState(false);
   const [review, setReview] = useState<{ done: number; total: number } | null>(null);
+  // What needs doing, or every live domain with yesterday beside the last 7 days.
+  const [view, setView] = useState<"act" | "all">("act");
 
+  const everyDomain = useMemo(() => data.domains.filter((d) => !client || d.clientId === client), [data.domains, client]);
   const shown = useMemo(() => data.items.filter((i) => !client || i.clientId === client), [data.items, client]);
   const opinions = useMemo(() => new Map(data.opinions.map((o) => [o.domainId, o])), [data.opinions]);
   const clients = useMemo(() => {
@@ -156,6 +160,10 @@ export function ReplaceList({ data }: { data: ReplaceListData }) {
     <>
       <section className="card" aria-label="Replace list">
         <div className="rs-bar">
+          <span className="view-tabs rs-tabs" role="tablist" aria-label="View">
+            <button type="button" role="tab" aria-selected={view === "act"} className={view === "act" ? "is-on" : undefined} onClick={() => setView("act")}>To act on</button>
+            <button type="button" role="tab" aria-selected={view === "all"} className={view === "all" ? "is-on" : undefined} onClick={() => setView("all")}>All domains <span>{int(everyDomain.length)}</span></button>
+          </span>
           <span className="rs-counts">
             {groups.map((g) => (
               <span key={g.key} title={g.what}><span className={`fx-mark rp-mark is-${g.tone}`} aria-hidden="true" /><b>{int(g.items.length)}</b> {g.title.toLowerCase()}</span>
@@ -183,10 +191,11 @@ export function ReplaceList({ data }: { data: ReplaceListData }) {
           </span>
         </div>
 
-        {data.notes.map((g) => (
+        {data.notes.filter((g) => !client || g.kind !== "client" && g.kind !== "tag" || g.id === client || g.id.startsWith(`${client}|`)).map((g) => (
           <p key={`${g.kind}|${g.id}|${g.text}`} className="rs-note-line"><b>{g.name}</b> {g.text}</p>
         ))}
 
+        {view === "all" ? <AllDomains domains={everyDomain} /> : (
         <div className="table-scroll">
           <table className="data-table rs-table">
             <thead>
@@ -219,6 +228,7 @@ export function ReplaceList({ data }: { data: ReplaceListData }) {
             </tbody>
           </table>
         </div>
+        )}
       </section>
 
       <details className="card rs-details">

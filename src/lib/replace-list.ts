@@ -4,7 +4,10 @@ import { problemsOf, type FixFact, type FixKind } from "./fix-queue";
 // Which sending domains to replace, from this week's numbers. A domain is
 // compared with the other domains on its own Smartlead tag (the same client,
 // campaigns and mail provider), so a bad list or a bad week for everyone
-// doesn't get a good domain replaced. Shared by server and client.
+// doesn't get a good domain replaced. A whole tag that's clearly worse than
+// everyone else is flagged too, and its domains are then judged against the
+// healthy tags instead of each other, so a tag that's bad all over can't hide
+// its own domains. Shared by server and client.
 //
 // What the rules rest on (39 days of this agency's own data, November 2026):
 // spam, policy and block list bounces repeat on the same domain week to week,
@@ -51,6 +54,8 @@ export type ReplaceStat = {
   tags: string | null;
   sent7: number; replies7: number; sentPrev: number; repliesPrev: number; sent14: number; replies14: number;
   sender7: number; senderPrev: number; missing7: number; missingPrev: number; bounces7: number;
+  /** Yesterday alone: sent, replies of any kind, every bounce, and the bounces that blame the sender. */
+  sentY: number; repliesY: number; bouncesY: number; senderY: number;
   /** Days since it first sent anything. */ sendingDays: number | null;
   beingReplaced: boolean;
 };
@@ -66,7 +71,17 @@ export type ReplaceItem = {
   /** Replace isn't offered while a replacement is already running. */ canReplace: boolean;
 };
 
-export type GroupNote = { kind: "client" | "provider"; id: string; name: string; text: string };
+export type GroupNote = { kind: "client" | "provider" | "tag"; id: string; name: string; text: string };
+
+/** Every live sending domain, with its call and its numbers, for the page that shows them all. */
+export type DomainRow = {
+  domainId: string; name: string; clientId: string | null; clientName: string | null; clientHue: number | null; tags: string | null;
+  call: ReplaceCall | "keep" | "early";
+  /** Why, in a few words: empty for a domain with nothing against it. */ short: string;
+  /** Its own numbers are fine, but its whole tag is worse than everyone: what the tag shows. */ weakTag: string | null;
+  sentY: number; repliesY: number; bouncesY: number; senderY: number;
+  sent7: number; replies7: number; sender7: number; bounces7: number;
+};
 
 export type ReplaceList = {
   items: ReplaceItem[];
@@ -75,6 +90,8 @@ export type ReplaceList = {
   judged: number; healthy: number; early: number;
   /** Every live domain's call, for the pages that show one domain. */
   calls: Map<string, { call: ReplaceCall | "keep" | "early"; reasons: string[] }>;
+  /** Every live domain, worst first. */
+  domains: DomainRow[];
 };
 
 const R = REPLACE_RULES;
@@ -87,6 +104,7 @@ const zero = (): Sums => ({ domains: 0, sent7: 0, replies7: 0, sentPrev: 0, repl
 const KEYS = ["sent7", "replies7", "sentPrev", "repliesPrev", "sent14", "replies14", "sender7", "senderPrev", "missing7"] as const;
 const plus = (a: Sums, s: ReplaceStat) => { a.domains++; for (const k of KEYS) a[k] += s[k]; };
 const minus = (a: Sums, s: ReplaceStat): Sums => { const out = { ...a, domains: a.domains - 1 }; for (const k of KEYS) out[k] -= s[k]; return out; };
+const sub = (a: Sums, b: Sums): Sums => { const out = { ...a, domains: a.domains - b.domains }; for (const k of KEYS) out[k] -= b[k]; return out; };
 
 /** The group a domain sends with: its client and its Smartlead tags. */
 const tagKey = (f: FixFact, s: ReplaceStat) => (f.clientId && s.tags ? `${f.clientId}|${s.tags}` : null);
@@ -136,11 +154,44 @@ export function replaceList(facts: FixFact[], stats: ReplaceStat[], passes: 1 | 
   };
   const everyone = totals(new Set());
 
+  // Whole tags worse than everyone else. Spam, policy and block list bounces are set
+  // against every other live domain: they blame the sender wherever it sends. Replies
+  // are set against the client's other domains, which send its offer to its lists.
+  // replies: what the tag shows, for its domains' rows. They aren't judged on it one by one.
+  type WeakTag = { bounces: boolean; replies: string | null };
+  const tagNotes: GroupNote[] = [];
+  const weakTags = new Map<string, WeakTag>();
+  for (const [key, g] of everyone.byTag) {
+    if (g.domains < 2 || g.sent7 < R.peerSent) continue;
+    const clientId = key.slice(0, key.indexOf("|"));
+    const fleet = sub(everyone.all, g);
+    const own = everyone.byClient.get(clientId);
+    const client = own ? sub(own, g) : null;
+    const base = client && client.sent7 >= R.peerSent ? client : fleet;
+    const name = `${clientNames.get(clientId) || "A client"} · ${key.slice(key.indexOf("|") + 1)}`;
+    const bounces = g.sender7 >= 2 * R.minBounces && over(g.sender7, g.sent7, fleet.sender7, fleet.sent7, R.watchRatio);
+    const replies = base.replies7 > 0 && base.sent7 >= R.peerSent && g.replies7 / g.sent7 <= R.replyRatio * (base.replies7 / base.sent7)
+      && zScore(g.replies7, g.sent7, base.replies7, base.sent7) <= -R.z;
+    if (!bounces && !replies) continue;
+    weakTags.set(key, { bounces, replies: replies ? `Tag replies ${p(g.replies7, g.sent7)} vs ${p(base.replies7, base.sent7)}` : null });
+    const across = `across its ${n(g.domains)} domains`;
+    const before = g.sentPrev >= R.minSent ? ` (${p(g.senderPrev, g.sentPrev)} the week before)` : "";
+    if (bounces) {
+      tagNotes.push({ kind: "tag", id: key, name, text: `Spam, policy and block list bounces ${p(g.sender7, g.sent7)} ${across}${before}, ${times(g.sender7, g.sent7, fleet.sender7, fleet.sent7)} all other live domains (${p(fleet.sender7, fleet.sent7)}). Its domains are judged against the healthy tags instead of each other. Check the links in its copy before replacing many of them` });
+    }
+    if (replies) {
+      const quietBounces = g.sender7 / g.sent7 <= fleet.sender7 / Math.max(1, fleet.sent7);
+      tagNotes.push({ kind: "tag", id: key, name, text: `Replies of any kind ${p(g.replies7, g.sent7)} ${across}, against ${p(base.replies7, base.sent7)} for ${base === client ? "the client's other domains" : "all other live domains"}.${quietBounces ? " With so few bounces the mail is delivered but not answered: likely the spam folder. Test placement on a few before replacing them all" : ""}` });
+    }
+  }
+  // Left out of the healthy baseline: every domain on a weak tag, whichever way it's weak.
+  const weakIds = new Set(live.filter((f) => { const s = statOf.get(f.domainId); const k = s ? tagKey(f, s) : null; return !!k && weakTags.has(k); }).map((f) => f.domainId));
+
   // What a domain's own numbers say, set against the others. Run twice: the
   // second time the others leave out every domain the first pass flagged, so
   // two bad domains in one client can't make each other look normal.
   type Perf = { perf: { call: "replace" | "watch"; reasons: string[]; short: string[]; weekly: boolean } | null; badList: { text: string; short: string } | null };
-  const measure = (f: FixFact, s: ReplaceStat | undefined, sums: ReturnType<typeof totals>, skip: ReadonlySet<string>): Perf => {
+  const measure = (f: FixFact, s: ReplaceStat | undefined, sums: ReturnType<typeof totals>, skip: ReadonlySet<string>, clean: ReturnType<typeof totals>): Perf => {
     let perf: Perf["perf"] = null;
     let badList: Perf["badList"] = null;
     if (judgeable(s)) {
@@ -152,6 +203,12 @@ export function replaceList(facts: FixFact[], stats: ReplaceStat[], passes: 1 | 
       const inClient = onTag ? null : enough(f.clientId ? sums.byClient.get(f.clientId) : undefined);
       const peers = onTag ?? inClient ?? without(sums.all);
       const who = onTag ? "the other domains on its tag" : inClient ? "the client's other domains" : "all other live domains";
+      // On a tag whose spam, policy and block list bounces are high all over, the others share
+      // the problem: those are set against the healthy tags instead. Replies aren't, since a tag
+      // can rightly get fewer (Outlook inboxes, a harder offer): a weak tag on replies only gets a note.
+      const fair = !!key && !!weakTags.get(key)?.bounces && clean.all.sent7 >= R.peerSent;
+      const bPeers = fair ? clean.all : peers, bWho = fair ? "live domains on healthy tags" : who;
+      const rPeers = peers, rWho = who;
 
       const reasons: string[] = [];
       const short: string[] = [];
@@ -159,14 +216,14 @@ export function replaceList(facts: FixFact[], stats: ReplaceStat[], passes: 1 | 
       // Too little in a week to say anything: the fortnight is judged as one window, by the same test.
       const weekly = s.sent7 >= R.minSent;
       const k = weekly ? s.sender7 : s.sender7 + s.senderPrev, of = weekly ? s.sent7 : s.sent14;
-      const peerK = weekly ? peers.sender7 : peers.sender7 + peers.senderPrev, peerOf = weekly ? peers.sent7 : peers.sent14;
+      const peerK = weekly ? bPeers.sender7 : bPeers.sender7 + bPeers.senderPrev, peerOf = weekly ? bPeers.sent7 : bPeers.sent14;
       const thisWeek = over(k, of, peerK, peerOf, R.watchRatio);
-      const lastWeek = weekly && over(s.senderPrev, s.sentPrev, peers.senderPrev, peers.sentPrev, R.watchRatio);
+      const lastWeek = weekly && over(s.senderPrev, s.sentPrev, bPeers.senderPrev, bPeers.sentPrev, R.watchRatio);
       // On a thin fortnight a handful of bounces can be one strict company refusing five people, so it takes twice as many to replace.
       const heavy = over(k, of, peerK, peerOf, R.replaceRatio) && (weekly || k >= 2 * R.minBounces);
       if (thisWeek) {
-        reasons.push(bounces(`${p(k, of)} of ${n(of)} sent in ${weekly ? 7 : 14} days, ${times(k, of, peerK, peerOf)} ${who} (${p(peerK, peerOf)})`));
-        if (lastWeek) reasons.push(`The week before too: ${p(s.senderPrev, s.sentPrev)} against ${p(peers.senderPrev, peers.sentPrev)}`);
+        reasons.push(bounces(`${p(k, of)} of ${n(of)} sent in ${weekly ? 7 : 14} days, ${times(k, of, peerK, peerOf)} ${bWho} (${p(peerK, peerOf)})`));
+        if (lastWeek) reasons.push(`The week before too: ${p(s.senderPrev, s.sentPrev)} against ${p(bPeers.senderPrev, bPeers.sentPrev)}`);
         short.push(`Spam/block bounces ${p(k, of)} vs ${p(peerK, peerOf)} · ${times(k, of, peerK, peerOf)}${weekly ? "" : " · 14 days"}${lastWeek ? " · 2 weeks running" : ""}`);
       }
 
@@ -174,12 +231,12 @@ export function replaceList(facts: FixFact[], stats: ReplaceStat[], passes: 1 | 
       const quiet = (k: number, of: number, peerK: number, peerOf: number, days: number) =>
         of >= R.minSent && peerOf >= R.minSent && peerK > 0 && s.sendingDays != null && s.sendingDays >= days + R.settledDays
         && k / of <= R.replyRatio * (peerK / peerOf) && zScore(k, of, peerK, peerOf) <= -R.z;
-      const quiet7 = weekly && quiet(s.replies7, s.sent7, peers.replies7, peers.sent7, 7);
-      const quiet14 = !quiet7 && quiet(s.replies14, s.sent14, peers.replies14, peers.sent14, 14);
-      if (quiet7) reasons.push(`Replies of any kind ${p(s.replies7, s.sent7)} of ${n(s.sent7)} sent in 7 days, ${who} got ${p(peers.replies7, peers.sent7)}`);
-      if (quiet14) reasons.push(`Replies of any kind ${p(s.replies14, s.sent14)} of ${n(s.sent14)} sent in 14 days, ${who} got ${p(peers.replies14, peers.sent14)}`);
-      if (quiet7) short.push(`Replies ${p(s.replies7, s.sent7)} vs ${p(peers.replies7, peers.sent7)}`);
-      if (quiet14) short.push(`Replies ${p(s.replies14, s.sent14)} vs ${p(peers.replies14, peers.sent14)} · 14 days`);
+      const quiet7 = weekly && quiet(s.replies7, s.sent7, rPeers.replies7, rPeers.sent7, 7);
+      const quiet14 = !quiet7 && quiet(s.replies14, s.sent14, rPeers.replies14, rPeers.sent14, 14);
+      if (quiet7) reasons.push(`Replies of any kind ${p(s.replies7, s.sent7)} of ${n(s.sent7)} sent in 7 days, ${rWho} got ${p(rPeers.replies7, rPeers.sent7)}`);
+      if (quiet14) reasons.push(`Replies of any kind ${p(s.replies14, s.sent14)} of ${n(s.sent14)} sent in 14 days, ${rWho} got ${p(rPeers.replies14, rPeers.sent14)}`);
+      if (quiet7) short.push(`Replies ${p(s.replies7, s.sent7)} vs ${p(rPeers.replies7, rPeers.sent7)}`);
+      if (quiet14) short.push(`Replies ${p(s.replies14, s.sent14)} vs ${p(rPeers.replies14, rPeers.sent14)} · 14 days`);
 
       if (heavy || (thisWeek && lastWeek) || quiet7 || quiet14) perf = { call: "replace", reasons, short, weekly };
       else if (thisWeek) perf = { call: "watch", reasons, short, weekly };
@@ -194,8 +251,11 @@ export function replaceList(facts: FixFact[], stats: ReplaceStat[], passes: 1 | 
     return { perf, badList };
   };
   const none = new Set<string>();
-  const worst = new Set(passes === 1 ? [] : live.filter((f) => measure(f, statOf.get(f.domainId), everyone, none).perf).map((f) => f.domainId));
+  const clean1 = weakIds.size ? totals(weakIds) : everyone;
+  const worst = new Set(passes === 1 ? [] : live.filter((f) => measure(f, statOf.get(f.domainId), everyone, none, clean1).perf).map((f) => f.domainId));
   const rest = worst.size ? totals(worst) : everyone;
+  const clean = worst.size || weakIds.size ? totals(new Set([...worst, ...weakIds])) : everyone;
+  const domains: DomainRow[] = [];
 
   const items: ReplaceItem[] = [];
   const calls: ReplaceList["calls"] = new Map();
@@ -209,12 +269,23 @@ export function replaceList(facts: FixFact[], stats: ReplaceStat[], passes: 1 | 
       domainId: f.domainId, name: f.name, tld: s?.tld ?? null, tags: s?.tags ?? null, status: f.status, clientId: f.clientId, clientName: f.clientName, clientHue: f.clientHue, provider: f.provider,
       sent7: s?.sent7 ?? 0, perDay: f.daysSent ? Math.round(f.sent7 / f.daysSent) : 0, canReplace: !(s?.beingReplaced ?? false),
     };
-    const put = (call: ReplaceCall, reasons: string[], short: string[], next: string, also: string[] = []) => {
-      items.push({ ...base, call, reasons: reasons.slice(0, 3), short: short.join(" · "), next, also });
+    const put = (call: ReplaceCall, reasons: string[], shortList: string[], next: string, also: string[] = []) => {
+      short = shortList.join(" · ");
+      items.push({ ...base, call, reasons: reasons.slice(0, 3), short, next, also });
       calls.set(f.domainId, { call, reasons: reasons.slice(0, 3) });
+      row(call);
     };
 
-    const { perf, badList } = measure(f, s, rest, worst);
+    const { perf, badList } = measure(f, s, rest, worst, clean);
+    const k = s ? tagKey(f, s) : null;
+    // A tag high on bounces had its domains judged against the healthy tags already: only few replies is left to say.
+    const weakTag = (k && weakTags.get(k)?.replies) || null;
+    let short = "";
+    const row = (call: DomainRow["call"]) => domains.push({
+      domainId: f.domainId, name: f.name, clientId: f.clientId, clientName: f.clientName, clientHue: f.clientHue, tags: s?.tags ?? null, call, short, weakTag,
+      sentY: s?.sentY ?? 0, repliesY: s?.repliesY ?? 0, bouncesY: s?.bouncesY ?? 0, senderY: s?.senderY ?? 0,
+      sent7: s?.sent7 ?? 0, replies7: s?.replies7 ?? 0, sender7: s?.sender7 ?? 0, bounces7: s?.bounces7 ?? 0,
+    });
     const fortnight = s?.sent14 ?? 0;
     if (f.clientId && judgeable(s)) {
       const t = tally.get(f.clientId) ?? { judged: 0, flagged: 0 };
@@ -242,9 +313,12 @@ export function replaceList(facts: FixFact[], stats: ReplaceStat[], passes: 1 | 
     } else if (!judgeable(s)) {
       early++;
       calls.set(f.domainId, { call: "early", reasons: [`${n(fortnight)} sent in 14 days, under the ${n(R.minSent)} needed to judge it`] });
+      short = `${n(fortnight)} sent in 14 days`;
+      row("early");
     } else {
       healthy++;
       calls.set(f.domainId, { call: "keep", reasons: [s.sent7 >= R.minSent ? `Nothing against it on ${n(s.sent7)} sent in 7 days` : `Nothing against it on ${n(s.sent14)} sent in 14 days`] });
+      row("keep");
     }
   }
 
@@ -253,7 +327,7 @@ export function replaceList(facts: FixFact[], stats: ReplaceStat[], passes: 1 | 
 
   // A change everyone shares isn't any one domain's fault. The flagged domains are
   // left out, so one bad domain can't pass for a change across the whole client.
-  const notes: GroupNote[] = [];
+  const notes: GroupNote[] = [...tagNotes];
   const shared = (kind: GroupNote["kind"], id: string, name: string, g: Sums, whole: number) => {
     if (g.domains < 2 || g.sent7 < R.peerSent || g.sentPrev < R.peerSent) return;
     const across = `across ${kind === "client" ? "its" : "all"} ${n(g.domains)} ${g.domains < whole ? "other " : ""}domains`;
@@ -273,8 +347,21 @@ export function replaceList(facts: FixFact[], stats: ReplaceStat[], passes: 1 | 
   }
   for (const [id, g] of rest.byProvider) shared("provider", id, id, g, everyone.byProvider.get(id)!.domains);
 
-  return { items, notes, judged: live.length, healthy, early, calls };
+  domains.sort((a, b) => severity(a) - severity(b) || b.sent7 - a.sent7 || a.name.localeCompare(b.name));
+  return { items, notes, judged: live.length, healthy, early, calls, domains };
 }
+
+/** How bad a domain's standing is, worst first: its call, then a weak tag, then nothing against it, then too little to judge. */
+export type Severity = ReplaceCall | "weak" | "ok" | "early";
+export const SEVERITY_ORDER: Severity[] = ["replace_now", "replace", "fix", "watch", "weak", "list", "ok", "early"];
+export const SEVERITY_META: Record<Severity, { label: string; tone: "danger" | "warning" | "info" | "success" | "faint"; hint: string }> = {
+  ...CALL_META,
+  weak: { label: "Weak tag", tone: "warning", hint: "Its own numbers are like its tag's, but the whole tag is clearly worse than everyone else. See the note at the top" },
+  ok: { label: "OK", tone: "success", hint: "Nothing against it over the last 7 days" },
+  early: { label: "Too little", tone: "faint", hint: "Sent too little in 14 days to judge" },
+};
+export const severityOf = (d: Pick<DomainRow, "call" | "weakTag">): Severity => (d.call === "keep" ? (d.weakTag ? "weak" : "ok") : d.call);
+const severity = (d: DomainRow) => SEVERITY_ORDER.indexOf(severityOf(d));
 
 /** How many domains got each call. */
 export function replaceSummary(items: ReplaceItem[]) {
@@ -305,7 +392,10 @@ export const REPLACE_STATS_SQL = `
       coalesce(sum(s.replies) filter (where s.day > t.today - 7), 0)::int as replies7,
       coalesce(sum(s.sent) filter (where s.day <= t.today - 7), 0)::int as sent_prev,
       coalesce(sum(s.replies) filter (where s.day <= t.today - 7), 0)::int as replies_prev,
-      coalesce(sum(s.sent), 0)::int as sent14, coalesce(sum(s.replies), 0)::int as replies14
+      coalesce(sum(s.sent), 0)::int as sent14, coalesce(sum(s.replies), 0)::int as replies14,
+      coalesce(sum(s.sent) filter (where s.day = t.today - 1), 0)::int as sent_y,
+      coalesce(sum(s.replies) filter (where s.day = t.today - 1), 0)::int as replies_y,
+      coalesce(sum(s.bounces) filter (where s.day = t.today - 1), 0)::int as bounces_y
     from domain_daily_stats s cross join t where s.day > t.today - 14 and s.day <= t.today group by 1
   ), f as (
     select domain_id, min(day) as first_sent from domain_daily_stats where sent > 0 group by 1
@@ -321,9 +411,11 @@ export const REPLACE_STATS_SQL = `
       (count(*) filter (where not e.recent and e.sender))::int as sender_prev,
       (count(*) filter (where e.recent and e.bounce_cause = 'missing'))::int as missing7,
       (count(*) filter (where not e.recent and e.bounce_cause = 'missing'))::int as missing_prev,
-      (count(*) filter (where e.recent))::int as bounces7
+      (count(*) filter (where e.recent))::int as bounces7,
+      (count(*) filter (where e.yesterday and e.sender))::int as sender_y
     from (
       select e.domain_id, e.bounce_cause, e.occurred_at >= ((t.today - 6)::timestamp at time zone t.z) as recent,
+        e.occurred_at >= ((t.today - 1)::timestamp at time zone t.z) and e.occurred_at < (t.today::timestamp at time zone t.z) as yesterday,
         coalesce(e.bounce_cause in (${SENDER_CAUSES.map((c) => `'${c}'`).join(", ")}), false) as sender
       from email_events e cross join t
       where e.kind = 'bounce' and e.domain_id is not null and e.occurred_at >= ((t.today - 13)::timestamp at time zone t.z)
@@ -332,6 +424,7 @@ export const REPLACE_STATS_SQL = `
   select s.domain_id, d.tld, tg.tags, s.sent7, s.replies7, s.sent_prev, s.replies_prev, s.sent14, s.replies14,
     coalesce(ev.sender7, 0) as sender7, coalesce(ev.sender_prev, 0) as sender_prev, coalesce(ev.missing7, 0) as missing7,
     coalesce(ev.missing_prev, 0) as missing_prev, coalesce(ev.bounces7, 0) as bounces7,
+    s.sent_y, s.replies_y, s.bounces_y, coalesce(ev.sender_y, 0) as sender_y,
     (t.today - f.first_sent)::int as sending_days, domain_being_replaced(d.id) as being_replaced
   from s join domains d on d.id = s.domain_id cross join t
   left join f on f.domain_id = s.domain_id
