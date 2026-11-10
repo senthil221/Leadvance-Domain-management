@@ -7,6 +7,7 @@ import { FIX_KINDS, type FixKind } from "@/lib/fix-queue";
 import { requireActor } from "@/lib/auth";
 import { jobSql, sql } from "@/lib/db";
 import { hypertideAcceptsDomain } from "@/integrations/hypertide";
+import { SmartleadError } from "@/integrations/smartlead";
 import { getDomainDetail, listStorageCandidates } from "@/lib/queries";
 import { MARK_CHOICES, normTag, parseSavedPairs, parseTagPairs } from "@/lib/tag-map";
 import { DOMAIN_STATUSES, REPLACEMENT_REASONS, RETIRED_STATUSES } from "@/lib/status";
@@ -1837,5 +1838,78 @@ export async function removeDomainsFromTag(input: { domainIds: string[]; tag: st
     return updateInboxTags({ inboxIds: rows.map((r) => r.id), tags: [v.tag], mode: "remove" });
   } catch (e) {
     return appError(e);
+  }
+}
+
+// Placement tests.
+
+/** Step 1 of a client campaign in Smartlead: the copy a placement test sends as the real email. */
+export async function loadPlacementCopy(campaignId: number): Promise<ActionResult<{ subject: string; body: string }>> {
+  try {
+    await requireActor();
+    const id = z.number().int().positive().parse(campaignId);
+    const { jobContext } = await import("@/jobs");
+    const ctx = await jobContext(jobSql);
+    if (!ctx.smartlead) throw new UserError("SMARTLEAD_API_KEY isn't set on this server");
+    const steps = (await ctx.smartlead.campaignSequences(id)) as Record<string, unknown>[];
+    const first = [...steps].sort((a, b) => Number(a.seq_number ?? 99) - Number(b.seq_number ?? 99))[0];
+    if (!first) throw new UserError("That campaign has no emails in Smartlead");
+    const variant = Array.isArray(first.sequence_variants) ? (first.sequence_variants[0] as Record<string, unknown> | undefined) : undefined;
+    const subject = String(first.subject || variant?.subject || "");
+    const body = String(first.email_body || variant?.email_body || "");
+    if (!body) throw new UserError("Smartlead sent that campaign's first email without a body");
+    return { ok: true, data: { subject, body } };
+  } catch (e) {
+    if (e instanceof SmartleadError) return { ok: false, error: e.message };
+    return fail(e);
+  }
+}
+
+const placementInput = z.object({
+  groups: z.array(z.object({
+    domainIds: z.array(z.uuid()).min(1).max(60),
+    controlDomainId: z.uuid(),
+    sales: z.object({ subject: z.string().max(500), body: z.string().max(20_000), sourceCampaignId: z.number().int().positive().nullable() }),
+  })).min(1, "Pick at least one domain to test").max(20),
+  neutral: z.object({ subject: z.string().max(500), body: z.string().max(20_000) }),
+  seedsPerCampaign: z.number().int().min(6, "Use at least 6 seeds a campaign").max(25),
+  inboxesPerDomain: z.number().int().min(1).max(5),
+  startsAt: z.iso.datetime(),
+});
+
+/** Plans a placement test and saves it; the placement-tests job then builds and starts the campaigns in Smartlead. */
+export async function createPlacementTest(input: z.input<typeof placementInput>): Promise<ActionResult<{ batchId: string; campaigns: number; emails: number }>> {
+  try {
+    const actor = await requireActor();
+    const data = placementInput.parse(input);
+    if (!process.env.SMARTLEAD_API_KEY) throw new UserError("SMARTLEAD_API_KEY isn't set on this server");
+    if (process.env.INTEGRATIONS_DRY_RUN !== "false") throw new UserError("Smartlead is in dry-run mode on this server (INTEGRATIONS_DRY_RUN), so no campaigns can be created");
+    const { createPlacementBatch, PlacementError } = await import("@/jobs/placement-tests");
+    try {
+      const r = await createPlacementBatch(jobSql, { ...data, createdBy: actor });
+      kickJob("placement-tests");
+      refresh();
+      return { ok: true, data: r };
+    } catch (e) {
+      if (e instanceof PlacementError) throw new UserError(e.message);
+      throw e;
+    }
+  } catch (e) {
+    return fail(e);
+  }
+}
+
+/** Stops a running test: its campaigns are stopped in Smartlead by the job. */
+export async function cancelPlacementTest(batchId: string): Promise<ActionResult> {
+  try {
+    await requireActor();
+    const id = z.uuid().parse(batchId);
+    const r = await jobSql`update placement_batches set status = 'cancelled', finished_at = now() where id = ${id} and status = 'running'`;
+    if (!r.count) throw new UserError("That test has already finished");
+    kickJob("placement-tests");
+    refresh();
+    return { ok: true, data: undefined };
+  } catch (e) {
+    return fail(e);
   }
 }

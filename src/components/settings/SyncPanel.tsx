@@ -13,7 +13,7 @@ export type SyncJob = { name: string; label: string; everyMinutes: number; lastF
 // DNS, and the daily stats last so they count what the others brought in.
 const SECTIONS: { key: string; title: string; sub: string; jobs: string[] }[] = [
   { key: "smartlead", title: "Smartlead", sub: "Inboxes, campaigns, numbers, blacklists and the settings waiting to go out",
-    jobs: ["smartlead-accounts", "smartlead-campaigns", "smartlead-domain-stats", "smartlead-blacklists", "inbox-settings", "warmup-new-domains", "untracked-replies"] },
+    jobs: ["smartlead-accounts", "smartlead-campaigns", "smartlead-domain-stats", "smartlead-blacklists", "inbox-settings", "warmup-new-domains", "untracked-replies", "placement-tests"] },
   { key: "providers", title: "Hypertide and Icemail", sub: "Orders, mailboxes and replacements in progress",
     jobs: ["hypertide-orders", "icemail", "replacement-steps"] },
   { key: "domains", title: "Domains and registrars", sub: "Registrar accounts, nameserver changes and lookups, drained domains",

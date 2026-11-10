@@ -83,7 +83,7 @@ export function mxProvider(records: { exchange: string; priority: number }[]): {
 /** How old the latest auto-reply can be before the seed should be checked again. */
 export const FRESH_DAYS = 45;
 
-export type SeedStatus = "ready" | "recheck" | "outlook" | "other" | "unknown" | "forwards" | "person" | "bounced" | "no_mx";
+export type SeedStatus = "ready" | "recheck" | "outlook" | "other" | "unknown" | "forwards" | "person" | "bounced" | "no_mx" | "silent";
 
 export const STATUS_LABEL: Record<SeedStatus, string> = {
   ready: "Ready",
@@ -95,11 +95,13 @@ export const STATUS_LABEL: Record<SeedStatus, string> = {
   person: "A person replied",
   bounced: "Bounced",
   no_mx: "No mail server",
+  silent: "Silent to the control",
 };
 
 export const STATUS_HINT: Record<SeedStatus, string> = {
-  ready: `Google mail, auto-replied in the last ${FRESH_DAYS} days. Counts in a placement test`,
-  recheck: `Google mail, but the last auto-reply is over ${FRESH_DAYS} days old. It will be emailed once to check it still answers`,
+  ready: `Google mail, auto-replied in the last ${FRESH_DAYS} days. Used in placement tests`,
+  recheck: `Google mail, but the last auto-reply is over ${FRESH_DAYS} days old, so the mailbox may be gone. Not used in tests until it auto-replies again`,
+  silent: "A control domain that reached most of its seeds got no auto-reply from it, so it has probably stopped answering",
   outlook: "Microsoft sends the auto-reply even from the junk folder, so it can't tell inbox from spam",
   other: "A filter in front of the mailbox (Mimecast, Proofpoint…) or another provider: not known to skip auto-replies from spam",
   unknown: "Its MX records haven't been looked up yet",
@@ -110,17 +112,45 @@ export const STATUS_HINT: Record<SeedStatus, string> = {
 };
 
 /** Excluded for good: never used in a test. */
-export const EXCLUDED: SeedStatus[] = ["forwards", "person", "bounced", "no_mx"];
+export const EXCLUDED: SeedStatus[] = ["forwards", "person", "bounced", "no_mx", "silent"];
 
 export function seedStatus(s: {
   forwards: boolean; lastReplyAt: string; personRepliedAt: string | null; bouncedAt: string | null; provider: MxProvider | null;
+  silentToControl?: boolean;
 }, now: number): SeedStatus {
   if (s.personRepliedAt) return "person";
   if (s.bouncedAt && s.bouncedAt > s.lastReplyAt) return "bounced";
   if (s.forwards) return "forwards";
   if (s.provider === "none") return "no_mx";
+  if (s.silentToControl) return "silent";
   if (!s.provider) return "unknown";
   if (s.provider === "outlook") return "outlook";
   if (s.provider !== "google") return "other";
   return now - new Date(s.lastReplyAt).getTime() <= FRESH_DAYS * 86_400_000 ? "ready" : "recheck";
 }
+
+/**
+ * Every seed with who receives its company's mail, and whether it stayed
+ * silent to a control domain that most of its seeds answered (after its own
+ * last auto-reply). Snake-case columns; the app's camel client renames them.
+ */
+export const SEEDS_SQL = `
+  select s.email, s.domain, s.name, s.source, s.excerpt, s.forwards, s.first_reply_at, s.last_reply_at, s.auto_replies,
+    s.campaign_name, c.name as client, s.person_replied_at, s.bounced_at,
+    d.provider, d.provider_name, d.mx_host, d.checked_at,
+    exists (
+      select 1 from placement_sends ps
+      join placement_campaigns pc on pc.id = ps.campaign_id
+      join placement_domains pd on pd.id = pc.placement_domain_id
+      where ps.seed_email = s.email and pd.role = 'control' and pc.step = 'closed'
+        and ps.sent_at > s.last_reply_at and ps.replied_at is null and ps.bounced_at is null
+        and (select count(*) filter (where x.replied_at is not null)::float
+               / nullif(count(*) filter (where x.sent_at is not null and x.bounced_at is null), 0)
+             from placement_sends x where x.campaign_id = pc.id) >= 0.5
+    ) as silent_to_control,
+    (select count(*) from placement_sends ps where ps.seed_email = s.email and ps.sent_at is not null)::int as tests
+  from placement_seeds s
+  left join placement_seed_domains d on d.domain = s.domain
+  left join clients c on c.id = s.client_id
+  order by s.last_reply_at desc
+  limit 20000`;

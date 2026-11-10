@@ -127,6 +127,32 @@ export function createSmartlead({ apiKey, sql, dryRun = true, baseUrl = "https:/
       request("POST", `/email-accounts/${accountId}`, { body: s }),
     addAccountsToCampaign: (campaignId: number, accountIds: number[]) =>
       request("POST", `/campaigns/${campaignId}/email-accounts`, { body: { email_account_ids: accountIds } }),
+
+    // Campaigns, for placement tests.
+    /** One campaign, with its settings (track_settings, send_as_plain_text, unsubscribe_text…). */
+    getCampaign: (campaignId: number) => request<unknown>("GET", `/campaigns/${campaignId}`),
+    /** A campaign's steps, each with its subject and body (and variants). */
+    campaignSequences: (campaignId: number) => request<unknown>("GET", `/campaigns/${campaignId}/sequences`).then(asArray),
+    /** One page of a campaign's leads with when each was sent, replied and whether it bounced. */
+    campaignStatistics: (campaignId: number, offset = 0, limit = 100) =>
+      request<unknown>("GET", `/campaigns/${campaignId}/statistics`, { query: { offset, limit } }),
+    createCampaign: (name: string) => request<unknown>("POST", "/campaigns/create", { body: { name } }),
+    updateCampaignSettings: (campaignId: number, settings: Record<string, unknown>) =>
+      request("POST", `/campaigns/${campaignId}/settings`, { body: settings }),
+    updateCampaignSchedule: (campaignId: number, schedule: Record<string, unknown>) =>
+      request("POST", `/campaigns/${campaignId}/schedule`, { body: schedule }),
+    saveSequences: (campaignId: number, sequences: { seq_number: number; seq_delay_details: { delay_in_days: number }; subject: string; email_body: string }[]) =>
+      request("POST", `/campaigns/${campaignId}/sequences`, { body: { sequences } }),
+    /** Adds leads even when they are in another campaign; block and unsubscribe lists still apply. */
+    addLeads: (campaignId: number, leads: { email: string; first_name?: string; last_name?: string; company_name?: string }[]) =>
+      request<unknown>("POST", `/campaigns/${campaignId}/leads`, {
+        body: {
+          lead_list: leads,
+          settings: { ignore_global_block_list: false, ignore_unsubscribe_list: false, ignore_duplicate_leads_in_other_campaign: true },
+        },
+      }),
+    setCampaignStatus: (campaignId: number, status: "START" | "PAUSED" | "STOPPED") =>
+      request("POST", `/campaigns/${campaignId}/status`, { body: { status } }),
   };
 }
 

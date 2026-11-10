@@ -1,4 +1,5 @@
 import type postgres from "postgres";
+import { PLACEMENT_PREFIX } from "../lib/placement-tests";
 import { MARK_TAGS } from "../lib/tag-map";
 import type { Smartlead } from "../integrations/smartlead";
 import { parseAccount, parseCampaign, parseClient, parseDomainHealth, type SmartleadAccount } from "../integrations/smartlead-parse";
@@ -234,7 +235,9 @@ const LIVE_CAMPAIGN = new Set(["ACTIVE", "PAUSED", "START", "STARTED", "SCHEDULE
 
 /** Campaigns, and which inboxes send in each live one. */
 export async function syncCampaigns(sql: Sql, sl: Smartlead) {
-  const campaigns = (await sl.listCampaigns()).map(parseCampaign).filter((c): c is NonNullable<typeof c> => c !== null);
+  // Placement test campaigns are the app's own and short-lived: they stay out of the campaigns domains are filled into.
+  const campaigns = (await sl.listCampaigns()).map(parseCampaign)
+    .filter((c): c is NonNullable<typeof c> => c !== null && !c.name.startsWith(PLACEMENT_PREFIX));
   if (campaigns.length) {
     await sql`
       insert into campaigns (id, name, status, client_id, synced_at)

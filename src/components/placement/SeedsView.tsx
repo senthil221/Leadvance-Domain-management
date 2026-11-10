@@ -13,6 +13,7 @@ export type SeedItem = {
   firstReplyAt: string; lastReplyAt: string; autoReplies: number; campaignName: string | null; client: string | null;
   personRepliedAt: string | null; bouncedAt: string | null;
   provider: MxProvider | null; providerName: string | null; mxHost: string | null; checkedAt: string | null;
+  silentToControl: boolean; tests: number;
 };
 
 type Tab = "ready" | "recheck" | "outlook" | "other" | "excluded" | "all";
@@ -158,6 +159,7 @@ export function SeedsView({ seeds, lastSync }: {
                                 {r.mxHost ? ` · mail goes to ${r.mxHost}` : ""}
                                 {r.personRepliedAt ? ` · a person replied ${stamp(r.personRepliedAt)}` : ""}
                                 {r.bouncedAt ? ` · bounced ${stamp(r.bouncedAt)}` : ""}
+                                {r.tests ? ` · ${int(r.tests)} test email${r.tests === 1 ? "" : "s"}` : ""}
                               </span>
                             </div>
                             <pre className="ur-body">{r.excerpt ?? "No text kept for this auto-reply."}</pre>
