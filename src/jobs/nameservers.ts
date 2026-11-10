@@ -136,6 +136,18 @@ export async function checkNameservers(
       let answering: boolean | null = null;
       let reg: Registry | null = null;
       let fromDns: string[] | null = null;
+      if (TENANT.test(name)) {
+        // A Microsoft tenant name has no nameservers or DMARC/DKIM of its own (Microsoft's zone holds it):
+        // it's answering when its mail record resolves, and its records aren't ours to fix.
+        const mx = await records(name, d.esps as string[]).then((r) => r.mx, () => null);
+        if (mx === null) failed++;
+        else if (mx) checked++;
+        else notAnswering++;
+        await sql`update domains set nameservers = coalesce(nameservers, '{}'),
+            nameservers_answering = coalesce(${mx}::boolean, nameservers_answering), nameservers_checked_at = now()
+          where id = ${d.id}`;
+        continue;
+      }
       try {
         fromDns = await lookup(name);
       } catch { /* the registry and registrar may still know */ }
@@ -181,6 +193,8 @@ export async function checkNameservers(
   await Promise.all(Array.from({ length: 8 }, worker));
   return { checked, notAnswering, empty, failed, dnsMissing };
 }
+
+const TENANT = /\.onmicrosoft\.com$/i;
 
 const resolver = new Resolver({ timeout: 4000, tries: 2 });
 resolver.setServers(["1.1.1.1", "8.8.8.8"]);

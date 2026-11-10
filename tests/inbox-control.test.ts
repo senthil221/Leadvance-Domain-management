@@ -200,6 +200,22 @@ describe("nameserver lookups", () => {
     const [d] = await sql`select dns_spf, dns_dkim, dns_dmarc, dns_mx, to_char(registered_at, 'YYYY-MM-DD') as reg from domains where name = 'send.com'`;
     expect(d).toEqual({ dns_spf: true, dns_dkim: false, dns_dmarc: true, dns_mx: true, reg: "2025-03-04" });
   });
+
+  it("judges a Microsoft tenant name by its mail record, not by nameservers it can't have", async () => {
+    await sql`insert into domains (name, status, nameservers_answering) values ('live.onmicrosoft.com', 'active', false), ('gone.onmicrosoft.com', 'active', null)`;
+    const lookup = vi.fn(async () => ["ada.ns.cloudflare.com", "bob.ns.cloudflare.com"]);
+    const registry = vi.fn(async () => ({ ns: [], registered: null }));
+    const tenant = (name: string) => name.endsWith(".onmicrosoft.com");
+    const records = vi.fn(async (name: string) => ({ spf: true, dkim: !tenant(name), dmarc: !tenant(name), mx: !name.startsWith("gone.") }));
+    const r = await checkNameservers(sql, null, 10, lookup, registry, records);
+    expect(r).toEqual({ checked: 2, notAnswering: 1, empty: 0, failed: 0, dnsMissing: 0 });
+    expect(lookup).toHaveBeenCalledTimes(1);
+    const rows = await sql`select name, nameservers_answering, dns_dkim from domains where name like '%.onmicrosoft.com' order by name`;
+    expect(rows).toEqual([
+      { name: "gone.onmicrosoft.com", nameservers_answering: false, dns_dkim: null },
+      { name: "live.onmicrosoft.com", nameservers_answering: true, dns_dkim: null },
+    ]);
+  });
 });
 
 describe("Smartlead token features", () => {
