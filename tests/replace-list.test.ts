@@ -237,6 +237,9 @@ describe("a whole tag that's worse than everyone", () => {
     expect(list.notes[0].text).toBe("Spam, policy and block list bounces 1.2% across its 5 domains (1.2% the week before), 4.0× all other live domains (0.30%). Its domains are judged against the healthy tags instead of each other. Check the links in its copy before replacing many of them");
     expect(weak.map((f) => list.calls.get(f.domainId)?.call)).toEqual(["replace", "replace", "replace", "replace", "replace"]);
     expect(list.items[0].reasons[0]).toContain("4.0× live domains on healthy tags (0.30%)");
+    // At a glance: what's wrong in words, then the numbers and what they're set against.
+    expect(list.items[0].signals[0]).toEqual({ head: "4.0× more spam/block bounces", detail: "1.2% vs 0.30% for healthy tags · 2 weeks running", tone: "danger" });
+    expect(list.notes[0]).toMatchObject({ short: "4.0× more spam/block bounces than all other domains (1.2% vs 0.30%)", action: "Check the links in its copy" });
     // The AI is told the whole tag is weak, in numbers, without the client's or the tag's name.
     const notes = list.calls.get(weak[0].domainId)?.tagNotes ?? [];
     expect(notes).toEqual([list.notes[0].text]);
