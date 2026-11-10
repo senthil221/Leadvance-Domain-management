@@ -8,7 +8,7 @@ import { DomainLink } from "@/components/domains/DomainLink";
 import { ReplaceDialog } from "@/components/domains/ReplaceDialog";
 import { AllDomains } from "@/components/replace/AllDomains";
 import { Select } from "@/components/Select";
-import { Badge } from "@/components/ui";
+import { Badge, ClientCell } from "@/components/ui";
 import { DIAGNOSIS_ACTIONS, diagnosisCost, type DiagnosisAction, type StoredDiagnosis } from "@/lib/diagnose";
 import { ago, int } from "@/lib/format";
 import type { AiOpinion, ReplaceListData } from "@/lib/queries";
@@ -55,7 +55,6 @@ const COLS = 6;
 function Row({ item, opinion, ai, picked, onPick }: { item: ReplaceItem; opinion: AiOpinion | undefined; ai: boolean; picked: boolean; onPick?: () => void }) {
   const [open, setOpen] = useState(false);
   const verdict = verdictOf(item, opinion);
-  const [first, ...more] = item.signals;
   return (
     <>
       <tr className="rq-row" data-open={open || undefined} data-selected={picked || undefined} onClick={(e) => { if (!(e.target as HTMLElement).closest("a,input,button")) setOpen(!open); }}>
@@ -64,21 +63,27 @@ function Row({ item, opinion, ai, picked, onPick }: { item: ReplaceItem; opinion
         </td>
         <td className="rq-domain">
           <DomainLink id={item.domainId} className="rq-name">{item.name}</DomainLink>
-          <span className="rq-sub">
-            {item.clientName ?? "No client"}{item.tags ? <> · <span title="Its Smartlead tag: the domains it's compared with">{item.tags}</span></> : null}
+          <span className="rq-sub rq-who">
+            {item.clientId ? <ClientCell name={item.clientName} hue={item.clientHue} /> : "No client"}
+            {item.tags ? <span className="rq-tag" title="Its Smartlead tag: the domains it's compared with">{item.tags}</span> : null}
           </span>
         </td>
         <td className="rq-signal">
-          {first ? (
-            <>
-              <span className={`rq-head is-${first.tone}`}>{first.head}{more.length ? <span className="rq-more" title={more.map((m) => `${m.head}: ${m.detail}`).join("\n")}>+{more.length}</span> : null}</span>
-              <span className="rq-sub">{first.detail}</span>
-            </>
-          ) : <span className="rq-sub">{item.short}</span>}
+          {item.signals.length ? item.signals.map((s) => (
+            <span key={s.head} className="rq-sig">
+              <span className={`rq-head is-${s.tone}`}>{s.head}</span>
+              <span className="rq-sub">{s.detail}</span>
+            </span>
+          )) : <span className="rq-sub">{item.short}</span>}
         </td>
         <td className="is-num num rq-day">{int(item.perDay)}</td>
         <td className="rq-ai" title={opinion ? `${DIAGNOSIS_ACTIONS[opinion.action]}. ${opinion.headline}` : undefined}>
-          {!ai ? null : verdict ? <Badge tone={VERDICT[verdict].tone}>{VERDICT[verdict].label}</Badge> : <span className="rq-faint">Not reviewed</span>}
+          {!ai ? null : verdict && opinion ? (
+            <>
+              <Badge tone={VERDICT[verdict].tone}>{VERDICT[verdict].label}</Badge>
+              <span className="rq-sub">{DIAGNOSIS_ACTIONS[opinion.action]}</span>
+            </>
+          ) : <span className="rq-faint">Not reviewed</span>}
         </td>
         <td className="rq-toggle-cell">
           <button type="button" className="btn btn-sm btn-icon btn-ghost rq-toggle" aria-expanded={open} aria-label={`${open ? "Hide" : "Show"} details for ${item.name}`} onClick={() => setOpen(!open)}>
@@ -111,16 +116,15 @@ function Alerts({ notes }: { notes: GroupNote[] }) {
     <div className="rq-alerts" aria-label="Whole tags and clients">
       <div className="rq-label">Whole tags and clients <span>{int(notes.length)}</span></div>
       {notes.map((g) => (
-        <details key={`${g.kind}|${g.id}|${g.short}`} className="rq-alert">
-          <summary>
+        <div key={`${g.kind}|${g.id}|${g.short}`} className="rq-alert">
+          <div className="rq-alert-line">
             <span className={`rq-dot is-${g.kind === "tag" ? "danger" : "warning"}`} aria-hidden="true" />
             <b>{g.name}</b>
             <span className="rq-alert-what">{g.short}</span>
             <span className="rq-alert-do">{g.action}</span>
-            <ChevronDown size={13} strokeWidth={1.75} aria-hidden="true" className="rq-alert-chev" />
-          </summary>
+          </div>
           <p>{g.text}</p>
-        </details>
+        </div>
       ))}
     </div>
   );
