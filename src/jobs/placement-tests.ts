@@ -230,7 +230,8 @@ async function buildCampaign(sql: postgres.Sql, sl: Smartlead, c: CampaignRow, t
         case "settings": {
           let settings: Record<string, unknown> = c.settings && Object.keys(c.settings).length ? c.settings : { ...DEFAULT_SETTINGS };
           if (c.source_campaign_id && !Object.keys(c.settings ?? {}).length) {
-            const src = (await sl.getCampaign(Number(c.source_campaign_id))) as Record<string, unknown> | null;
+            // A source campaign deleted in Smartlead since: the test still runs, with the default settings.
+            const src = (await sl.getCampaign(Number(c.source_campaign_id)).catch(() => null)) as Record<string, unknown> | null;
             const kept = Object.fromEntries(KEEP_SETTINGS.filter((k) => src && src[k] != null).map((k) => [k, src![k]]));
             if (Object.keys(kept).length) settings = kept;
           }

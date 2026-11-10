@@ -1860,6 +1860,7 @@ export async function loadPlacementCopy(campaignId: number): Promise<ActionResul
     if (!body) throw new UserError("Smartlead sent that campaign's first email without a body");
     return { ok: true, data: { subject, body } };
   } catch (e) {
+    if (e instanceof SmartleadError && e.status === 404) return { ok: false, error: "Smartlead no longer has this campaign. Pick another, or paste the copy" };
     if (e instanceof SmartleadError) return { ok: false, error: e.message };
     return fail(e);
   }

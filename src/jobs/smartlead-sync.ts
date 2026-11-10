@@ -248,6 +248,19 @@ export async function syncCampaigns(sql: Sql, sl: Smartlead) {
         client_id = coalesce(excluded.client_id, campaigns.client_id), synced_at = now()`;
   }
 
+  // A campaign deleted in Smartlead drops out of the list: mark it deleted and forget its inboxes, so nothing
+  // offers it or adds inboxes to it. Skipped when the list looks cut short, so one bad answer can't wipe them.
+  let deleted = 0;
+  const [{ known }] = await sql<{ known: number }[]>`select count(*)::int as known from campaigns where upper(coalesce(status, '')) <> 'DELETED'`;
+  if (campaigns.length && campaigns.length >= known / 2) {
+    const gone = await sql<{ id: string }[]>`
+      update campaigns set status = 'DELETED', synced_at = now()
+      where id <> all(${campaigns.map((c) => c.id)}::bigint[]) and upper(coalesce(status, '')) <> 'DELETED'
+      returning id`;
+    deleted = gone.length;
+    await sql`delete from campaign_inboxes ci using campaigns c where c.id = ci.campaign_id and upper(coalesce(c.status, '')) = 'DELETED'`;
+  }
+
   let mapped = 0;
   for (const c of campaigns.filter((x) => LIVE_CAMPAIGN.has((x.status ?? "").toUpperCase()))) {
     const accountIds = (await sl.campaignEmailAccounts(c.id))
@@ -267,9 +280,9 @@ export async function syncCampaigns(sql: Sql, sl: Smartlead) {
     mapped++;
   }
   // With mapped tags the tags decide the client; Smartlead's own clients on campaigns must not fill domains in behind them.
-  if ((await clientSource(sql)) === "mapped") return { campaigns: campaigns.length, mapped, campaignClients: 0, domainClients: 0 };
+  if ((await clientSource(sql)) === "mapped") return { campaigns: campaigns.length, mapped, deleted, campaignClients: 0, domainClients: 0 };
   const [assigned] = await sql`select campaigns, domains from assign_clients_from_campaigns()`;
-  return { campaigns: campaigns.length, mapped, campaignClients: Number(assigned.campaigns), domainClients: Number(assigned.domains) };
+  return { campaigns: campaigns.length, mapped, deleted, campaignClients: Number(assigned.campaigns), domainClients: Number(assigned.domains) };
 }
 
 // YYYY-MM-DD for a date in a timezone.

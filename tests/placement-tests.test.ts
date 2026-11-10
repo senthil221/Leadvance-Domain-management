@@ -7,6 +7,7 @@ import {
   bodyHtml, leadFor, nextSaturday, parseStatRow, pickInboxes, pickSeeds, placementVerdict, unknownVariables, type SeedChoice, type Tally,
 } from "../src/lib/placement-tests";
 import { loadMigrations } from "../scripts/migrations";
+import { syncCampaigns } from "../src/jobs/smartlead-sync";
 
 const NOW = Date.parse("2026-11-10T12:00:00Z");
 const seed = (email: string, lastReplyAt = "2026-11-01T00:00:00.000Z"): SeedChoice => ({ email, domain: email.split("@")[1], name: null, lastReplyAt });
@@ -246,6 +247,14 @@ describe("a placement test from start to finish", () => {
     expect(row.reply_source).toBe("untracked");
   });
 
+  it("still builds when the client campaign it copies settings from is gone from Smartlead", async () => {
+    await createPlacementBatch(sql, input(d));
+    const { sl, calls } = fakeSmartlead();
+    (sl as unknown as Record<string, unknown>).getCampaign = async () => { throw new Error("Smartlead GET /campaigns/555 failed (HTTP 404)"); };
+    expect(await runPlacementTests(sql, sl, { now: () => new Date("2026-11-14T13:00:00Z") })).toMatchObject({ built: 4, failed: 0 });
+    expect((calls.find((c) => c[0] === "settings")![2] as Record<string, unknown>).stop_lead_settings).toBe("REPLY_TO_AN_EMAIL");
+  });
+
   it("does nothing in Smartlead's dry-run mode, and stops what it created when a test is cancelled", async () => {
     await createPlacementBatch(sql, input(d));
     const dry = fakeSmartlead({ dryRun: true });
@@ -260,5 +269,30 @@ describe("a placement test from start to finish", () => {
     await sql`update placement_batches set status = 'cancelled' where id = ${r.batchId}`;
     expect(await runPlacementTests(sql, live.sl)).toMatchObject({ cancelled: 4 });
     expect(live.calls.filter((c) => c[0] === "status" && c[2] === "STOPPED")).toHaveLength(4);
+  });
+});
+
+describe("campaigns deleted in Smartlead", () => {
+  it("are marked deleted and lose their inboxes, unless the list looks cut short", async () => {
+    const d = await setup();
+    await sql`delete from campaigns`;
+    const [inbox] = await sql<{ id: string }[]>`select id from inboxes where domain_id = ${d["tested.com"]} limit 1`;
+    for (const id of [1, 2, 3]) {
+      await sql`insert into campaigns (id, name, status) values (${id}, ${`C${id}`}, 'ACTIVE')`;
+      await sql`insert into campaign_inboxes (campaign_id, inbox_id) values (${id}, ${inbox.id})`;
+    }
+    const sl = (list: number[]) => ({
+      listCampaigns: async () => list.map((id) => ({ id, name: `C${id}`, status: "ACTIVE" })),
+      campaignEmailAccounts: async () => [],
+    }) as never;
+
+    // Only one of three came back: too few to trust, nothing is touched.
+    expect(await syncCampaigns(sql, sl([1]))).toMatchObject({ deleted: 0 });
+    // Campaign 3 is gone from Smartlead.
+    expect(await syncCampaigns(sql, sl([1, 2]))).toMatchObject({ deleted: 1 });
+    const rows = await sql<{ id: string; status: string; links: number }[]>`
+      select c.id, c.status, (select count(*)::int from campaign_inboxes ci where ci.campaign_id = c.id) as links from campaigns c order by c.id`;
+    expect(rows.map((r) => [Number(r.id), r.status])).toEqual([[1, "ACTIVE"], [2, "ACTIVE"], [3, "DELETED"]]);
+    expect(rows[2].links).toBe(0);
   });
 });
