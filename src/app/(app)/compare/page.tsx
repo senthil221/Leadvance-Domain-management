@@ -26,8 +26,8 @@ export default function ComparePage({ searchParams }: { searchParams: Promise<Se
 async function CompareData({ searchParams }: { searchParams: Promise<Search> }) {
   await getCurrentUser();
   const search = await searchParams;
-  // Two weeks by default: enough days for the trend lines to say something. The date picker changes it.
-  const { from, to } = await lastDays(14);
+  // Today by default; the date picker changes it.
+  const { from, to } = await lastDays(1);
   const [initial, daily] = await Promise.all([getReview(from, to), getCompareDaily(from, to)]);
   const dim = DIMS.includes(search.dim as Dim) ? (search.dim as Dim) : undefined;
   return <CompareView initial={initial} initialDaily={daily} startClient={search.client ?? ""} startDim={dim} startGroup={search.group ?? null} />;

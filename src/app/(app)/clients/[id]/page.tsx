@@ -25,7 +25,7 @@ async function ClientData({ params }: { params: Promise<{ id: string }> }) {
   await getCurrentUser();
   const { id } = await params;
   if (!UUID.test(id)) notFound();
-  const { from, to } = await lastDays(14);
+  const { from, to } = await lastDays(1); // Today; the date picker changes it
   const data = await getClientSending(id, from, to);
   if (!data) notFound();
   return <ClientSending initial={data} />;

@@ -3,7 +3,7 @@ import { Suspense } from "react";
 import { EventsView } from "@/components/activity/EventsView";
 import { PageHead, TableSkeleton } from "@/components/ui";
 import { getCurrentUser } from "@/lib/auth";
-import { getEvents, thisAndLastWeek } from "@/lib/queries";
+import { getEvents, lastDays } from "@/lib/queries";
 
 export const metadata: Metadata = { title: "Bounces" };
 
@@ -22,6 +22,6 @@ export default function BouncesPage() {
 
 async function BouncesData() {
   await getCurrentUser();
-  const { from, to } = await thisAndLastWeek(); // Last week's Monday to today; the date picker changes it
+  const { from, to } = await lastDays(1); // Today; the date picker changes it
   return <EventsView kind="bounce" initial={await getEvents("bounce", from, to)} />;
 }

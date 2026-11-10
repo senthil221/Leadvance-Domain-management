@@ -23,12 +23,11 @@ export default function StatsPage({ searchParams }: PageProps<"/stats">) {
 
 async function StatsData({ searchParams }: { searchParams: PageProps<"/stats">["searchParams"] }) {
   await getCurrentUser();
-  // This and last week unless a link asks for another range (?range=7d): this
-  // week alone is only today on a Monday, before anything has gone out.
+  // Today unless a link asks for another range (?range=7d).
   const asked = (await searchParams).range;
-  const key: PresetKey = typeof asked === "string" && asked !== "custom" && PRESETS.some((p) => p.key === asked) ? (asked as PresetKey) : "2weeks";
+  const key: PresetKey = typeof asked === "string" && asked !== "custom" && PRESETS.some((p) => p.key === asked) ? (asked as PresetKey) : "today";
   const { to: today } = await lastDays(1);
-  const [from, to] = presetRange(key, today) ?? presetRange("2weeks", today)!;
+  const [from, to] = presetRange(key, today) ?? [today, today];
   const [data, review, clients] = await Promise.all([getStats(from, to), getReview(from, to), listClients()]);
   return <StatsView initial={data} initialReview={review} clients={clients} />;
 }
