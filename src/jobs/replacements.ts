@@ -415,14 +415,18 @@ export async function advanceReplacements(sql: postgres.Sql, ctx: StepContext) {
 /** A person acting on a pair's current step from the Replacements page. */
 /**
  * Swaps a replacement's new domain for another free one, for when Hypertide
- * refuses the domain. Only before Hypertide has accepted the swap. The refused
+ * refuses the domain. Only before Hypertide has accepted the swap, or when it
+ * has a request open but the new domain's nameservers couldn't be set (the
+ * registrar refused them), so Hypertide can never finish it; that request is
+ * cancelled in Hypertide by hand, and the app forgets it here. The refused
  * domain goes back to storage, the next free domain takes its place (same
  * ending first, never used before first, then oldest), and the steps start again.
  */
 export async function swapNewDomain(sql: postgres.Sql, id: string, actor: string) {
   const item = await loadItem(sql, id);
   if (!item) throw new Error("Replacement not found");
-  if (item.completed || item.htop || finished(item.inboxes) || finished(item.smartlead)) {
+  const stuckRequest = Boolean(item.htop) && item.nameservers === "failed" && item.htopstatus !== "completed";
+  if (item.completed || (item.htop && !stuckRequest) || finished(item.inboxes) || finished(item.smartlead)) {
     throw new Error(`${item.newname} is already being set up, so it can't be swapped`);
   }
   return sql.begin(async (tx) => {
@@ -442,13 +446,13 @@ export async function swapNewDomain(sql: postgres.Sql, id: string, actor: string
     await tx`update domains set client_id = ${old.client_id}, inbox_provider_id = coalesce(inbox_provider_id, ${old.inbox_provider_id}),
         tags = array(select distinct t from unnest(tags || array['New']) t order by 1)
       where id = ${pick.id}`;
-    await tx`select transition_domain(${pick.id}, 'provisioning', ${`replacing ${item.oldname}, instead of ${item.newname}`}, ${actor})`;
+    await tx`select transition_domain(${pick.id}, 'provisioning', ${`replacing ${item.oldname}, instead of ${item.newname}${stuckRequest ? ` (Hypertide request ${item.htop} dropped)` : ""}`}, ${actor})`;
     await tx`update replacement_items set new_domain_id = ${pick.id},
         step_nameservers = 'pending', step_inboxes = 'pending', note = null, last_error = null,
         hypertide_ns = null, hypertide_ns_verified_at = null, hypertide_order_id = null, hypertide_status = null,
         ht_operation_id = null, ht_operation = null, ht_response = null, ht_checked_at = null
       where id = ${id}`;
-    return { from: item.newname, to: pick.name as string };
+    return { from: item.newname, to: pick.name as string, droppedRequest: stuckRequest };
   });
 }
 

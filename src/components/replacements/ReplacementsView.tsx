@@ -202,7 +202,7 @@ function Row({ r, now, graceDays, smartleadLive, isOpen, onToggle }: {
         </td>
         <td title={dayFmt.format(new Date(r.createdAt))}>{ago(r.createdAt, now)}</td>
         <td className="rpl-actions" onClick={(e) => e.stopPropagation()}>
-          {state === "attention" && step && stepStatus ? <StepActions itemId={r.id} step={step} status={stepStatus} compact canSwap={!r.htOperation && (step === "nameservers" || step === "inboxes")} /> : null}
+          {state === "attention" && step && stepStatus ? <StepActions itemId={r.id} step={step} status={stepStatus} compact canSwap={r.htOperation ? step === "nameservers" && r.htOperation !== "completed" : step === "nameservers" || step === "inboxes"} openRequest={Boolean(r.htOperation)} /> : null}
           {canAdd ? <AddToCampaigns itemId={r.id} domain={r.newDomain} campaigns={r.oldCampaigns} inboxes={r.newInboxes} warmupOn={r.newWarmupOn} reputation={r.newReputation} ready={r.ready} warmDays={r.warmDays} /> : null}
         </td>
       </tr>

@@ -10,7 +10,9 @@ const LABEL = { nameservers: "Nameservers", inboxes: "Inboxes", smartlead: "Smar
 type Step = keyof typeof LABEL;
 
 // Buttons for the step a replacement is waiting on.
-export function StepActions({ itemId, step, status, compact = false, canSwap = false }: { itemId: string; step: Step; status: StepStatus; compact?: boolean; canSwap?: boolean }) {
+// openRequest: Hypertide already holds a replacement request for this pair,
+// which only Hypertide's dashboard can cancel.
+export function StepActions({ itemId, step, status, compact = false, canSwap = false, openRequest = false }: { itemId: string; step: Step; status: StepStatus; compact?: boolean; canSwap?: boolean; openRequest?: boolean }) {
   const [pending, start] = useTransition();
   const act = (action: "done" | "retry") =>
     start(async () => {
@@ -25,7 +27,10 @@ export function StepActions({ itemId, step, status, compact = false, canSwap = f
     start(async () => {
       const r = await swapReplacementDomain(itemId);
       if (!r.ok) return void toast.error(r.error);
-      toast.success(`Swapped ${r.data.from} for ${r.data.to}`, { description: `${r.data.from} is back in storage. The replacement starts again with ${r.data.to}.` });
+      toast.success(`Swapped ${r.data.from} for ${r.data.to}`, {
+        description: `${r.data.from} is back in storage. The replacement starts again with ${r.data.to}.`
+          + (r.data.droppedRequest ? ` If Hypertide still has the request for ${r.data.from}, it will refuse this one until you cancel that.` : ""),
+      });
     });
 
   // A manual inboxes step re-checks the Hypertide order settings on Retry; an
@@ -40,7 +45,9 @@ export function StepActions({ itemId, step, status, compact = false, canSwap = f
       ) : null}
       {canSwap && status === "failed" ? (
         <button type="button" className="btn btn-sm" disabled={pending} onClick={swap}
-          title="Hypertide won't take this domain: put it back in storage and start again with the next free domain">
+          title={openRequest
+            ? "The nameservers can't be set on this domain. Cancel its replacement request in Hypertide first, then swap: it goes back to storage and the replacement starts again with the next free domain"
+            : "Hypertide won't take this domain: put it back in storage and start again with the next free domain"}>
           <Shuffle size={12} /> {compact ? "Swap" : "Swap domain"}
         </button>
       ) : null}

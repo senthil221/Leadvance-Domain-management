@@ -337,7 +337,7 @@ describe("replacement through Hypertide's replace queue", () => {
     await sql`update domains set tags = '{New}' where id = ${newId}`;
     await sql`update replacement_items set step_nameservers = 'failed', last_error = 'Replacement conflicts with an existing request' where id = ${itemId}`;
     const r = await swapNewDomain(sql, itemId, "me");
-    expect(r).toEqual({ from: "freshsend.com", to: "earlypick.com" });
+    expect(r).toEqual({ from: "freshsend.com", to: "earlypick.com", droppedRequest: false });
 
     const [item] = await sql`select new_domain_id, step_nameservers, step_inboxes, last_error, ht_operation_id from replacement_items where id = ${itemId}`;
     const [pick] = await sql`select id, status, tags, client_id from domains where name = 'earlypick.com'`;
@@ -355,6 +355,23 @@ describe("replacement through Hypertide's replace queue", () => {
     await sql`update replacement_items set ht_operation_id = 'op_1' where id = ${itemId}`;
     await expect(swapNewDomain(sql, itemId, "me")).rejects.toThrow(/can't be swapped/);
     expect(await status(newId)).toBe("provisioning");
+  });
+
+  it("swaps a domain whose nameservers the registrar refused while Hypertide holds its request, dropping that request", async () => {
+    await sql`insert into domains (name) values ('spare.com')`;
+    // Hypertide finished it: never swapped, even with the nameservers step failed.
+    await sql`update replacement_items set ht_operation_id = 'op_9', ht_operation = 'completed', step_nameservers = 'failed' where id = ${itemId}`;
+    await expect(swapNewDomain(sql, itemId, "me")).rejects.toThrow(/can't be swapped/);
+
+    await sql`update replacement_items set ht_operation = 'queued',
+        last_error = 'Unstoppable refused the nameservers for freshsend.com: {"code":"NO_CHANGE"}' where id = ${itemId}`;
+    const r = await swapNewDomain(sql, itemId, "me");
+    expect(r).toEqual({ from: "freshsend.com", to: "spare.com", droppedRequest: true });
+    const [item] = await sql`select step_nameservers, ht_operation_id, ht_operation, last_error from replacement_items where id = ${itemId}`;
+    expect(item).toEqual({ step_nameservers: "pending", ht_operation_id: null, ht_operation: null, last_error: null });
+    expect(await status(newId)).toBe("in_storage");
+    const [why] = await sql`select reason from domain_status_history where domain_id = (select id from domains where name = 'spare.com') and to_status = 'provisioning'`;
+    expect(why.reason).toMatch(/Hypertide request op_9 dropped/);
   });
 
   it("tags the domains, starts the old domain's grace when Hypertide has the swap, and mirrors the tags in Smartlead", async () => {

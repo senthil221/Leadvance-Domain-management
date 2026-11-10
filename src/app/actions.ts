@@ -623,7 +623,7 @@ export async function actOnReplacementStep(input: z.input<typeof stepInput>): Pr
 }
 
 /** When Hypertide refuses a replacement's new domain: swap in the next free one and start again. */
-export async function swapReplacementDomain(itemId: string): Promise<ActionResult<{ from: string; to: string }>> {
+export async function swapReplacementDomain(itemId: string): Promise<ActionResult<{ from: string; to: string; droppedRequest: boolean }>> {
   try {
     const actor = await requireActor();
     const id = z.uuid().parse(itemId);
