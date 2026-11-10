@@ -2,6 +2,8 @@ import type { DomainStatus } from "./status";
 
 /** A TLD as IANA lists them: letters, or an xn-- label. Anything else (".com-old") isn't a domain name. */
 export const isRealTld = (tld: string) => /^([a-z]{2,63}|xn--[a-z0-9-]{1,59})$/i.test(tld);
+/** A Microsoft tenant name (*.onmicrosoft.com): Microsoft holds it, no registry has it on its own. */
+export const isTenantName = (name: string) => /\.onmicrosoft\.com$/i.test(name);
 
 // The domain audit's rules: what is wrong with a domain, from what its
 // registrar account lists and what the registry (RDAP) says. Shared by server
@@ -75,6 +77,7 @@ export function auditIssues(d: AuditRow, today = new Date().toISOString().slice(
   const out: IssueKey[] = [];
   if (d.archivedAt) return out;
   if (!isRealTld(d.tld ?? d.name.split(".").pop() ?? "")) return ["bad_name"];
+  if (isTenantName(d.name)) return out;
   const atRegistrar = d.registrar && d.registrarAccount;
   if (d.unregistered || (d.registryFound === false && atRegistrar && !d.gone)) out.push("unregistered");
   if (d.gone) out.push("gone");

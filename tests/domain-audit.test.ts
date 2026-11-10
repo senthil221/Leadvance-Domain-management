@@ -60,6 +60,7 @@ describe("RDAP answers", () => {
     expect(await rdap.lookup("busy.com")).toMatchObject({ found: null, throttled: true, retryAfterSec: 120 });
     expect(await rdap.lookup("here.com")).toMatchObject({ found: true, expiresAt: "2027-01-01" });
     expect(await rdap.lookup("x.com-old")).toMatchObject({ found: null, error: "Not a domain name: .com-old isn't a real ending" });
+    expect(await rdap.lookup("contoso.onmicrosoft.com")).toMatchObject({ found: null, error: "Not a domain name: a Microsoft tenant name, which Microsoft holds" });
     // The bootstrap is read once.
     expect((fetchImpl as unknown as { mock: { calls: unknown[][] } }).mock.calls.filter((c) => String(c[0]).includes("iana"))).toHaveLength(1);
   });
@@ -92,6 +93,7 @@ describe("audit rules", () => {
     expect(issues({ expiresAt: new Date("2026-10-01"), registryExpiresAt: new Date("2026-10-01"), inUse: "52 inboxes on it" })).toEqual(["expired_in_use"]);
     expect(issues({ archivedAt: new Date(), gone: true })).toEqual([]);
     expect(issues({ name: "a.com-old", tld: "com-old", gone: true })).toEqual(["bad_name"]);
+    expect(issues({ name: "contoso.onmicrosoft.com", registrar: null, registrarAccount: null, registryFound: false, expiresAt: null, registryExpiresAt: null })).toEqual([]);
   });
 
   it("flags a registrar we don't have, a transfer, and an expiry that doesn't match", () => {

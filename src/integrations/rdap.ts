@@ -1,5 +1,5 @@
 import net from "node:net";
-import { isRealTld } from "../lib/audit";
+import { isRealTld, isTenantName } from "../lib/audit";
 
 // The public registry's record of a domain, over RDAP: does it exist, who is
 // the registrar of record, when does it expire, and its EPP status (redemption
@@ -127,6 +127,7 @@ export function createRdap({ fetchImpl = fetch, timeoutMs = 15_000, whoisImpl = 
     async lookup(name) {
       const tld = (name.split(".").pop() ?? "").toLowerCase();
       if (!isRealTld(tld)) return { found: null, error: `Not a domain name: .${tld} isn't a real ending`, host: null };
+      if (isTenantName(name)) return { found: null, error: "Not a domain name: a Microsoft tenant name, which Microsoft holds", host: null };
       const base = await serverFor(tld);
       if (!base) {
         const host = await whoisFor(tld).catch(() => null);
