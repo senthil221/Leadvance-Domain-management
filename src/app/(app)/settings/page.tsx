@@ -49,7 +49,7 @@ async function SettingsContent() {
     const s = jobState.find((x) => x.job === j.name);
     return {
       name: j.name, label: j.label, everyMinutes: j.everyMinutes,
-      lastFinishedAt: s?.lastFinishedAt ?? null, lastOk: s?.lastOk ?? null, lastError: s?.lastError ?? null,
+      lastStartedAt: s?.lastStartedAt ?? null, lastFinishedAt: s?.lastFinishedAt ?? null, lastOk: s?.lastOk ?? null, lastError: s?.lastError ?? null,
       summary: summarize(s?.lastDetail),
     };
   });

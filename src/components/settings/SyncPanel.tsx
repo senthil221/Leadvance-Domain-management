@@ -1,12 +1,13 @@
 "use client";
 
-import { Check, Copy, Play, PlayCircle, RotateCcw } from "lucide-react";
-import { useState, useTransition } from "react";
+import { Check, Copy, Play, PlayCircle, RotateCcw, Square } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { runJobNow } from "@/app/actions";
-import { ago, summarize } from "@/lib/format";
+import { AutoRefresh } from "@/components/AutoRefresh";
+import { ago, summarize, took } from "@/lib/format";
 
-export type SyncJob = { name: string; label: string; everyMinutes: number; lastFinishedAt: Date | null; lastOk: boolean | null; lastError: string | null; summary: string | null };
+export type SyncJob = { name: string; label: string; everyMinutes: number; lastStartedAt: Date | null; lastFinishedAt: Date | null; lastOk: boolean | null; lastError: string | null; summary: string | null };
 
 // The jobs in sections, in the order Run all goes through them: Smartlead
 // first (inboxes and numbers), then the inbox providers, then registrars and
@@ -23,56 +24,117 @@ const SECTIONS: { key: string; title: string; sub: string; jobs: string[] }[] = 
 ];
 
 type Outcome = { ok: boolean; text: string | null };
+type Current = { job: SyncJob; startedAt: number; done: number; total: number };
+type RowState = "here" | "queued" | "server" | "idle";
+
+const ms = (d: Date | string) => new Date(d).getTime();
+/** Started by the background worker and not finished yet (a start over 3 hours old is a crash, not a run). */
+const onServer = (j: SyncJob, now: number) =>
+  j.lastStartedAt != null && (!j.lastFinishedAt || ms(j.lastStartedAt) > ms(j.lastFinishedAt)) && now - ms(j.lastStartedAt) < 3 * 3600_000;
+/** How long the last finished run took. */
+const lastTook = (j: SyncJob) =>
+  j.lastStartedAt && j.lastFinishedAt && ms(j.lastFinishedAt) >= ms(j.lastStartedAt) ? ms(j.lastFinishedAt) - ms(j.lastStartedAt) : null;
+/** Hasn't started in over twice its interval and five minutes: the worker, which runs one job at a time, is behind. */
+const isBehind = (j: SyncJob, now: number) =>
+  j.lastStartedAt != null && !onServer(j, now) && now - ms(j.lastStartedAt) > (2 * j.everyMinutes + 5) * 60_000;
 
 export function SyncPanel({ jobs }: { jobs: SyncJob[] }) {
-  const [running, setRunning] = useState<string | null>(null);
-  const [queue, setQueue] = useState<{ done: number; total: number; label: string } | null>(null);
+  // Jobs run from here go one after another through this queue. Run now and a
+  // section's Run all add to it while it runs, so no button is locked meanwhile.
+  const waiting = useRef<SyncJob[]>([]);
+  const draining = useRef(false);
+  const stop = useRef(false);
+  const [queued, setQueued] = useState<string[]>([]);
+  const [current, setCurrent] = useState<Current | null>(null);
+  const [stopping, setStopping] = useState(false);
   // What each job did when run from here, shown until the page reloads.
   const [outcomes, setOutcomes] = useState<Record<string, Outcome>>({});
-  const [, start] = useTransition();
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const id = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(id);
+  }, []);
+
   const byName = new Map(jobs.map((j) => [j.name, j]));
   const listed = new Set(SECTIONS.flatMap((x) => x.jobs));
   const sections = [
     ...SECTIONS.map((x) => ({ ...x, list: x.jobs.flatMap((n) => byName.get(n) ?? []) })),
     { key: "other", title: "Other", sub: "", jobs: [], list: jobs.filter((j) => !listed.has(j.name)) },
   ].filter((x) => x.list.length);
-  const busy = running !== null || queue !== null;
 
-  const runOne = async (job: SyncJob) => {
-    setRunning(job.name);
-    const r = await runJobNow(job.name);
-    setRunning(null);
-    const o = r.ok ? { ok: true, text: summarize(r.data) ?? null } : { ok: false, text: r.error };
+  const runOne = async (job: SyncJob): Promise<Outcome> => {
+    let o: Outcome;
+    try {
+      const r = await runJobNow(job.name);
+      o = r.ok ? { ok: true, text: summarize(r.data) ?? null } : { ok: false, text: r.error };
+    } catch (e) {
+      o = { ok: false, text: e instanceof Error ? e.message : "The server didn't answer" };
+    }
     setOutcomes((m) => ({ ...m, [job.name]: o }));
     return o;
   };
-  const single = (job: SyncJob) => start(async () => {
-    const o = await runOne(job);
-    if (o.ok) toast.success(`${job.label} done`, { description: o.text ?? undefined });
-    else toast.error(`${job.label} failed`, { description: o.text ?? undefined });
-  });
+
   // One after another, so each sees what the one before brought in.
-  const runMany = (list: SyncJob[], what: string) => start(async () => {
-    const failed: string[] = [];
-    for (let i = 0; i < list.length; i++) {
-      setQueue({ done: i, total: list.length, label: list[i].label });
-      const o = await runOne(list[i]);
-      if (!o.ok) failed.push(list[i].label);
+  const drain = async () => {
+    draining.current = true;
+    stop.current = false;
+    const results: { job: SyncJob; o: Outcome }[] = [];
+    while (waiting.current.length && !stop.current) {
+      const job = waiting.current.shift()!;
+      setQueued(waiting.current.map((j) => j.name));
+      setCurrent({ job, startedAt: Date.now(), done: results.length, total: results.length + 1 + waiting.current.length });
+      results.push({ job, o: await runOne(job) });
     }
-    setQueue(null);
-    if (failed.length) toast.error(`${what}: ${list.length - failed.length} of ${list.length} done`, { description: `Failed: ${failed.join(", ")}` });
-    else toast.success(`${what}: all ${list.length} jobs done`);
-  });
+    const left = waiting.current.length;
+    waiting.current = [];
+    draining.current = false;
+    setQueued([]);
+    setCurrent(null);
+    setStopping(false);
+    const note = left ? `Stopped; ${left} not run.` : null;
+    const failed = results.filter((r) => !r.o.ok);
+    if (results.length === 1) {
+      const [{ job, o }] = results;
+      const description = [o.text, note].filter(Boolean).join(" ") || undefined;
+      if (o.ok) toast.success(`${job.label} done`, { description });
+      else toast.error(`${job.label} failed`, { description });
+    } else if (failed.length) {
+      toast.error(`${results.length - failed.length} of ${results.length} jobs done`, { description: [`Failed: ${failed.map((r) => r.job.label).join(", ")}.`, note].filter(Boolean).join(" ") });
+    } else {
+      toast.success(`All ${results.length} jobs done`, { description: note ?? undefined });
+    }
+  };
+
+  const enqueue = (list: SyncJob[]) => {
+    const have = new Set([...waiting.current.map((j) => j.name), ...(current ? [current.job.name] : [])]);
+    const add = list.filter((j) => !have.has(j.name) && !onServer(j, Date.now()));
+    if (!add.length) return;
+    waiting.current.push(...add);
+    setQueued(waiting.current.map((j) => j.name));
+    if (draining.current) toast(`${add.length === 1 ? add[0].label : `${add.length} jobs`} added to the queue`);
+    else void drain();
+  };
+
   const failing = jobs.filter((j) => (outcomes[j.name] ? !outcomes[j.name].ok : j.lastOk === false));
+  const serverNow = jobs.filter((j) => onServer(j, now) && current?.job.name !== j.name);
+  const behind = jobs.filter((j) => !outcomes[j.name] && isBehind(j, now));
+  const usual = current ? lastTook(current.job) : null;
+  const rowState = (j: SyncJob): RowState =>
+    current?.job.name === j.name ? "here" : queued.includes(j.name) ? "queued" : onServer(j, now) ? "server" : "idle";
 
   return (
     <div className="sync">
+      <AutoRefresh seconds={15} />
       <div className="sync-head">
         <div className="sync-head-text">
-          {queue ? (
+          {current ? (
             <>
-              <span className="list-title">Running {queue.done + 1} of {queue.total}: {queue.label}</span>
-              <span className="sync-progress" aria-hidden><i style={{ width: `${(100 * queue.done) / queue.total}%` }} /></span>
+              <span className="list-title" suppressHydrationWarning>
+                Running {current.done + 1} of {current.total}: {current.job.label} · {took(now - current.startedAt)}
+                {usual != null ? <span className="text-faint"> (took {took(usual)} last time)</span> : null}
+              </span>
+              <span className="sync-progress" aria-hidden><i style={{ width: `${(100 * current.done) / current.total}%` }} /></span>
+              <span className="list-meta">The other buttons still work: they add to this queue.</span>
             </>
           ) : (
             <>
@@ -80,12 +142,30 @@ export function SyncPanel({ jobs }: { jobs: SyncJob[] }) {
               <span className="list-meta">{failing.length ? <span className="text-danger-ink">{failing.length} failed last time: {failing.map((j) => j.label).join(", ")}</span> : "All ran fine last time"}</span>
             </>
           )}
+          {serverNow.length ? (
+            <span className="list-meta" suppressHydrationWarning>
+              <span className="dot tone-info is-pulse" style={{ marginRight: 6, verticalAlign: "middle" }} />
+              Running on the server now: {serverNow.map((j) => `${j.label} (started ${ago(j.lastStartedAt, now)})`).join(", ")}
+            </span>
+          ) : null}
+          {behind.length ? (
+            <span className="list-meta text-warning-ink" style={{ whiteSpace: "normal" }} suppressHydrationWarning>
+              {behind.length} {behind.length === 1 ? "job is" : "jobs are"} behind schedule: {behind.map((j) => j.label).join(", ")}. The server runs one job at a time, so a slow one holds up the rest.
+            </span>
+          ) : null}
         </div>
-        {failing.length && !busy ? <button type="button" className="btn btn-sm" onClick={() => runMany(failing, "Failed jobs")}><RotateCcw size={12} /> Retry failed</button> : null}
-        <button type="button" className="btn btn-primary btn-sm" disabled={busy} onClick={() => runMany(sections.flatMap((x) => x.list), "Run all")}
-          title="Every job, one after another, Smartlead first and the daily stats last">
-          <PlayCircle size={13} /> {queue ? "Running…" : "Run all"}
-        </button>
+        {failing.length && !current ? <button type="button" className="btn btn-sm" onClick={() => enqueue(failing)}><RotateCcw size={12} /> Retry failed</button> : null}
+        {current ? (
+          <button type="button" className="btn btn-sm" disabled={stopping} onClick={() => { stop.current = true; setStopping(true); }}
+            title="Lets the job that's running finish, then runs no more">
+            <Square size={12} /> {stopping ? "Stopping after this one…" : "Stop"}
+          </button>
+        ) : (
+          <button type="button" className="btn btn-primary btn-sm" onClick={() => enqueue(sections.flatMap((x) => x.list))}
+            title="Every job, one after another, Smartlead first and the daily stats last">
+            <PlayCircle size={13} /> Run all
+          </button>
+        )}
       </div>
       {sections.map((x) => (
         <section key={x.key} className="sync-section" aria-labelledby={`sync-${x.key}`}>
@@ -94,10 +174,15 @@ export function SyncPanel({ jobs }: { jobs: SyncJob[] }) {
               <span id={`sync-${x.key}`} className="sync-section-title">{x.title} <span className="text-faint">{x.list.length}</span></span>
               {x.sub ? <span className="list-meta">{x.sub}</span> : null}
             </div>
-            <button type="button" className="btn btn-sm" disabled={busy} onClick={() => runMany(x.list, x.title)}><Play size={12} /> Run {x.list.length === 1 ? "" : "all "}{x.title === "Other" ? "" : x.title}</button>
+            <button type="button" className="btn btn-sm" disabled={x.list.every((j) => rowState(j) !== "idle")} onClick={() => enqueue(x.list)}>
+              <Play size={12} /> Run {x.list.length === 1 ? "" : "all "}{x.title === "Other" ? "" : x.title}
+            </button>
           </div>
           <div className="list">
-            {x.list.map((j) => <JobRow key={j.name} job={j} running={running === j.name} disabled={busy} outcome={outcomes[j.name]} onRun={() => single(j)} />)}
+            {x.list.map((j) => (
+              <JobRow key={j.name} job={j} now={now} outcome={outcomes[j.name]} onRun={() => enqueue([j])}
+                state={rowState(j)} startedHere={current?.job.name === j.name ? current.startedAt : null} />
+            ))}
           </div>
         </section>
       ))}
@@ -105,23 +190,37 @@ export function SyncPanel({ jobs }: { jobs: SyncJob[] }) {
   );
 }
 
-function JobRow({ job, running, disabled, outcome, onRun }: { job: SyncJob; running: boolean; disabled: boolean; outcome?: Outcome; onRun: () => void }) {
+function JobRow({ job, now, state, startedHere, outcome, onRun }: { job: SyncJob; now: number; state: RowState; startedHere: number | null; outcome?: Outcome; onRun: () => void }) {
   const ok = outcome ? outcome.ok : job.lastOk;
-  const tone = running ? "info" : ok == null ? "faint" : ok ? "success" : "danger";
+  const active = state === "here" || state === "server";
+  const late = state === "idle" && !outcome && isBehind(job, now);
+  const tone = active ? "info" : state === "queued" || ok == null ? "faint" : !ok ? "danger" : late ? "warning" : "success";
   const said = outcome ? outcome.text : ok === false ? job.lastError : job.summary;
+  const length = lastTook(job);
+  const usual = length != null ? ` · took ${took(length)} last time` : "";
   return (
     <div className="list-row" style={{ alignItems: "flex-start", paddingTop: 10, paddingBottom: 10 }}>
-      <span className={`dot tone-${tone}${running ? " is-pulse" : ""}`} style={{ marginTop: 6 }} />
+      <span className={`dot tone-${tone}${active ? " is-pulse" : ""}`} style={{ marginTop: 6 }} />
       <div className="list-main">
         <span className="list-title">{job.label}</span>
         <span className="list-meta" style={{ whiteSpace: "normal" }} suppressHydrationWarning>
-          {running ? "Running…" : outcome ? "Just now · " : job.lastFinishedAt ? `${ago(job.lastFinishedAt)} · ` : "Not run yet · "}
-          {running ? null : <>every {job.everyMinutes} min</>}
-          {!running && said ? (ok === false ? <span className="text-danger-ink"> · {said}</span> : ` · ${said}`) : null}
+          {state === "here" ? <>Running from here · {took(now - (startedHere ?? now))}{usual}</>
+            : state === "server" ? <>Running on the server · started {ago(job.lastStartedAt, now)}{usual}</>
+            : state === "queued" ? <>Waiting in the queue</>
+            : (
+              <>
+                {outcome ? "Just now · " : job.lastFinishedAt ? `${ago(job.lastFinishedAt, now)} · ` : "Not run yet · "}
+                every {job.everyMinutes} min
+                {!outcome && length != null ? ` · took ${took(length)}` : ""}
+                {late ? <span className="text-warning-ink"> · behind schedule</span> : null}
+                {said ? (ok === false ? <span className="text-danger-ink"> · {said}</span> : ` · ${said}`) : null}
+              </>
+            )}
         </span>
       </div>
-      <button type="button" className="btn btn-sm" disabled={disabled} onClick={onRun}>
-        <Play size={12} /> {running ? "Running…" : "Run now"}
+      <button type="button" className="btn btn-sm" disabled={state !== "idle"} onClick={onRun}
+        title={state === "server" ? "The server is running it now" : state === "queued" ? "Waiting its turn in the queue" : undefined}>
+        <Play size={12} /> {active ? "Running…" : state === "queued" ? "Queued" : "Run now"}
       </button>
     </div>
   );

@@ -38,6 +38,15 @@ export function shortDate(d: Date | string | null | undefined) {
 }
 
 // One line from a job result, e.g. "420 accounts, 3 new domains".
+/** How long something took: "under 1s", "42s", "3m 05s", "1h 12m". */
+export function took(ms: number) {
+  if (ms < 1000) return "under 1s";
+  const sec = Math.round(ms / 1000);
+  if (sec < 60) return `${sec}s`;
+  if (sec < 3600) return `${Math.floor(sec / 60)}m ${String(sec % 60).padStart(2, "0")}s`;
+  return `${Math.floor(sec / 3600)}h ${Math.floor((sec % 3600) / 60)}m`;
+}
+
 export function summarize(detail: Record<string, unknown> | null | undefined) {
   if (!detail) return null;
   if (typeof detail.skipped === "string") return `skipped: ${detail.skipped}`;
