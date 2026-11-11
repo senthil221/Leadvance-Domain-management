@@ -34,12 +34,48 @@ export { inRecoveryPool };
 export function lifeOf(d: Pick<DomainRow, "status" | "htPayment"> & { coolingUntil?: Date | string | null; expired?: boolean; unregistered?: boolean }): Life {
   // Never registered (its registrar lists it with no expiry date): a tab of its own, whatever its status.
   if (d.unregistered) return "unregistered";
+  // Draining is still sending through its grace period, so it stays under
+  // Replaced with its countdown even once the registration has lapsed.
+  if (d.status === "draining" && !inRecoveryPool(d.htPayment)) return "replaced";
   // Past its renewal date, it's expired whatever else it says: never Active or Free.
   if (d.expired) return "expired";
   if (d.status === "in_storage") return d.coolingUntil ? "cooling" : "free";
   if (d.status === "provisioning" || d.status === "warming") return "setup";
   if (d.status === "active") return "active";
   return d.status === "resting" || inRecoveryPool(d.htPayment) ? "recovery" : "replaced";
+}
+
+const DAY = 86_400_000;
+const dayLabel = (d: Date) => d.toLocaleDateString("en-GB", { day: "numeric", month: "short", timeZone: "UTC" });
+
+/** When a draining domain's grace period ends, from the days the database says are left. */
+export const graceEndsOn = (daysLeft: number | null | undefined, now = Date.now()) =>
+  daysLeft == null ? null : new Date(Math.floor(now / DAY) * DAY + daysLeft * DAY);
+
+/**
+ * A replaced domain in words, from its status rather than its tags: draining
+ * with the days its grace period has left, or burned (grace over), saying so
+ * when inboxes are still on it. Null for any other status.
+ */
+export function drainState(d: { status: string; graceDaysLeft?: number | null; inboxCount?: number; expired?: boolean; expiresAt?: Date | string | null }, now = Date.now()):
+  { label: string; tone: Tone; title: string } | null {
+  const lapsed = d.expired && d.expiresAt ? ` Its registration expired on ${dayLabel(new Date(d.expiresAt))}, so the registrar may switch its DNS off before then.` : "";
+  if (d.status === "draining") {
+    const left = d.graceDaysLeft;
+    const ends = graceEndsOn(left, now);
+    return {
+      label: left == null ? "Draining" : left ? `Draining · ${left}d left` : "Draining · ends today",
+      tone: left != null && left <= 3 ? "danger" : "warning",
+      title: (ends ? `Replaced: its grace period ends ${dayLabel(ends)}. Hypertide keeps its inboxes up for replies until then.` : "Replaced: draining, with no start date for its grace period.") + lapsed,
+    };
+  }
+  if (d.status === "burned") {
+    const n = d.inboxCount ?? 0;
+    return n
+      ? { label: `Burned · ${n} inbox${n === 1 ? "" : "es"} left`, tone: "danger", title: `Its grace period is over, but ${n} inbox${n === 1 ? " is" : "es are"} still on it. Remove them from Smartlead and cancel them in Hypertide.` }
+      : { label: "Burned", tone: "faint", title: "Replaced and its grace period is over" };
+  }
+  return null;
 }
 
 // Who hosts a domain's DNS, from its nameserver names.

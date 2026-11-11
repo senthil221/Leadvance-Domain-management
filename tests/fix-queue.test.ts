@@ -34,6 +34,15 @@ describe("what counts as a problem", () => {
     expect(problemsOf(fact({ standing: "no_order", current: false, orderLive: false, orderState: "missing" }))[0]).toMatchObject({ kind: "sending_after_end", tier: "soon" });
   });
 
+  it("calls a replaced domain whose registration lapsed draining, not sending with no order", () => {
+    const [p, ...rest] = problemsOf(fact({ status: "draining", standing: "expired", current: false, orderLive: false, drainLeft: 16, daysToExpiry: -5, nameserversAnswering: false }));
+    expect(rest).toEqual([]);
+    expect(p).toMatchObject({ kind: "grace_ending", tier: "soon", label: "Draining, registration expired" });
+    expect(p.evidence).toBe("Draining, 16 days of grace left, but its registration expired 5 days ago; it sent 200 in 7 days");
+    expect(problemsOf(fact({ status: "draining", standing: "expired", drainLeft: 1, daysToExpiry: -5 }))[0].tier).toBe("urgent");
+    expect(kinds({ status: "draining", standing: "expired", drainLeft: 16, connected: 0, disconnected: 0 })).toEqual([]);
+  });
+
   it("only asks about a domain in its grace period when it's about to go and still sending", () => {
     expect(kinds({ standing: "grace", graceLeft: 12, nameserversAnswering: false, rep: 50 })).toEqual([]);
     expect(problemsOf(fact({ standing: "grace", graceLeft: 4 }))[0]).toMatchObject({ kind: "grace_ending", tier: "soon" });

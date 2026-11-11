@@ -18,7 +18,7 @@ import { useCompact } from "@/components/ThemeToggle";
 import { Badge, ClientCell, Empty, TagList } from "@/components/ui";
 import { daysSince, fixedDate, int, shortDate } from "@/lib/format";
 import type { ClientRow, DomainRow } from "@/lib/queries";
-import { LIFE, LIFE_ORDER, LIFE_TABS, htOf, lifeOf, nsOf, type Life } from "@/lib/lifecycle";
+import { LIFE, LIFE_ORDER, LIFE_TABS, drainState, htOf, lifeOf, nsOf, type Life } from "@/lib/lifecycle";
 import { SlBadge } from "@/components/domains/SlStatus";
 import { SL_META, SL_ORDER, slState, slText, type SlState } from "@/lib/smartlead-state";
 import { canReplace } from "@/lib/status";
@@ -318,7 +318,8 @@ export function InventoryView({ domains, clients }: { domains: DomainRow[]; clie
                 {padTop > 0 ? <tr aria-hidden="true"><td colSpan={COLS} style={{ height: padTop, padding: 0, border: 0 }} /></tr> : null}
                 {items.map((vi) => {
                   const d = rows[vi.index];
-                  const life = LIFE[lifeOf(d)];
+                  const drain = drainState(d);
+                  const life = drain ?? LIFE[lifeOf(d)];
                   const ns = nsOf(d);
                   const ht = htOf(d);
                   const isSel = selected.has(d.id);
@@ -335,9 +336,10 @@ export function InventoryView({ domains, clients }: { domains: DomainRow[]; clie
                       <td>
                         <span className="inv-line">
                           <span className={`status-dot tone-${life.tone}`}
-                            title={d.coolingUntil ? `Last used ${shortDate(d.lastUsedOn)}; free to reuse from ${shortDate(d.coolingUntil)}` : d.status === "in_storage" && d.lastUsedOn ? `Used before, last on ${shortDate(d.lastUsedOn)}` : undefined}>
+                            title={drain ? drain.title : d.coolingUntil ? `Last used ${shortDate(d.lastUsedOn)}; free to reuse from ${shortDate(d.coolingUntil)}` : d.status === "in_storage" && d.lastUsedOn ? `Used before, last on ${shortDate(d.lastUsedOn)}` : undefined}>
                             {d.status === "warming" ? "Warming" : life.label}{d.coolingUntil ? <span className="text-muted"> · until {shortDate(d.coolingUntil)}</span> : null}
                           </span>
+                          {drain && d.status === "draining" && d.expired ? <span className="badge tone-danger" title={drain.title}>Expired {shortDate(d.expiresAt)}</span> : null}
                           {d.replacedById ? (
                             <DomainLink id={d.replacedById} className="flex items-center gap-1 truncate text-muted hover:text-ink" title={`Replaced by ${d.replacedByName} on ${shortDate(d.replacedAt)}`}>
                               <ArrowRight size={12} />{d.replacedByName}

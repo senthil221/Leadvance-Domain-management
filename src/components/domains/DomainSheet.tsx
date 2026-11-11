@@ -8,6 +8,7 @@ import { loadDomainDetail } from "@/app/actions";
 import { DiagnosisCard } from "./DiagnosisCard";
 import { Badge, ClientCell, Dot, Metric, Rep, Skeleton, StatusDot } from "@/components/ui";
 import { ago, daysSince, int, shortDate } from "@/lib/format";
+import { graceEndsOn } from "@/lib/lifecycle";
 import { DEAD_CAUSES } from "@/lib/dead";
 import type { DomainDetail } from "@/lib/queries";
 import { STATUS_META, canReplace, reasonsLabel } from "@/lib/status";
@@ -137,6 +138,13 @@ export function DomainSheet({
                   <dt>Active since</dt>
                   <dd>{d.domain.activeSince ? `${shortDate(d.domain.activeSince)} · ${daysSince(d.domain.activeSince)} days` : "—"}</dd>
                   {d.domain.drainingSince ? (<><dt>Draining since</dt><dd>{shortDate(d.domain.drainingSince)}</dd></>) : null}
+                  {d.domain.status === "draining" && d.domain.graceDaysLeft != null ? (<>
+                    <dt>Grace ends</dt>
+                    <dd className={d.domain.graceDaysLeft <= 3 ? "text-danger-ink" : undefined} title="Hypertide keeps the inboxes up for replies until then; after that the domain is retired">
+                      {shortDate(graceEndsOn(d.domain.graceDaysLeft))}
+                      <span className="text-muted"> · {d.domain.graceDaysLeft ? `${d.domain.graceDaysLeft} day${d.domain.graceDaysLeft === 1 ? "" : "s"} left` : "today"}</span>
+                    </dd>
+                  </>) : null}
                   {d.domain.burnedAt ? (<><dt>Retired</dt><dd>{shortDate(d.domain.burnedAt)}</dd></>) : null}
                   <dt>Purchased</dt><dd>{shortDate(d.domain.purchasedAt)}</dd>
                   <dt>Renews</dt>

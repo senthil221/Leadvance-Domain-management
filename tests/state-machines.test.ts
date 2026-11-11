@@ -2,7 +2,7 @@ import { PGlite } from "@electric-sql/pglite";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { loadMigrations } from "../scripts/migrations";
 import { currentStep } from "../src/jobs/replacements";
-import { htOf, isDefaultNs, lifeOf, type Life } from "../src/lib/lifecycle";
+import { drainState, graceEndsOn, htOf, isDefaultNs, lifeOf, type Life } from "../src/lib/lifecycle";
 import { HT_CANCELLED, INBOX_STATUSES, NS_REQUEST_STATUSES, OPEN_QUEUE_STATUSES, SETTING_CHANGE_STATUSES } from "../src/lib/states";
 import {
   BATCH_STATUSES, DOMAIN_STATUSES, FORCED_MOVES, NEXT_STATUSES, REPLACEABLE_STATUSES, REPLACEMENT_REASONS, RETIRED_STATUSES, STEP_STATUSES,
@@ -143,13 +143,27 @@ describe("views over the lifecycle", () => {
     };
     for (const s of DOMAIN_STATUSES) {
       expect([s, tab(s)]).toEqual([s, plain[s]]);
-      expect([s, tab(s, { expired: true })]).toEqual([s, "expired"]);
+      // Draining still sends through its grace period, so it stays under Replaced once expired.
+      expect([s, tab(s, { expired: true })]).toEqual([s, s === "draining" ? "replaced" : "expired"]);
     }
     expect(tab("in_storage", { coolingUntil: new Date() })).toBe("cooling");
     expect(tab("draining", { htPayment: "Recovery pool" })).toBe("recovery");
     expect(tab("burned", { htPayment: "recovery" })).toBe("recovery");
     // Only the retired statuses move to recovery on a recovery-pool payment.
     expect(tab("active", { htPayment: "Recovery pool" })).toBe("active");
+  });
+
+  it("drainState says how long a replaced domain has left, from its status", () => {
+    const now = Date.parse("2026-11-12T15:00:00Z");
+    expect(graceEndsOn(16, now)?.toISOString().slice(0, 10)).toBe("2026-11-28");
+    expect(drainState({ status: "draining", graceDaysLeft: 16 }, now)).toMatchObject({ label: "Draining · 16d left", tone: "warning" });
+    expect(drainState({ status: "draining", graceDaysLeft: 16 }, now)?.title).toMatch(/ends 28 Nov/);
+    expect(drainState({ status: "draining", graceDaysLeft: 0 }, now)).toMatchObject({ label: "Draining · ends today", tone: "danger" });
+    expect(drainState({ status: "draining", graceDaysLeft: 16, expired: true, expiresAt: "2026-11-07" }, now)?.title).toMatch(/expired on 7 Nov/);
+    expect(drainState({ status: "draining", graceDaysLeft: null })).toMatchObject({ label: "Draining" });
+    expect(drainState({ status: "burned", inboxCount: 52 })).toMatchObject({ label: "Burned · 52 inboxes left", tone: "danger" });
+    expect(drainState({ status: "burned", inboxCount: 0 })).toMatchObject({ label: "Burned", tone: "faint" });
+    expect(drainState({ status: "active" })).toBeNull();
   });
 
   it("htOf reads both words for a cancelled Hypertide order the same way", () => {

@@ -37,7 +37,7 @@ export const FIX_KINDS = Object.keys(FIX_META) as FixKind[];
 /** What the database knows about a domain: see FIX_FACTS_SQL. */
 export type FixFact = {
   domainId: string; name: string; status: string; standing: Standing | null; current: boolean; orderLive: boolean; orderState: string | null; provider: string | null;
-  graceLeft: number | null; clientId: string | null; clientName: string | null; clientHue: number | null;
+  graceLeft: number | null; /** Days a replaced (draining) domain's grace period has left. */ drainLeft?: number | null; clientId: string | null; clientName: string | null; clientHue: number | null;
   connected: number; disconnected: number; capacity: number; lostCapacity: number;
   warmupOff: number; warmupBlocked: number; lowRep: number; rep: number | null;
   sent7: number; replies7: number; daysSent: number; daysSinceSent: number | null;
@@ -77,6 +77,19 @@ export function problemsOf(f: FixFact): FixProblem[] {
   const volume = perDay || f.capacity;
   const sendingNow = f.connected > 0 && f.sent7 > 0 && f.daysSinceSent != null && f.daysSinceSent <= 2;
 
+  // Replaced and draining, with its registration lapsed: it's meant to go, so
+  // the order isn't the point; what matters is the registrar dropping its DNS
+  // (and the replies) before the grace period ends.
+  if (f.status === "draining" && f.standing === "expired") {
+    if (f.connected > 0) {
+      const left = f.drainLeft;
+      const when = f.daysToExpiry != null && f.daysToExpiry < 0 ? `expired ${plural(-f.daysToExpiry, "day")} ago` : "expired";
+      add("grace_ending", left != null && left <= 2 ? "urgent" : "soon",
+        `Draining${left != null ? `, ${plural(left, "day")} of grace left` : ""}, but its registration ${when}${sendingNow ? `; it sent ${n(f.sent7)} in 7 days` : ""}`,
+        "Renew it to keep its replies coming until the grace ends, or make sure its replacement is in the campaigns", perDay, "Draining, registration expired");
+    }
+    return out;
+  }
   // Winding down: only whether it's still carrying mail matters.
   if (f.standing === "grace") {
     if (sendingNow && f.graceLeft != null && f.graceLeft <= 5) {
@@ -230,7 +243,7 @@ export const FIX_FACTS_SQL = `
     select distinct on (o.domain_id) o.domain_id, o.state from order_connections o
     where o.domain_id is not null and o.state in ('missing', 'deleted') order by o.domain_id, o.state
   )
-  select d.id as domain_id, d.name, d.status::text as status, st.standing, st.current, st.order_live, st.order_state, st.provider, st.grace_left,
+  select d.id as domain_id, d.name, d.status::text as status, st.standing, st.current, st.order_live, st.order_state, st.provider, st.grace_left, grace_days_left(d.status, d.draining_since) as drain_left,
     d.client_id, c.name as client_name, c.hue as client_hue,
     st.connected, st.disconnected, coalesce(ib.capacity, 0) as capacity, coalesce(ib.lost_capacity, 0) as lost_capacity,
     coalesce(ib.warmup_off, 0) as warmup_off, coalesce(ib.warmup_blocked, 0) as warmup_blocked, coalesce(ib.low_rep, 0) as low_rep, ib.rep,

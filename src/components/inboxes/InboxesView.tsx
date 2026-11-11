@@ -22,12 +22,13 @@ import { WarmingButtons } from "@/components/domains/DomainBulk";
 import { MoveToTagDialog } from "./MoveToTagDialog";
 import { PlansCard } from "./PlansCard";
 import { ageLabel, ago, int } from "@/lib/format";
+import { drainState } from "@/lib/lifecycle";
 import type { ClientRow, InboxListRow, OrderState, PlanRow } from "@/lib/queries";
 import { DOMAIN_STATUSES, canReplace, isStepFinished, type DomainStatus } from "@/lib/status";
 import { Select } from "@/components/Select";
 import { setupLabel, type SetupRow } from "@/lib/replacement-setups";
 
-// Six views of the sending setup. Active and Disconnected list inboxes under
+// Seven views of the sending setup. Active and Disconnected list inboxes under
 // their client and domain; the others list one line per domain.
 // Domains in the warm-up programme (enrolled, not yet moved to a tag) live under
 // Warming up only, and so do new domains that haven't started it yet (`fresh`).
@@ -38,9 +39,11 @@ const warmingUp = (i: InboxListRow) => i.domainWarmupStartedAt != null && i.doma
 // the day they're picked, even before any of their inboxes reach Smartlead.
 type Sets = { fresh: Set<string>; crowded: Set<string>; setup: Map<string, SetupRow> };
 type Match = (i: InboxListRow, s: Sets) => boolean;
-const TABS: readonly { key: "active" | "warming" | "attention" | "cleanup" | "disconnected" | "all"; label: string; match: Match }[] = [
+const TABS: readonly { key: "active" | "warming" | "replaced" | "attention" | "cleanup" | "disconnected" | "all"; label: string; match: Match }[] = [
   { key: "active", label: "Active", match: (i, s) => i.status === "connected" && i.domainStatus === "active" && !warmingUp(i) && !s.fresh.has(i.domainId) && !s.setup.has(i.domainId) },
   { key: "warming", label: "Warming up", match: (i, s) => (warmingUp(i) || s.fresh.has(i.domainId) || s.setup.has(i.domainId)) && i.status !== "removed" },
+  // Replaced domains still sending through their grace period, and burned ones with inboxes left on them.
+  { key: "replaced", label: "Replaced", match: (i) => (i.domainStatus === "draining" || i.domainStatus === "burned") && i.status !== "removed" },
   { key: "attention", label: "Needs attention", match: (i, s) => (i.domainStatus === "active" || i.domainStatus === "warming") && !warmingUp(i) && !s.fresh.has(i.domainId) && !s.setup.has(i.domainId) },
   { key: "cleanup", label: "Cleanup", match: (i, s) => s.crowded.has(i.domainId) && i.status !== "removed" },
   { key: "disconnected", label: "Disconnected", match: (i) => i.status === "disconnected" },
@@ -84,7 +87,7 @@ type TabKey = (typeof TABS)[number]["key"];
 type Grouping = "none" | "client" | "tags";
 const GROUPING_KEY = "inboxes:grouping";
 const tabOf = (v: string | null): TabKey => (TABS.find((t) => t.key === v)?.key ?? "active");
-const FLAT: TabKey[] = ["warming", "attention", "cleanup", "all"];
+const FLAT: TabKey[] = ["warming", "replaced", "attention", "cleanup", "all"];
 const tabMatch = (k: TabKey, sets: Sets) => (i: InboxListRow) => TABS.find((t) => t.key === k)!.match(i, sets);
 
 /** Why a domain is on the Needs attention list: everything wrong with its sending setup. */
@@ -131,6 +134,8 @@ function notLive(g: Group): { label: string; tone: "danger" | "warning"; hint: s
 
 /** The domain's status, Active only when the order is active and every inbox is connected. */
 function DomainState({ g }: { g: Group }) {
+  const drain = drainState({ status: g.status, graceDaysLeft: g.graceDaysLeft, inboxCount: g.count });
+  if (drain) return <span className={`status-dot tone-${drain.tone}`} title={drain.title}>{drain.label}</span>;
   const p = notLive(g);
   if (!p) return <StatusDot status={g.status} />;
   return <span className={`status-dot tone-${p.tone}`} title={`Active in the app, but: ${p.hint}`}>{p.label}</span>;
@@ -1225,7 +1230,7 @@ export function InboxesView({ inboxes, setups = [], clients, plans, smartleadCon
             </tbody>
           </table>
           )}
-          {groups.length === 0 ? <Empty icon={Inbox} title={tab === "attention" ? "Nothing needs attention" : tab === "warming" ? "No domains are warming up" : tab === "cleanup" ? "Nothing to clean up" : "No inboxes here"}>{tab === "attention" ? "Every active domain is connected, warmed and clean." : tab === "cleanup" ? `Every domain has at most ${inboxLimit} inboxes, all under one sender name.` : tab === "warming" ? "New domains that connect to Smartlead appear here and warm up for the days set in Settings → Warming up." : "Inboxes appear once a domain is set up on Hypertide and connected to Smartlead."}</Empty> : null}
+          {groups.length === 0 ? <Empty icon={Inbox} title={tab === "attention" ? "Nothing needs attention" : tab === "warming" ? "No domains are warming up" : tab === "replaced" ? "No replaced domains are still sending" : tab === "cleanup" ? "Nothing to clean up" : "No inboxes here"}>{tab === "attention" ? "Every active domain is connected, warmed and clean." : tab === "cleanup" ? `Every domain has at most ${inboxLimit} inboxes, all under one sender name.` : tab === "warming" ? "New domains that connect to Smartlead appear here and warm up for the days set in Settings → Warming up." : tab === "replaced" ? "A replaced domain shows here with the days its grace period has left, until its inboxes are removed." : "Inboxes appear once a domain is set up on Hypertide and connected to Smartlead."}</Empty> : null}
         </div>
         <div className="table-footer">
           <span><b>{int(groups.length)}</b> domains</span>
