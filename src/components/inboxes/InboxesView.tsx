@@ -88,6 +88,9 @@ type Grouping = "none" | "client" | "tags";
 const GROUPING_KEY = "inboxes:grouping";
 const tabOf = (v: string | null): TabKey => (TABS.find((t) => t.key === v)?.key ?? "active");
 const FLAT: TabKey[] = ["warming", "replaced", "attention", "cleanup", "all"];
+// Views that list a domain whatever its order says: a replaced domain's order
+// has often ended or its registration lapsed while its inboxes still send.
+const UNSCOPED: TabKey[] = ["replaced", "all"];
 const tabMatch = (k: TabKey, sets: Sets) => (i: InboxListRow) => TABS.find((t) => t.key === k)!.match(i, sets);
 
 /** Why a domain is on the Needs attention list: everything wrong with its sending setup. */
@@ -589,15 +592,15 @@ export function InboxesView({ inboxes, setups = [], clients, plans, smartleadCon
   const lowRepInboxes = useMemo(() => base.filter((i) => i.status === "connected" && i.warmupReputation != null && i.warmupReputation < 90).length, [base]);
   // Domains in every view but Disconnected, which counts inboxes.
   const counts = useMemo(() => {
-    const inView = (k: TabKey) => base.filter((i) => (k === "all" || i.domainInScope || (k === "warming" && onWarmingTab(i, fresh))) && tabMatch(k, fresh)(i));
+    const inView = (k: TabKey) => base.filter((i) => (UNSCOPED.includes(k) || i.domainInScope || (k === "warming" && onWarmingTab(i, fresh))) && tabMatch(k, fresh)(i));
     const domains = (k: TabKey) => new Set(inView(k).map((i) => i.domainId)).size;
-    return { active: domains("active"), warming: domains("warming") + bareSetups.length, attention: attentionCount, cleanup: domains("cleanup"), disconnected: inView("disconnected").length, all: domains("all") } as Record<TabKey, number>;
+    return { active: domains("active"), warming: domains("warming") + bareSetups.length, replaced: domains("replaced"), attention: attentionCount, cleanup: domains("cleanup"), disconnected: inView("disconnected").length, all: domains("all") } as Record<TabKey, number>;
   }, [base, attentionCount, fresh, bareSetups]);
 
   const groups = useMemo(() => {
     const match = tabMatch(tab, fresh);
     const needle = q.trim().toLowerCase();
-    const shown = base.filter((i) => match(i) && (tab === "all" || i.domainInScope || (tab === "warming" && onWarmingTab(i, fresh))) && (!needle || i.email.includes(needle) || i.domain.includes(needle) || i.senderName?.toLowerCase().includes(needle) || i.smartleadTags.some((t) => t.toLowerCase().includes(needle))));
+    const shown = base.filter((i) => match(i) && (UNSCOPED.includes(tab) || i.domainInScope || (tab === "warming" && onWarmingTab(i, fresh))) && (!needle || i.email.includes(needle) || i.domain.includes(needle) || i.senderName?.toLowerCase().includes(needle) || i.smartleadTags.some((t) => t.toLowerCase().includes(needle))));
     const grouped = group(shown).map((g) => ({ ...g, setup: fresh.setup.get(g.domainId) ?? null }));
     if (tab === "warming") grouped.push(...bareSetups.filter((s) => !needle || s.domain.includes(needle) || s.oldDomain.includes(needle)).map(setupGroup));
     return grouped.filter((g) => tab !== "attention" || reasonsOf(g).length > 0).sort((a, b) => {
