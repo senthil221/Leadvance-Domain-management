@@ -43,7 +43,12 @@ export async function syncRegistrarDomains(sql: Sql, account: RegistrarAccount) 
         registrar_api_access = excluded.registrar_api_access,
         registrar_status     = coalesce(excluded.registrar_status, domains.registrar_status),
         nameservers          = case when cardinality(domains.nameservers) = 0 then excluded.nameservers else domains.nameservers end,
-        registrar_seen_at    = now()
+        registrar_seen_at    = now(),
+        -- A new expiry date (registered at last, renewed, restored): what the
+        -- registry said before may be out of date, so it's asked again on the
+        -- next registry check rather than in up to a week.
+        registry_checked_at  = case when excluded.expires_at is distinct from domains.expires_at and excluded.expires_at is not null
+          then null else domains.registry_checked_at end
       returning (xmax = 0) as inserted`;
     const added = result.filter((r) => r.inserted).length;
     // A whole list: what this account had before and didn't list now has left

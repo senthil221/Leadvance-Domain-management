@@ -150,6 +150,24 @@ describe("domain audit in the database", () => {
     expect(await gone()).toEqual([]);
   });
 
+  it("asks the registry again on the next check once the registrar shows a new expiry date", async () => {
+    const listing = (expiries: Record<string, string | null>): RegistrarAccount => {
+      const a = account([]);
+      return { ...a, client: { ...a.client, listAll: async () => Object.entries(expiries).map(([name, e]) => ({
+        name, status: null, createdAt: null, expiresAt: e ? new Date(e) : null, autoRenew: null, apiAccess: null, nameservers: null })) } };
+    };
+    await syncRegistrarDomains(sql, listing({ "late.info": null, "same.info": "2027-11-11", "renewed.info": "2027-01-01" }));
+    await sql`update domains set registry_checked_at = now(), registry_found = (name <> 'late.info')`;
+    // Registered at last, renewed, and unchanged.
+    await syncRegistrarDomains(sql, listing({ "late.info": "2027-11-11", "same.info": "2027-11-11", "renewed.info": "2028-01-01" }));
+    const asked = Object.fromEntries((await sql`select name, registry_checked_at is not null as asked from domains`).map((r) => [r.name, r.asked]));
+    expect(asked).toEqual({ "late.info": false, "same.info": true, "renewed.info": false });
+    // A list that leaves the date out keeps both the date and the registry's answer.
+    await sql`update domains set registry_checked_at = now()`;
+    await syncRegistrarDomains(sql, listing({ "late.info": null, "same.info": "2027-11-11", "renewed.info": "2028-01-01" }));
+    expect((await sql`select count(*)::int as n from domains where registry_checked_at is null`)[0].n).toBe(0);
+  });
+
   it("archives only what nothing uses, keeps it archived through the sync, and leaves it out of the free pool", async () => {
     await syncRegistrarDomains(sql, account(["idle.com", "sending.com", "ordered.com", "setup.com"]));
     const id = async (n: string) => (await sql`select id from domains where name = ${n}`)[0].id as string;
