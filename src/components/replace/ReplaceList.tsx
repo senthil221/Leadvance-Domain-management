@@ -12,7 +12,7 @@ import { Badge, ClientCell } from "@/components/ui";
 import { DIAGNOSIS_ACTIONS, diagnosisCost, type DiagnosisAction, type StoredDiagnosis } from "@/lib/diagnose";
 import { ago, int } from "@/lib/format";
 import type { AiOpinion, ReplaceListData } from "@/lib/queries";
-import { OUTCOME_META, outcomeOf, REPLACE_RULES, replaceCsv, type GroupNote, type ReplaceCall, type ReplaceItem } from "@/lib/replace-list";
+import { OUTCOME_META, outcomeOf, REPLACE_RULES, replaceCsv, type GroupNote, type ReplaceCall, type ReplaceItem, type ReplyRate } from "@/lib/replace-list";
 
 function download(name: string, body: string) {
   const url = URL.createObjectURL(new Blob([body], { type: "text/csv;charset=utf-8" }));
@@ -50,7 +50,24 @@ const GROUPS: { key: GroupKey; title: string; tone: "danger" | "warning" | "info
   { key: "fix", title: "Fix first", tone: "info", calls: ["fix", "list"], ai: false, what: "Don't replace: fix the setup, or re-verify the lead list" },
   { key: "running", title: "Being replaced", tone: "faint", calls: [], ai: false, what: "A replacement is already running, so it can't be picked again" },
 ];
-const COLS = 6;
+const COLS = 7;
+
+/** Human and out-of-office replies against the others': the replies that show its mail is reaching people. */
+function Replies({ r }: { r: ReplyRate | null }) {
+  if (!r) return <span className="rq-faint">Too little mail</span>;
+  const good = r.human + r.ooo, peer = r.peerHuman + r.peerOoo;
+  const share = r.peerSent && peer ? good / r.sent / (peer / r.peerSent) : null;
+  const tone = r.healthy ? "is-success" : share != null && share <= REPLACE_RULES.replyRatio ? "is-danger" : "";
+  const title = `${int(r.human)} human and ${int(r.ooo)} out-of-office ${good === 1 ? "reply" : "replies"} on ${int(r.sent)} sent in ${r.days} days. `
+    + `${r.who[0].toUpperCase()}${r.who.slice(1)}: ${pct(peer, r.peerSent)} (${pct(r.peerHuman, r.peerSent)} human, ${pct(r.peerOoo, r.peerSent)} out-of-office)`
+    + (r.healthy ? ". As good as the others or better, so its mail is landing" : "");
+  return (
+    <span className="rq-replies" title={title}>
+      <span className={`rq-head ${tone}`}>{pct(good, r.sent)}<span className="rq-vs">vs {pct(peer, r.peerSent)}</span></span>
+      <span className="rq-sub">{pct(r.human, r.sent)} human · {pct(r.ooo, r.sent)} OOO{r.days === 14 ? " · 14d" : ""}</span>
+    </span>
+  );
+}
 
 function Row({ item, opinion, ai, picked, onPick }: { item: ReplaceItem; opinion: AiOpinion | undefined; ai: boolean; picked: boolean; onPick?: () => void }) {
   const [open, setOpen] = useState(false);
@@ -76,6 +93,7 @@ function Row({ item, opinion, ai, picked, onPick }: { item: ReplaceItem; opinion
             </span>
           )) : <span className="rq-sub">{item.short}</span>}
         </td>
+        <td className="rq-reply-cell"><Replies r={item.replies} /></td>
         <td className="is-num num rq-day">{int(item.perDay)}</td>
         <td className="rq-ai" title={opinion ? `${DIAGNOSIS_ACTIONS[opinion.action]}. ${opinion.headline}` : undefined}>
           {!ai ? null : verdict && opinion ? (
@@ -98,6 +116,7 @@ function Row({ item, opinion, ai, picked, onPick }: { item: ReplaceItem; opinion
             <dl>
               <dt>Numbers</dt>
               <dd>{item.signals.length ? item.signals.map((s) => <span key={s.head} className="rq-line"><b>{s.head}</b> · {s.detail}</span>) : item.reasons.join(". ")}</dd>
+              {item.replies ? <><dt>Replies</dt><dd>{int(item.replies.human)} human and {int(item.replies.ooo)} out-of-office on {int(item.replies.sent)} sent in {item.replies.days} days: {pct(item.replies.human + item.replies.ooo, item.replies.sent)}, against {pct(item.replies.peerHuman + item.replies.peerOoo, item.replies.peerSent)} for {item.replies.who}</dd></> : null}
               <dt>Next step</dt><dd>{item.canReplace ? item.next : "A replacement is already running for it"}</dd>
               {item.also.length ? <><dt>Also</dt><dd>{item.also.join(" · ")}</dd></> : null}
               {opinion ? <><dt>AI says</dt><dd><b>{DIAGNOSIS_ACTIONS[opinion.action]}.</b> {opinion.headline} <span className="rq-faint">{ago(opinion.createdAt)}</span></dd></> : null}
@@ -255,6 +274,7 @@ export function ReplaceList({ data }: { data: ReplaceListData }) {
                     <th className="col-check" />
                     <th>Domain</th>
                     <th title="What's wrong, and the number it's compared with: its Smartlead tag, the client's other domains, or the healthy tags when its whole tag is bad">What&apos;s wrong</th>
+                    <th title="Human and out-of-office replies, share of sent, against the others it's compared with. Green: as good as the others or better, so its mail is landing and its bounces alone won't replace it">Replies</th>
                     <th className="is-num" title="What it sends on a day it sends">A day</th>
                     <th title="The AI's second opinion. Hover for what it said">AI</th>
                     <th />
@@ -291,6 +311,7 @@ export function ReplaceList({ data }: { data: ReplaceListData }) {
             <li>Every live domain is compared with the other domains on its own Smartlead tag, over the last 7 days (14 for one that sends under {int(REPLACE_RULES.minSent)} a week). When the whole tag is bad, with the healthy tags instead. {int(data.healthy)} are fine and {int(data.early)} sent too little to judge.</li>
             <li><b>Replace</b>: spam, policy and block list bounces at {REPLACE_RULES.replaceRatio}× the others, or replies of any kind at half or less, or the domain is on a block list.</li>
             <li><b>Watch</b>: those bounces at {REPLACE_RULES.watchRatio}× the others. Two weeks running moves it to Replace.</li>
+            <li><b>Replies holding up</b>: a domain whose human and out-of-office replies are as good as the others&apos; (at least {int(REPLACE_RULES.minGoodReplies)} of them) is reaching people, so high bounces alone keep it on Watch instead of replacing it. A block list or few replies still replace it.</li>
             <li><b>Fix first</b>: bad numbers, but its DNS, records or inboxes are failing. Or the bounces are addresses that don&apos;t exist, which is the list, not the domain.</li>
             <li><b>Being replaced</b>: a replacement is already running. A domain whose replacement finished is draining or burned, so it never comes back here.</li>
             <li>Warm-up reputation, domain age and a few quiet days never put a domain here. The AI never makes the call: it reads the same numbers and says whether it agrees.</li>

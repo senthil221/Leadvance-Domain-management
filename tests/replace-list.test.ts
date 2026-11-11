@@ -14,7 +14,7 @@ const fact = (over: Partial<FixFact> = {}): FixFact => ({
   nameserversAnswering: true, dnsSpf: true, dnsDkim: true, dnsDmarc: true, dnsMx: true, listed: 0, daysToExpiry: 200, autoRenew: true, orderProblem: null, ...over,
 });
 const stat = (domainId: string, over: Partial<ReplaceStat> = {}): ReplaceStat => ({
-  domainId, tld: "com", tags: null, sent7: 1000, replies7: 10, sentPrev: 1000, repliesPrev: 10, sent14: 2000, replies14: 20,
+  domainId, tld: "com", tags: null, sent7: 1000, replies7: 10, sentPrev: 1000, repliesPrev: 10, sent14: 2000, replies14: 20, human7: 0, ooo7: 0, human14: 0, ooo14: 0,
   sender7: 3, senderPrev: 3, missing7: 2, missingPrev: 2, bounces7: 6, sentY: 140, repliesY: 1, bouncesY: 1, senderY: 0, sendingDays: 60, beingReplaced: false, ...over,
 });
 /** Nine steady domains of one client, and the facts and stats for one more. */
@@ -177,6 +177,40 @@ describe("catching bad domains", () => {
 });
 
 describe("not wasting a replacement", () => {
+  // The others get 0.80% human and out-of-office replies: 2 human and 6 out-of-office on 1,000 sent each.
+  const answered = { human7: 2, ooo7: 6, human14: 4, ooo14: 12 };
+
+  it("keeps a domain whose bounces are high but whose human and out-of-office replies keep up, on Watch", () => {
+    const { item } = callOf(fleet({ sender7: 12, human7: 2, ooo7: 7 }, {}, answered));
+    expect(item).toMatchObject({ call: "watch", replies: { human: 2, ooo: 7, sent: 1000, peerHuman: 18, peerOoo: 54, peerSent: 9000, days: 7, who: "the client's others", healthy: true } });
+    expect(item!.next).toContain("its mail is landing");
+    expect(item!.signals.map((s) => [s.head, s.tone])).toEqual([["4.0× more spam/block bounces", "danger"], ["Replies holding up", "success"]]);
+    expect(item!.reasons[1]).toBe("Human and out-of-office replies 0.90% of 1,000 sent in 7 days, the client's other domains got 0.80%: its mail is landing, so its bounces alone don't replace it");
+  });
+
+  it("keeps it on Watch even when the bounces ran two weeks, as long as the replies hold", () => {
+    expect(callOf(fleet({ sent7: 2000, sender7: 16, sentPrev: 2000, senderPrev: 16, human7: 4, ooo7: 14 }, {}, answered)).item).toMatchObject({ call: "watch", replies: { healthy: true } });
+  });
+
+  it("still replaces on bounces when its replies are under the others'", () => {
+    const { item } = callOf(fleet({ sender7: 12, human7: 1, ooo7: 4 }, {}, answered));
+    expect(item).toMatchObject({ call: "replace", replies: { human: 1, ooo: 4, healthy: false } });
+    expect(item!.signals.some((s) => s.tone === "success")).toBe(false);
+  });
+
+  it("needs a few replies before calling them healthy", () => {
+    expect(callOf(fleet({ sender7: 12, ooo7: 2 }, {}, { ooo7: 2 })).item).toMatchObject({ call: "replace", replies: { healthy: false } });
+  });
+
+  it("replaces a block listed domain now, however well it's answered", () => {
+    expect(callOf(fleet({ human7: 5, ooo7: 10 }, { listed: 1 }, answered)).item).toMatchObject({ call: "replace_now" });
+  });
+
+  it("puts each domain's human and out-of-office replies in the CSV", () => {
+    const r = replaceList(...((x) => [x.facts, x.stats] as const)(fleet({ sender7: 12, human7: 1, ooo7: 4 }, {}, answered)));
+    expect(replaceCsv(r.items).split("\n")[1]).toContain(",0.10%,0.40%,0.80%,");
+  });
+
   it("says fix first when its own setup is failing", () => {
     const { item } = callOf(fleet({ sender7: 12 }, { nameserversAnswering: false }));
     expect(item).toMatchObject({ call: "fix" });
@@ -303,7 +337,7 @@ describe("the list", () => {
     expect(r.items.map((i) => i.name)).toEqual(["listed.com", "big.com", "small.com", "watch.com"]);
     expect(replaceSummary(r.items)).toMatchObject({ replace_now: { count: 1 }, replace: { count: 2, perDay: 800 }, watch: { count: 1 }, fix: { count: 0 } });
     const csv = replaceCsv(r.items).split("\n");
-    expect(csv[0]).toBe("Domain,Client,Tag,Provider,Call,Why,Next step,Sent in 7 days,Sends a day,Also");
+    expect(csv[0]).toBe("Domain,Client,Tag,Provider,Call,Why,Next step,Sent in 7 days,Sends a day,Human replies,Out-of-office replies,Others' human + out-of-office,Also");
     expect(csv[1]).toContain("listed.com,Client One,,Hypertide,Replace now,On 1 block list,");
   });
 });
@@ -339,8 +373,8 @@ describe("the numbers from the database", () => {
 
   it("adds up this week and the week before, and sorts bounces by who they blame", async () => {
     const id = await add("weeks.com");
-    await pg.query(`insert into domain_daily_stats (domain_id, day, sent, replies) values
-      ($1, current_date, 100, 2), ($1, current_date - 6, 200, 1), ($1, current_date - 7, 400, 5), ($1, current_date - 13, 50, 1), ($1, current_date - 14, 999, 9), ($1, current_date - 40, 10, 0)`, [id]);
+    await pg.query(`insert into domain_daily_stats (domain_id, day, sent, replies, human_replies, ooo) values
+      ($1, current_date, 100, 2, 1, 1), ($1, current_date - 6, 200, 1, 0, 1), ($1, current_date - 7, 400, 5, 1, 1), ($1, current_date - 13, 50, 1, 0, 0), ($1, current_date - 14, 999, 9, 5, 4), ($1, current_date - 40, 10, 0, 0, 0)`, [id]);
     await pg.query(`insert into email_events (dedupe_key, kind, occurred_at, domain_id, bounce_cause) values
       ('r1', 'bounce', now(), $1, 'spam'), ('r2', 'bounce', now() - interval '2 days', $1, 'policy'), ('r3', 'bounce', now() - interval '3 days', $1, 'blocklist'),
       ('r4', 'bounce', now() - interval '1 day', $1, 'missing'), ('r5', 'bounce', now() - interval '1 day', $1, 'full'), ('r6', 'bounce', now() - interval '1 day', $1, null),
@@ -350,7 +384,7 @@ describe("the numbers from the database", () => {
       ($1, 'a@weeks.com', 'connected', '{"Main Group", "New"}'), ($1, 'b@weeks.com', 'connected', '{" side ", "main group", "Replaced", ""}'), ($1, 'c@weeks.com', 'removed', '{"gone"}')`, [id]);
     const rows = (await pg.query<Record<string, unknown>>(REPLACE_STATS_SQL)).rows.map((r) => toCamel<ReplaceStat>(r));
     expect(rows.find((r) => r.domainId === id)).toEqual({
-      domainId: id, tld: "com", tags: "main group + side", sent7: 300, replies7: 3, sentPrev: 450, repliesPrev: 6, sent14: 750, replies14: 9,
+      domainId: id, tld: "com", tags: "main group + side", sent7: 300, replies7: 3, sentPrev: 450, repliesPrev: 6, sent14: 750, replies14: 9, human7: 1, ooo7: 2, human14: 2, ooo14: 3,
       sender7: 3, senderPrev: 1, missing7: 1, missingPrev: 1, bounces7: 6, sentY: 0, repliesY: 0, bouncesY: 0, senderY: 0, sendingDays: 40, beingReplaced: false,
     });
   });

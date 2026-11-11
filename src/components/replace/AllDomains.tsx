@@ -96,7 +96,7 @@ export function AllDomains({ domains }: { domains: DomainRow[] }) {
                   <td className={`is-num num${d.senderY >= 3 ? " rs-hot" : ""}`}>{d.sentY || d.senderY ? int(d.senderY) : <span className="zero">–</span>}</td>
                   <td className="is-num num">{d.sentY || d.bouncesY ? int(d.bouncesY) : <span className="zero">–</span>}</td>
                   <td className="is-num num">{int(d.sent7)}</td>
-                  <td className="is-num num">{pct(d.replies7, d.sent7)}</td>
+                  <td className="is-num num" title={d.sent7 ? `${int(d.human7)} human (${pct(d.human7, d.sent7)}) and ${int(d.ooo7)} out-of-office (${pct(d.ooo7, d.sent7)}) of ${int(d.replies7)} replies` : undefined}>{pct(d.replies7, d.sent7)}</td>
                   <td className="is-num num">{pct(d.sender7, d.sent7)}</td>
                   <td className="is-num num">{pct(d.bounces7, d.sent7)}</td>
                 </tr>

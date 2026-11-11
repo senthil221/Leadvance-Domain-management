@@ -935,6 +935,9 @@ td.rq-domain, td.rq-signal { display: table-cell; }
 .rq-head.is-danger { color: var(--danger-ink); }
 .rq-head.is-warning { color: var(--warning-ink); }
 .rq-head.is-info { color: var(--info-ink); }
+.rq-head.is-success { color: var(--success-ink); }
+.rq-replies { display: block; cursor: default; }
+.rq-vs { font-weight: 400; color: var(--faint); font-size: 12px; }
 .rq-sig { display: block; }
 .rq-sig + .rq-sig { margin-top: 5px; }
 .rq-who { display: flex; align-items: center; gap: 8px; }

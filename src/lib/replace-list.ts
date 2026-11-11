@@ -13,7 +13,10 @@ import { problemsOf, type FixFact, type FixKind } from "./fix-queue";
 // spam, policy and block list bounces repeat on the same domain week to week,
 // and so does a clear gap in replies of any kind. Human reply rate for one
 // domain, warm-up reputation, domain age and a few quiet days did not, so none
-// of those can put a domain on this list.
+// of those can put a domain on this list. It works the other way, though: a domain
+// whose human and out-of-office replies keep up with the others is landing in
+// inboxes, so its bounces alone never replace it (35 domains retired in the
+// month before had twice their client's bounces but normal human replies).
 
 export type ReplaceCall = "replace_now" | "replace" | "watch" | "fix" | "list";
 export const CALLS: ReplaceCall[] = ["replace_now", "replace", "watch", "fix", "list"];
@@ -38,6 +41,8 @@ export const REPLACE_RULES = {
   tagKeepRatio: 1.5,
   /** Replies of any kind at or under this share of the others' rate. */
   replyRatio: 0.5,
+  /** Human and out-of-office replies a domain needs, at or above the others' rate, before its replies count as healthy. */
+  minGoodReplies: 3,
   /** Standard errors apart before a gap counts as real. */
   z: 2.6,
   /** What the others on its tag must have sent in the week to compare with them; under it the client's others are used, then all live domains. */
@@ -55,6 +60,8 @@ export type ReplaceStat = {
   /** Its inboxes' Smartlead tags, joined: the group it sends with. Null when it has none. */
   tags: string | null;
   sent7: number; replies7: number; sentPrev: number; repliesPrev: number; sent14: number; replies14: number;
+  /** Human replies and out-of-office replies, the two that show mail landed in front of a person. */
+  human7: number; ooo7: number; human14: number; ooo14: number;
   sender7: number; senderPrev: number; missing7: number; missingPrev: number; bounces7: number;
   /** Yesterday alone: sent, replies of any kind, every bounce, and the bounces that blame the sender. */
   sentY: number; repliesY: number; bouncesY: number; senderY: number;
@@ -71,11 +78,20 @@ export type ReplaceItem = {
   next: string;
   /** Smaller things worth knowing that didn't decide the call. */ also: string[];
   sent7: number; perDay: number;
+  /** Its human and out-of-office replies against the others', over the window it was judged on. Null when it sent too little to judge. */
+  replies: ReplyRate | null;
   /** Replace isn't offered while a replacement is already running. */ canReplace: boolean;
 };
 
+/** Human and out-of-office replies, the domain's and the others' it's compared with, over 7 or 14 days. */
+export type ReplyRate = {
+  human: number; ooo: number; sent: number; peerHuman: number; peerOoo: number; peerSent: number; days: 7 | 14;
+  /** Who the others are, in a few words: "its tag", "the client's others", "all domains". */ who: string;
+  /** At or above the others' rate, on enough replies to count: its mail is landing. */ healthy: boolean;
+};
+
 /** One thing against a domain: what it is in plain words, then the numbers behind it. */
-export type Signal = { head: string; detail: string; tone: "danger" | "warning" | "info" };
+export type Signal = { head: string; detail: string; tone: "danger" | "warning" | "info" | "success" };
 
 /** short and action: the note in a few words, and what to do, for one line of the page. */
 export type GroupNote = { kind: "client" | "provider" | "tag"; id: string; name: string; text: string; short: string; action: string };
@@ -87,7 +103,7 @@ export type DomainRow = {
   /** Why, in a few words: empty for a domain with nothing against it. */ short: string;
   /** Its own numbers are fine, but its whole tag is worse than everyone: what the tag shows. */ weakTag: string | null;
   sentY: number; repliesY: number; bouncesY: number; senderY: number;
-  sent7: number; replies7: number; sender7: number; bounces7: number;
+  sent7: number; replies7: number; sender7: number; bounces7: number; human7: number; ooo7: number;
 };
 
 export type ReplaceList = {
@@ -120,9 +136,9 @@ const more = (k: number, of: number, peerK: number, peerOf: number, what: string
 const fewer = (k: number, of: number, peerK: number, peerOf: number) =>
   k ? `${(Math.floor((10 * peerK * of) / (peerOf * k) + 1e-9) / 10).toFixed(1)}× fewer replies` : "No replies";
 
-type Sums = { domains: number; sent7: number; replies7: number; sentPrev: number; repliesPrev: number; sent14: number; replies14: number; sender7: number; senderPrev: number; missing7: number };
-const zero = (): Sums => ({ domains: 0, sent7: 0, replies7: 0, sentPrev: 0, repliesPrev: 0, sent14: 0, replies14: 0, sender7: 0, senderPrev: 0, missing7: 0 });
-const KEYS = ["sent7", "replies7", "sentPrev", "repliesPrev", "sent14", "replies14", "sender7", "senderPrev", "missing7"] as const;
+const KEYS = ["sent7", "replies7", "sentPrev", "repliesPrev", "sent14", "replies14", "human7", "ooo7", "human14", "ooo14", "sender7", "senderPrev", "missing7"] as const;
+type Sums = { domains: number } & Record<(typeof KEYS)[number], number>;
+const zero = (): Sums => ({ domains: 0, ...Object.fromEntries(KEYS.map((k) => [k, 0])) }) as Sums;
 const plus = (a: Sums, s: ReplaceStat) => { a.domains++; for (const k of KEYS) a[k] += s[k]; };
 const minus = (a: Sums, s: ReplaceStat): Sums => { const out = { ...a, domains: a.domains - 1 }; for (const k of KEYS) out[k] -= s[k]; return out; };
 const sub = (a: Sums, b: Sums): Sums => { const out = { ...a, domains: a.domains - b.domains }; for (const k of KEYS) out[k] -= b[k]; return out; };
@@ -222,10 +238,12 @@ export function replaceList(facts: FixFact[], stats: ReplaceStat[], passes: 1 | 
   // What a domain's own numbers say, set against the others. Run twice: the
   // second time the others leave out every domain the first pass flagged, so
   // two bad domains in one client can't make each other look normal.
-  type Perf = { perf: { call: "replace" | "watch"; reasons: string[]; short: string[]; signals: Signal[]; weekly: boolean } | null; badList: { text: string; short: string; signal: Signal } | null };
+  // landing: bounces flagged it, but its human and out-of-office replies keep up with the others'.
+  type Perf = { perf: { call: "replace" | "watch"; reasons: string[]; short: string[]; signals: Signal[]; weekly: boolean; landing: boolean } | null; badList: { text: string; short: string; signal: Signal } | null; replies: ReplyRate | null };
   const measure = (f: FixFact, s: ReplaceStat | undefined, sums: ReturnType<typeof totals>, skip: ReadonlySet<string>, clean: ReturnType<typeof totals>): Perf => {
     let perf: Perf["perf"] = null;
     let badList: Perf["badList"] = null;
+    let replies: ReplyRate | null = null;
     if (judgeable(s)) {
       const without = (g: Sums) => (skip.has(f.domainId) ? g : minus(g, s));
       // Like with like: the same tag first, then the client, then everyone.
@@ -278,8 +296,23 @@ export function replaceList(facts: FixFact[], stats: ReplaceStat[], passes: 1 | 
       if (quiet7) signals.push({ head: fewer(s.replies7, s.sent7, rPeers.replies7, rPeers.sent7), detail: `${p(s.replies7, s.sent7)} vs ${p(rPeers.replies7, rPeers.sent7)} for ${forWho(rWho)}`, tone: "danger" });
       if (quiet14) signals.push({ head: fewer(s.replies14, s.sent14, rPeers.replies14, rPeers.sent14), detail: `${p(s.replies14, s.sent14)} vs ${p(rPeers.replies14, rPeers.sent14)} for ${forWho(rWho)} · 14 days`, tone: "danger" });
 
-      if (heavy || (thisWeek && lastWeek) || quiet7 || quiet14) perf = { call: "replace", reasons, short, signals, weekly };
-      else if (thisWeek) perf = { call: "watch", reasons, short, signals, weekly };
+      // Human and out-of-office replies over the same window the bounces were judged on: the
+      // replies that show the mail reached a person. Keeping up with the others means it's landing.
+      const rOf = weekly ? rPeers.sent7 : rPeers.sent14;
+      replies = weekly
+        ? { human: s.human7, ooo: s.ooo7, sent: s.sent7, peerHuman: rPeers.human7, peerOoo: rPeers.ooo7, peerSent: rOf, days: 7, who: forWho(rWho), healthy: false }
+        : { human: s.human14, ooo: s.ooo14, sent: s.sent14, peerHuman: rPeers.human14, peerOoo: rPeers.ooo14, peerSent: rOf, days: 14, who: forWho(rWho), healthy: false };
+      const good = replies.human + replies.ooo, peerGood = replies.peerHuman + replies.peerOoo;
+      replies.healthy = !quiet7 && !quiet14 && good >= R.minGoodReplies && rOf >= R.minSent && peerGood > 0 && good / replies.sent >= peerGood / rOf;
+      const landing = thisWeek && replies.healthy;
+      if (landing) {
+        reasons.push(`Human and out-of-office replies ${p(good, replies.sent)} of ${n(replies.sent)} sent in ${replies.days} days, ${rWho} got ${p(peerGood, rOf)}: its mail is landing, so its bounces alone don't replace it`);
+        short.push(`Replies healthy ${p(good, replies.sent)} vs ${p(peerGood, rOf)}`);
+        signals.push({ head: "Replies holding up", detail: `${p(good, replies.sent)} human and out-of-office vs ${p(peerGood, rOf)} for ${forWho(rWho)}${weekly ? "" : " · 14 days"}`, tone: "success" });
+      }
+
+      if (quiet7 || quiet14 || ((heavy || (thisWeek && lastWeek)) && !landing)) perf = { call: "replace", reasons, short, signals, weekly, landing };
+      else if (thisWeek) perf = { call: "watch", reasons, short, signals, weekly, landing };
 
       if (over(s.missing7, s.sent7, peers.missing7, peers.sent7, R.watchRatio) && s.missing7 >= 0.5 * s.bounces7) {
         badList = {
@@ -289,7 +322,7 @@ export function replaceList(facts: FixFact[], stats: ReplaceStat[], passes: 1 | 
         };
       }
     }
-    return { perf, badList };
+    return { perf, badList, replies };
   };
   const none = new Set<string>();
   const clean1 = weakIds.size ? totals(weakIds) : everyone;
@@ -308,7 +341,7 @@ export function replaceList(facts: FixFact[], stats: ReplaceStat[], passes: 1 | 
     const s = statOf.get(f.domainId);
     const base = {
       domainId: f.domainId, name: f.name, tld: s?.tld ?? null, tags: s?.tags ?? null, status: f.status, clientId: f.clientId, clientName: f.clientName, clientHue: f.clientHue, provider: f.provider,
-      sent7: s?.sent7 ?? 0, perDay: f.daysSent ? Math.round(f.sent7 / f.daysSent) : 0, canReplace: !(s?.beingReplaced ?? false),
+      sent7: s?.sent7 ?? 0, perDay: f.daysSent ? Math.round(f.sent7 / f.daysSent) : 0, canReplace: !(s?.beingReplaced ?? false), replies: null as ReplyRate | null,
     };
     const put = (call: ReplaceCall, reasons: string[], shortList: string[], signals: Signal[], next: string, also: string[] = []) => {
       short = shortList.join(" · ");
@@ -318,7 +351,8 @@ export function replaceList(facts: FixFact[], stats: ReplaceStat[], passes: 1 | 
       row(call);
     };
 
-    const { perf, badList } = measure(f, s, rest, worst, clean);
+    const { perf, badList, replies } = measure(f, s, rest, worst, clean);
+    base.replies = replies;
     const k = s ? tagKey(f, s) : null;
     // A tag high on bounces had its domains judged against the healthy tags already: only few replies is left to say.
     const weakTag = (k && weakTags.get(k)?.replies) || null;
@@ -326,7 +360,7 @@ export function replaceList(facts: FixFact[], stats: ReplaceStat[], passes: 1 | 
     const row = (call: DomainRow["call"]) => domains.push({
       domainId: f.domainId, name: f.name, clientId: f.clientId, clientName: f.clientName, clientHue: f.clientHue, tags: s?.tags ?? null, call, short, weakTag,
       sentY: s?.sentY ?? 0, repliesY: s?.repliesY ?? 0, bouncesY: s?.bouncesY ?? 0, senderY: s?.senderY ?? 0,
-      sent7: s?.sent7 ?? 0, replies7: s?.replies7 ?? 0, sender7: s?.sender7 ?? 0, bounces7: s?.bounces7 ?? 0,
+      sent7: s?.sent7 ?? 0, replies7: s?.replies7 ?? 0, sender7: s?.sender7 ?? 0, bounces7: s?.bounces7 ?? 0, human7: s?.human7 ?? 0, ooo7: s?.ooo7 ?? 0,
     });
     const fortnight = s?.sent14 ?? 0;
     if (f.clientId && judgeable(s)) {
@@ -349,7 +383,9 @@ export function replaceList(facts: FixFact[], stats: ReplaceStat[], passes: 1 | 
     } else if (perf?.call === "replace") {
       put("replace", perf.reasons, perf.short, perf.signals, "Replace it this week", also);
     } else if (perf) {
-      put("watch", perf.reasons, perf.short, perf.signals, perf.weekly ? "Leave it sending. It moves to Replace if next week is the same" : "Leave it sending. It sends too little to be sure yet, and moves to Replace if the bounces keep coming", also);
+      put("watch", perf.reasons, perf.short, perf.signals,
+        perf.landing ? "Keep it sending: its replies are as good as the others', so its mail is landing. It moves to Replace if its replies drop"
+          : perf.weekly ? "Leave it sending. It moves to Replace if next week is the same" : "Leave it sending. It sends too little to be sure yet, and moves to Replace if the bounces keep coming", also);
     } else if (badList) {
       put("list", [badList.text], [badList.short], [badList.signal], "Re-verify the list it's sending to. The domain itself looks fine", minor);
     } else if (!judgeable(s)) {
@@ -416,8 +452,13 @@ export function replaceSummary(items: ReplaceItem[]) {
 /** CSV of the list, as it's filtered. */
 export function replaceCsv(items: ReplaceItem[]) {
   const esc = (v: string | number | null) => { const s = v == null ? "" : String(v); return /^[=+\-@]/.test(s) ? `'${s}` : /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s; };
-  const head = ["Domain", "Client", "Tag", "Provider", "Call", "Why", "Next step", "Sent in 7 days", "Sends a day", "Also"];
-  return [head.join(","), ...items.map((i) => [i.name, i.clientName, i.tags, i.provider, CALL_META[i.call].label, i.reasons.join("; "), i.next, i.sent7, i.perDay, i.also.join("; ")].map(esc).join(","))].join("\n");
+  const rate = (k: number, of: number) => (of ? p(k, of) : "");
+  const head = ["Domain", "Client", "Tag", "Provider", "Call", "Why", "Next step", "Sent in 7 days", "Sends a day", "Human replies", "Out-of-office replies", "Others' human + out-of-office", "Also"];
+  return [head.join(","), ...items.map((i) => {
+    const r = i.replies;
+    return [i.name, i.clientName, i.tags, i.provider, CALL_META[i.call].label, i.reasons.join("; "), i.next, i.sent7, i.perDay,
+      r ? rate(r.human, r.sent) : "", r ? rate(r.ooo, r.sent) : "", r ? rate(r.peerHuman + r.peerOoo, r.peerSent) : "", i.also.join("; ")].map(esc).join(",");
+  })].join("\n");
 }
 
 /**
@@ -436,6 +477,9 @@ export const REPLACE_STATS_SQL = `
       coalesce(sum(s.sent) filter (where s.day <= t.today - 7), 0)::int as sent_prev,
       coalesce(sum(s.replies) filter (where s.day <= t.today - 7), 0)::int as replies_prev,
       coalesce(sum(s.sent), 0)::int as sent14, coalesce(sum(s.replies), 0)::int as replies14,
+      coalesce(sum(s.human_replies) filter (where s.day > t.today - 7), 0)::int as human7,
+      coalesce(sum(s.ooo) filter (where s.day > t.today - 7), 0)::int as ooo7,
+      coalesce(sum(s.human_replies), 0)::int as human14, coalesce(sum(s.ooo), 0)::int as ooo14,
       coalesce(sum(s.sent) filter (where s.day = t.today - 1), 0)::int as sent_y,
       coalesce(sum(s.replies) filter (where s.day = t.today - 1), 0)::int as replies_y,
       coalesce(sum(s.bounces) filter (where s.day = t.today - 1), 0)::int as bounces_y
@@ -465,6 +509,7 @@ export const REPLACE_STATS_SQL = `
     ) e group by 1
   )
   select s.domain_id, d.tld, tg.tags, s.sent7, s.replies7, s.sent_prev, s.replies_prev, s.sent14, s.replies14,
+    s.human7, s.ooo7, s.human14, s.ooo14,
     coalesce(ev.sender7, 0) as sender7, coalesce(ev.sender_prev, 0) as sender_prev, coalesce(ev.missing7, 0) as missing7,
     coalesce(ev.missing_prev, 0) as missing_prev, coalesce(ev.bounces7, 0) as bounces7,
     s.sent_y, s.replies_y, s.bounces_y, coalesce(ev.sender_y, 0) as sender_y,
