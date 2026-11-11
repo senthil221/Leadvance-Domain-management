@@ -558,7 +558,13 @@ export async function getDomainDetail(id: string): Promise<DomainDetail | null> 
 // locked here: start_replacement re-checks each pick inside its transaction.
 // Domains used within the reuse window (Settings → Lifecycle) are left out;
 // never-used ones come first, then those at a known registrar.
-export type StorageCandidate = { id: string; name: string; tld: string | null; registrar: string | null; purchasedAt: Date | null; bornAt: Date | null; lastUsedOn: Date | null };
+export type StorageCandidate = {
+  id: string; name: string; tld: string | null; registrar: string | null; purchasedAt: Date | null; bornAt: Date | null; lastUsedOn: Date | null;
+  /** Free as the Free domains count has it: never used, on the registrar's own nameservers. */
+  free: boolean;
+  /** Its nameservers, when they aren't the registrar's own: still set up for an earlier use, so auto-pick passes it by. */
+  setUpElsewhere: string[] | null;
+};
 
 /**
  * Storage domains a replacement can use: only the endings in REPLACEMENT_TLDS,
@@ -569,7 +575,8 @@ export type StorageCandidate = { id: string; name: string; tld: string | null; r
 export async function listStorageCandidates(limit = 200) {
   return sql<StorageCandidate[]>`
     select d.id, d.name, d.tld, v.name as registrar, d.purchased_at,
-      coalesce(d.purchased_at, d.registered_at)::timestamptz as born_at, d.last_used_on
+      coalesce(d.purchased_at, d.registered_at)::timestamptz as born_at, d.last_used_on,
+      domain_is_free(d) as free, case when ns_is_default(d.nameservers) then null else d.nameservers end as set_up_elsewhere
     from domains d left join vendors v on v.id = d.registrar_id
     where d.status = 'in_storage' and (d.expires_at is null or d.expires_at > current_date + free_min_days()) and not domain_unregistered(d)
       and d.archived_at is null and d.registry_found is not false

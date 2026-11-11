@@ -9,25 +9,29 @@ import { loadReplaceOptions, startReplacement } from "@/app/actions";
 import { ClientCell, Skeleton } from "@/components/ui";
 import { hypertideAcceptsDomain } from "@/integrations/hypertide";
 import { ageLabel, daysSince } from "@/lib/format";
+import { dnsHost } from "@/lib/lifecycle";
 import type { StorageCandidate } from "@/lib/queries";
 import { REPLACEMENT_REASONS, type ReplacementReason } from "@/lib/status";
 import { Select } from "@/components/Select";
 
 export type ReplaceTarget = { id: string; name: string; tld: string | null; clientName: string | null; clientHue: number | null };
 
-// One storage domain per old domain: same TLD first, otherwise the first rested
-// candidate (never-used domains come first, then the oldest).
-// Domains Hypertide refuses (hyphens, over 35 characters) are never auto-picked.
-function autoAssign(targets: ReplaceTarget[], candidates: StorageCandidate[]) {
-  const free = candidates.filter((c) => hypertideAcceptsDomain(c.name));
+// One storage domain per old domain. Free domains (never used, on the
+// registrar's nameservers) first, then rested ones used before; within each,
+// the same TLD first, otherwise the oldest. A domain whose nameservers still
+// point at an earlier setup, or that Hypertide refuses (hyphens, over 35
+// characters), is never auto-picked: it can still be picked by hand.
+export function autoAssign(targets: ReplaceTarget[], candidates: StorageCandidate[]) {
+  const usable = candidates.filter((c) => hypertideAcceptsDomain(c.name) && !c.setUpElsewhere?.length);
+  const tiers = [usable.filter((c) => c.free), usable.filter((c) => !c.free)];
   const out: Record<string, string> = {};
   for (const t of targets) {
-    let i = free.findIndex((c) => c.tld === t.tld);
+    const tier = tiers.find((x) => x.length);
+    if (!tier) break;
+    let i = tier.findIndex((c) => c.tld === t.tld);
     if (i < 0) i = 0;
-    if (free[i]) {
-      out[t.id] = free[i].id;
-      free.splice(i, 1);
-    }
+    out[t.id] = tier[i].id;
+    tier.splice(i, 1);
   }
   return out;
 }
@@ -79,7 +83,7 @@ function FreeDomains({ candidates, assign, targets, hypertide, onPick }: {
     <div className="card rp-free">
       <div className="card-head">
         <span className="card-title">Free domains</span>
-        <span className="card-sub">{candidates ? `${candidates.length} rested · ${holder.size} picked` : "Loading…"}</span>
+        <span className="card-sub">{candidates ? `${candidates.filter((c) => c.free).length} free · ${candidates.length} in storage · ${holder.size} picked` : "Loading…"}</span>
       </div>
       <div className="rp-free-tools">
         <label className="search-input">
@@ -106,6 +110,8 @@ function FreeDomains({ candidates, assign, targets, hypertide, onPick }: {
                   <span className="list-title">{c.name}</span>
                   <span className="list-meta">{by ? <>for {by}</> : <>{c.bornAt ? `${ageLabel(daysSince(c.bornAt))} old · ` : null}{c.registrar ?? "no registrar account"} · {lastUsed(c.lastUsedOn)}</>}</span>
                 </span>
+                {c.setUpElsewhere?.length ? <span className="badge tone-warning" title={`Its nameservers still point at ${dnsHost(c.setUpElsewhere) ?? c.setUpElsewhere.join(", ")} (${c.setUpElsewhere.join(", ")}), left from an earlier setup. Auto-pick passes it by; check it isn't still in use before picking it.`}>Set up elsewhere</span>
+                  : !c.free && c.lastUsedOn ? <span className="badge" title="Used before and rested: auto-pick takes never-used domains first">Used before</span> : null}
                 {hypertide && !hypertideAcceptsDomain(c.name) ? <span className="badge tone-warning" title="Hypertide takes no hyphens and 35 characters at most">Hypertide won&apos;t accept</span> : null}
               </button>
             );
@@ -292,7 +298,7 @@ export function ReplaceDialog({
                   <span className="card-sub">{candidates ? `${going.filter((t) => assign[t.id]).length} of ${going.length} picked${skipped.size ? ` · ${skipped.size} skipped` : ""}` : "Checking storage…"}</span>
                   {candidates ? (
                     <span className="rp-head-btns">
-                      <button type="button" className="btn btn-sm" onClick={autoPick} title="Fill the empty ones: same TLD first, then the longest rested">Auto-pick</button>
+                      <button type="button" className="btn btn-sm" onClick={autoPick} title="Fill the empty ones: free domains first (same TLD first), then ones used before; never one still set up elsewhere">Auto-pick</button>
                       <button type="button" className="btn btn-sm" onClick={() => { setAssign({}); setActive(going[0]?.id ?? null); }} disabled={!used.size}>Clear</button>
                     </span>
                   ) : null}

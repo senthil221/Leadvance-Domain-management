@@ -80,3 +80,29 @@ describe("free domains offered in the replace window", () => {
     expect(list.find((c) => c.name === "unknown.com")?.bornAt).toBeNull();
   });
 });
+
+describe("auto-pick in the replace window", () => {
+  it("takes free domains, same ending first, and never one still set up elsewhere", async () => {
+    const { autoAssign } = await import("../src/components/domains/ReplaceDialog");
+    await stored("leftover.com", 300);
+    await sql`update domains set nameservers = '{ns1.cloudflare.com,ns2.cloudflare.com}' where name = 'leftover.com'`;
+    await stored("rested.com", 250);
+    await sql`update domains set last_used_on = current_date - 200 where name = 'rested.com'`;
+    await stored("fresh.info", 200);
+    await stored("fresh.com", 100);
+    await stored("fresh2.info", 90);
+    const list = await listStorageCandidates();
+    const by = Object.fromEntries(list.map((c) => [c.name, c]));
+    expect(by["leftover.com"]).toMatchObject({ free: false, setUpElsewhere: ["ns1.cloudflare.com", "ns2.cloudflare.com"] });
+    expect(by["rested.com"]).toMatchObject({ free: false, setUpElsewhere: null });
+    expect(by["fresh.info"]).toMatchObject({ free: true, setUpElsewhere: null });
+
+    const t = (id: string, tld: string) => ({ id, name: `${id}.${tld}`, tld, clientName: null, clientHue: null });
+    const names = (a: Record<string, string>) => Object.fromEntries(Object.entries(a).map(([k, v]) => [k, list.find((c) => c.id === v)!.name]));
+    // A .com gets the free .com, the next .com a free .info (not the rested .com), and the used one comes last.
+    expect(names(autoAssign([t("a", "com"), t("b", "com"), t("c", "com"), t("d", "com")], list)))
+      .toEqual({ a: "fresh.com", b: "fresh.info", c: "fresh2.info", d: "rested.com" });
+    // Nothing left but the leftover: it isn't picked.
+    expect(names(autoAssign([t("a", "com"), t("b", "com"), t("c", "com"), t("d", "com"), t("e", "com")], list)).e).toBeUndefined();
+  });
+});
