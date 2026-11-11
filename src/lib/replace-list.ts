@@ -43,6 +43,8 @@ export const REPLACE_RULES = {
   replyRatio: 0.5,
   /** Human and out-of-office replies a domain needs, at or above the others' rate, before its replies count as healthy. */
   minGoodReplies: 3,
+  /** Spam, policy and block list bounces this many times the others' replace a domain even when its replies hold up. */
+  severeRatio: 10,
   /** Standard errors apart before a gap counts as real. */
   z: 2.6,
   /** What the others on its tag must have sent in the week to compare with them; under it the client's others are used, then all live domains. */
@@ -304,11 +306,19 @@ export function replaceList(facts: FixFact[], stats: ReplaceStat[], passes: 1 | 
         : { human: s.human14, ooo: s.ooo14, sent: s.sent14, peerHuman: rPeers.human14, peerOoo: rPeers.ooo14, peerSent: rOf, days: 14, who: forWho(rWho), healthy: false };
       const good = replies.human + replies.ooo, peerGood = replies.peerHuman + replies.peerOoo;
       replies.healthy = !quiet7 && !quiet14 && good >= R.minGoodReplies && rOf >= R.minSent && peerGood > 0 && good / replies.sent >= peerGood / rOf;
-      const landing = thisWeek && replies.healthy;
+      // So many spam and block list bounces that receiving servers are already marking it down:
+      // replies that hold up now won't for long, so they don't keep it.
+      const severe = heavy && over(k, of, peerK, peerOf, R.severeRatio);
+      const landing = thisWeek && replies.healthy && !severe;
+      const detail = `${p(good, replies.sent)} human and out-of-office vs ${p(peerGood, rOf)} for ${forWho(rWho)}${weekly ? "" : " · 14 days"}`;
       if (landing) {
         reasons.push(`Human and out-of-office replies ${p(good, replies.sent)} of ${n(replies.sent)} sent in ${replies.days} days, ${rWho} got ${p(peerGood, rOf)}: its mail is landing, so its bounces alone don't replace it`);
         short.push(`Replies healthy ${p(good, replies.sent)} vs ${p(peerGood, rOf)}`);
-        signals.push({ head: "Replies holding up", detail: `${p(good, replies.sent)} human and out-of-office vs ${p(peerGood, rOf)} for ${forWho(rWho)}${weekly ? "" : " · 14 days"}`, tone: "success" });
+        signals.push({ head: "Replies holding up", detail, tone: "success" });
+      } else if (severe && replies.healthy) {
+        reasons.push(`Its human and out-of-office replies still hold up (${p(good, replies.sent)} against ${p(peerGood, rOf)}), but bounces at ${R.severeRatio}× the others or more get a domain marked down whatever its replies`);
+        short.push(`Replies healthy, bounces too high to keep`);
+        signals.push({ head: `Replies holding up, bounces over ${R.severeRatio}×`, detail, tone: "info" });
       }
 
       if (quiet7 || quiet14 || ((heavy || (thisWeek && lastWeek)) && !landing)) perf = { call: "replace", reasons, short, signals, weekly, landing };

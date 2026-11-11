@@ -192,6 +192,15 @@ describe("not wasting a replacement", () => {
     expect(callOf(fleet({ sent7: 2000, sender7: 16, sentPrev: 2000, senderPrev: 16, human7: 4, ooo7: 14 }, {}, answered)).item).toMatchObject({ call: "watch", replies: { healthy: true } });
   });
 
+  it("replaces at ten times the others' bounces, however well it's answered", () => {
+    const { item } = callOf(fleet({ sender7: 40, human7: 3, ooo7: 9 }, {}, answered));
+    expect(item).toMatchObject({ call: "replace", replies: { healthy: true } });
+    expect(item!.signals.map((s) => [s.head, s.tone])).toEqual([["13.3× more spam/block bounces", "danger"], ["Replies holding up, bounces over 10×", "info"]]);
+    expect(item!.reasons[1]).toContain("whatever its replies");
+    // Just under: kept.
+    expect(callOf(fleet({ sender7: 26, human7: 3, ooo7: 9 }, {}, answered)).item).toMatchObject({ call: "watch" });
+  });
+
   it("still replaces on bounces when its replies are under the others'", () => {
     const { item } = callOf(fleet({ sender7: 12, human7: 1, ooo7: 4 }, {}, answered));
     expect(item).toMatchObject({ call: "replace", replies: { human: 1, ooo: 4, healthy: false } });
