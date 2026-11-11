@@ -456,6 +456,35 @@ export async function swapNewDomain(sql: postgres.Sql, id: string, actor: string
   });
 }
 
+/**
+ * Calls off a replacement that won't go ahead. Only before the new domain has
+ * inboxes or a Hypertide order of its own: the new domain goes back to storage
+ * as it was, the pair leaves the list (the audit log keeps it), and a batch
+ * left with no pairs counts as cancelled. The old domain was never changed by
+ * the replacement, so it stays as it is. A swap request Hypertide still holds
+ * is only cancelled in Hypertide's dashboard; openRequest says there is one.
+ */
+export async function cancelReplacement(sql: postgres.Sql, id: string, actor: string) {
+  return sql.begin(async (tx) => {
+    const [row] = await tx`select batch_id as batch from replacement_items where id = ${id} for update`;
+    const item = row ? await loadItem(tx, id) : undefined;
+    if (!item) throw new Error("Replacement not found");
+    if (item.completed) throw new Error(`${item.newname} has already replaced ${item.oldname}, so it can't be cancelled`);
+    const [{ inboxes }] = await tx`select count(*)::int as inboxes from inboxes where domain_id = ${item.newid} and status <> 'removed'`;
+    if (inboxes || item.newstatus !== "provisioning" || finished(item.inboxes)) {
+      throw new Error(`${item.newname} already has inboxes, so it can't be cancelled: finish the replacement instead`);
+    }
+    if (item.htorder) throw new Error(`${item.newname} has a Hypertide order of its own, so it can't be cancelled here: cancel the order in Hypertide first`);
+    const openRequest = Boolean(item.htop) && item.htopstatus !== "completed";
+    await tx`select transition_domain(${item.newid}, 'in_storage', ${`replacement of ${item.oldname} cancelled`}, ${actor})`;
+    await tx`update domains set client_id = null, tags = array(select t from unnest(tags) t where lower(t) <> 'new' order by 1) where id = ${item.newid}`;
+    await tx`delete from replacement_items where id = ${id}`;
+    await tx`update replacement_batches set status = 'cancelled', completed_at = now()
+      where id = ${row.batch} and status = 'running' and not exists (select 1 from replacement_items where batch_id = ${row.batch})`;
+    return { from: item.oldname, to: item.newname, openRequest, request: openRequest ? item.htop : null };
+  });
+}
+
 export async function actOnStep(sql: Sql, ctx: StepContext, id: string, step: StepName, action: "done" | "retry" | "skip", actor: string) {
   const item = await loadItem(sql, id);
   if (!item) throw new Error("Replacement not found");

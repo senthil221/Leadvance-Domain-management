@@ -6,7 +6,7 @@ import type { Porkbun } from "../src/integrations/porkbun";
 import type { Hypertide } from "../src/integrations/hypertide";
 import type { Smartlead } from "../src/integrations/smartlead";
 import type { SmartleadApp } from "../src/integrations/smartlead-app";
-import { actOnStep, addReplacementToCampaigns, advanceItem, advanceReplacements, approveHypertidePayment, swapNewDomain, syncSmartleadTags, trackHypertideOrders } from "../src/jobs/replacements";
+import { actOnStep, addReplacementToCampaigns, advanceItem, advanceReplacements, approveHypertidePayment, cancelReplacement, swapNewDomain, syncSmartleadTags, trackHypertideOrders } from "../src/jobs/replacements";
 import { loadMigrations } from "../scripts/migrations";
 
 // The step runner uses the same Postgres client as production, so it runs
@@ -485,5 +485,48 @@ describe("ready for campaigns", () => {
   it("is no longer listed once the inboxes are in campaigns", async () => {
     await sql`update replacement_items set step_campaigns = 'done' where id = ${itemId}`;
     expect((await ready()).ready).toBe(false);
+  });
+});
+
+
+describe("cancelling a replacement", () => {
+  it("puts the new domain back in storage, leaves the old one as it was, and closes the batch", async () => {
+    const [batch] = await sql`select batch_id from replacement_items where id = ${itemId}`;
+    await sql`update domains set tags = array['New', 'Qualifi'] where id = ${newId}`;
+    await sql`update replacement_items set ht_operation_id = 'op_3', ht_operation = 'queued', step_nameservers = 'failed' where id = ${itemId}`;
+    expect(await cancelReplacement(sql, itemId, "me")).toEqual({ from: "oldsend.com", to: "freshsend.com", openRequest: true, request: "op_3" });
+
+    expect(await status(newId)).toBe("in_storage");
+    expect(await status(oldId)).toBe("active");
+    const [d] = await sql`select client_id, tags from domains where id = ${newId}`;
+    expect(d).toEqual({ client_id: null, tags: ["Qualifi"] });
+    expect(await sql`select 1 from replacement_items where id = ${itemId}`).toHaveLength(0);
+    expect((await sql`select status from replacement_batches where id = ${batch.batch_id}`)[0].status).toBe("cancelled");
+    expect((await sql`select domain_being_replaced(${oldId}) as b`)[0].b).toBe(false);
+    const [why] = await sql`select reason from domain_status_history where domain_id = ${newId} and to_status = 'in_storage' order by id desc limit 1`;
+    expect(why.reason).toBe("replacement of oldsend.com cancelled");
+    // The old domain can be replaced again, with the same new domain.
+    await sql`select start_replacement(array[${oldId}]::uuid[], array[${newId}]::uuid[], 'high_bounce', null, 'me')`;
+    expect(await status(newId)).toBe("provisioning");
+  });
+
+  it("keeps a batch's other pairs running", async () => {
+    const [b] = await sql`select batch_id from replacement_items where id = ${itemId}`;
+    const [o2] = await sql`insert into domains (name, status) values ('old2.com', 'active') returning id`;
+    const [n2] = await sql`insert into domains (name) values ('new2.com') returning id`;
+    await sql`insert into replacement_items (batch_id, old_domain_id, new_domain_id) values (${b.batch_id}, ${o2.id}, ${n2.id})`;
+    await cancelReplacement(sql, itemId, "me");
+    expect((await sql`select status from replacement_batches where id = ${b.batch_id}`)[0].status).toBe("running");
+  });
+
+  it("won't cancel once the new domain has inboxes, its own Hypertide order, or the replacement finished", async () => {
+    await sql`insert into inboxes (domain_id, email, status) values (${newId}, 'a@freshsend.com', 'connected')`;
+    await expect(cancelReplacement(sql, itemId, "me")).rejects.toThrow(/already has inboxes/);
+    await sql`delete from inboxes where domain_id = ${newId}`;
+    await sql`update replacement_items set hypertide_order_id = 'ord_1' where id = ${itemId}`;
+    await expect(cancelReplacement(sql, itemId, "me")).rejects.toThrow(/Hypertide order of its own/);
+    await sql`update replacement_items set hypertide_order_id = null, completed_at = now() where id = ${itemId}`;
+    await expect(cancelReplacement(sql, itemId, "me")).rejects.toThrow(/already replaced/);
+    expect(await status(newId)).toBe("provisioning");
   });
 });

@@ -1,9 +1,38 @@
 "use client";
 
-import { Check, RotateCw, Shuffle } from "lucide-react";
-import { useTransition } from "react";
+import { Check, RotateCw, Shuffle, X } from "lucide-react";
+import { useEffect, useState, useTransition } from "react";
 import { toast } from "sonner";
-import { actOnReplacementStep, swapReplacementDomain } from "@/app/actions";
+import { actOnReplacementStep, cancelReplacementItem, swapReplacementDomain } from "@/app/actions";
+
+// Calls off a replacement that won't go ahead. A second click within a few
+// seconds confirms, so one stray click can't cancel it.
+export function CancelReplacement({ itemId, newDomain, oldDomain, compact = false }: { itemId: string; newDomain: string; oldDomain: string; compact?: boolean }) {
+  const [pending, start] = useTransition();
+  const [armed, setArmed] = useState(false);
+  useEffect(() => {
+    if (!armed) return;
+    const t = setTimeout(() => setArmed(false), 4000);
+    return () => clearTimeout(t);
+  }, [armed]);
+  const cancel = () =>
+    start(async () => {
+      setArmed(false);
+      const r = await cancelReplacementItem(itemId);
+      if (!r.ok) return void toast.error(r.error);
+      toast.success(`Replacement of ${r.data.from} cancelled`, {
+        description: `${r.data.to} is back in storage; ${r.data.from} stays as it is.`
+          + (r.data.openRequest ? ` Hypertide still holds the swap request: cancel it in Hypertide's dashboard.` : ""),
+      });
+    });
+  return (
+    <button type="button" className={`btn btn-sm ${armed ? "btn-danger" : ""}`} disabled={pending}
+      onClick={() => (armed ? cancel() : setArmed(true))}
+      title={`Call off this replacement: ${newDomain} goes back to storage and ${oldDomain} stays as it is`}>
+      <X size={12} /> {armed ? "Sure? Cancel" : compact ? "Cancel" : "Cancel replacement"}
+    </button>
+  );
+}
 import type { StepStatus } from "@/lib/status";
 
 const LABEL = { nameservers: "Nameservers", inboxes: "Inboxes", smartlead: "Smartlead", campaigns: "Campaigns" } as const;

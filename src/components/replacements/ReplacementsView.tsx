@@ -7,7 +7,7 @@ import { Fragment, useMemo, useState } from "react";
 import { ArrowLeftRight, ChevronRight, CircleAlert, Search, TriangleAlert } from "lucide-react";
 import { AddToCampaigns } from "@/components/replacements/AddToCampaigns";
 import { ApprovePayment } from "@/components/replacements/ApprovePayment";
-import { StepActions } from "@/components/replacements/StepActions";
+import { CancelReplacement, StepActions } from "@/components/replacements/StepActions";
 import { PasteNameservers } from "@/components/domains/PasteNameservers";
 import { ClientCell, Empty } from "@/components/ui";
 import type { ReplacementRow } from "@/lib/queries";
@@ -206,6 +206,7 @@ function Row({ r, now, graceDays, smartleadLive, isOpen, onToggle }: {
         <td className="rpl-actions" onClick={(e) => e.stopPropagation()}>
           {state === "attention" && step && stepStatus ? <StepActions itemId={r.id} step={step} status={stepStatus} compact canSwap={r.htOperation ? step === "nameservers" && r.htOperation !== "completed" : step === "nameservers" || step === "inboxes"} openRequest={Boolean(r.htOperation)} /> : null}
           {canAdd ? <AddToCampaigns itemId={r.id} domain={r.newDomain} campaigns={r.oldCampaigns} inboxes={r.newInboxes} warmupOn={r.newWarmupOn} reputation={r.newReputation} ready={r.ready} warmDays={r.warmDays} /> : null}
+          {!r.completedAt && !r.newInboxes ? <CancelReplacement itemId={r.id} newDomain={r.newDomain} oldDomain={r.oldDomain} compact /> : null}
         </td>
       </tr>
       {isOpen ? (

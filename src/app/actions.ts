@@ -668,6 +668,21 @@ export async function swapReplacementDomain(itemId: string): Promise<ActionResul
   }
 }
 
+/** Calls off a replacement that won't go ahead: the new domain goes back to storage, the old one stays as it is. */
+export async function cancelReplacementItem(itemId: string): Promise<ActionResult<{ from: string; to: string; openRequest: boolean }>> {
+  try {
+    const actor = await requireActor();
+    const id = z.uuid().parse(itemId);
+    const { cancelReplacement } = await import("@/jobs/replacements");
+    const r = await cancelReplacement(jobSql, id, actor);
+    refresh();
+    return { ok: true, data: { from: r.from, to: r.to, openRequest: r.openRequest } };
+  } catch (e) {
+    if (e instanceof Error && /can't be cancelled|not found/.test(e.message)) return { ok: false, error: e.message };
+    return fail(e);
+  }
+}
+
 /** Once a replacement's new inboxes have warmed up: add them to the old domain's campaigns. */
 export async function addReplacementToCampaigns(itemId: string): Promise<ActionResult<{ inboxes: number; campaigns: number }>> {
   try {
