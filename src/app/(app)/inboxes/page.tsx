@@ -5,7 +5,8 @@ import { PageHead, TableSkeleton } from "@/components/ui";
 import { getCurrentUser } from "@/lib/auth";
 import { jwtProblem } from "@/integrations/smartlead-app";
 import { sql } from "@/lib/db";
-import { listClients, listInboxes, listSendingPlans } from "@/lib/queries";
+import { packRows } from "@/lib/pack";
+import { INBOX_DOMAIN_KEYS, listClients, listInboxes, listSendingPlans } from "@/lib/queries";
 import { listReplacementSetups } from "@/lib/replacement-setups-db";
 import { parseWarmupProgram } from "@/lib/warmup-program";
 
@@ -33,7 +34,7 @@ async function InboxesData() {
     sql<{ v: string | null }[]>`select value #>> '{}' as v from settings where key = 'inbox_limit'`,
   ]);
   return (
-    <InboxesView inboxes={inboxes} setups={setups} clients={clients} plans={plans} timezone={tz?.tz || "UTC"} newMaxAgeDays={parseWarmupProgram(warm ? JSON.parse(warm.v) : null).maxAgeDays}
+    <InboxesView packed={packRows(inboxes, "domainId", INBOX_DOMAIN_KEYS)} setups={setups} clients={clients} plans={plans} timezone={tz?.tz || "UTC"} newMaxAgeDays={parseWarmupProgram(warm ? JSON.parse(warm.v) : null).maxAgeDays}
       inboxLimit={Number(limit?.v) || 60}
       smartleadConnected={Boolean(process.env.SMARTLEAD_API_KEY)} dryRun={process.env.INTEGRATIONS_DRY_RUN !== "false"}
       appProblem={process.env.SMARTLEAD_JWT ? jwtProblem(process.env.SMARTLEAD_JWT.trim().replace(/^bearer\s+/i, "")) : "Reconnecting needs a Smartlead token: save SMARTLEAD_JWT on the server."} />

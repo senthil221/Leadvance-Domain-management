@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { sql } from "./db";
-import { answerWithoutAi, buildFacts, checkDiagnosis, DEFAULT_DIAGNOSIS_MODEL, DIAGNOSIS_SYSTEM, DiagnosisSchema, type DiagnosisFacts, type DiagnosisRaw, type StoredDiagnosis } from "./diagnose";
+import { answerWithoutAi, buildFacts, checkDiagnosis, DEFAULT_DIAGNOSIS_MODEL, DIAGNOSIS_SYSTEM, DiagnosisSchema, type DiagnosisFacts, type DiagnosisRaw } from "./diagnose";
+import type { StoredDiagnosis } from "./diagnose-meta";
 import { getDiagnosisInput } from "./queries";
 
 /** A refusal worded for people, shown as is. */

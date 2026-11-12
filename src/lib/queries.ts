@@ -2,7 +2,8 @@ import { parseSavedPairs } from "@/lib/tag-map";
 import { parseWarmupProgram } from "@/lib/warmup-program";
 import "server-only";
 import { attentionDomainCount } from "./attention";
-import type { DiagnosisAction, DiagnosisInput, DiagnosisVerdict, CauseRow, PeerRow, StoredDiagnosis, WeekRow } from "./diagnose";
+import type { DiagnosisInput, CauseRow, PeerRow, WeekRow } from "./diagnose";
+import type { DiagnosisAction, DiagnosisVerdict, StoredDiagnosis } from "./diagnose-meta";
 import { FIX_FACTS_SQL, fixQueue, type FixFact, type FixItem, type FixSnooze } from "./fix-queue";
 import { CALL_META, REPLACE_OUTCOMES_SQL, REPLACE_STATS_SQL, replaceList, type OutcomeRow, type ReplaceList, type ReplaceStat } from "./replace-list";
 import { addDays, monday, previousRange } from "./range";
@@ -859,6 +860,15 @@ export type InboxListRow = InboxRow & {
   domainInScope: boolean;
 };
 
+/** The fields every inbox repeats from its domain (or the domain's client): sent once per domain (lib/pack). */
+export const INBOX_DOMAIN_KEYS = [
+  "domain", "domainStatus", "clientName", "clientHue", "domainBeingReplaced", "domainTags", "domainGraceDaysLeft", "domainTld",
+  "domainWarmupStartedAt", "domainWarmupDays", "domainWarmupDoneAt", "domainAlerts", "domainBornAt",
+  "dnsSpf", "dnsDkim", "dnsDmarc", "dnsMx", "dnsCheckedAt", "nsAnswering", "blDomain", "blIp", "blListings", "blCheckedAt",
+  "domainOrder", "domainOrderStatus", "domainProvider", "domainOrderGraceLeft", "domainInboxes", "domainDisconnected", "domainInScope",
+] as const satisfies readonly (keyof InboxListRow)[];
+export type PackedInboxes = import("./pack").Packed<InboxListRow, "domainId", (typeof INBOX_DOMAIN_KEYS)[number]>;
+
 /**
  * A domain's order at Hypertide or Icemail, as domain_standing.order_state
  * says: active (Done at Hypertide, active at Icemail), not done yet, cancelled
@@ -875,7 +885,7 @@ export async function listInboxes() {
         count(*) filter (where kind = 'reply')::int as replies7,
         count(*) filter (where kind = 'reply' and reply_class::text in ('human', 'referral'))::int as human7,
         count(*) filter (where kind = 'bounce')::int as bounces7
-      from email_events where occurred_at > now() - interval '7 days' and inbox_id is not null
+      from email_events where kind in ('sent', 'reply', 'bounce') and occurred_at > now() - interval '7 days' and inbox_id is not null
       group by inbox_id
     ), camp as (
       -- Every campaign the inbox is in, and which of them are running or paused.
@@ -1127,6 +1137,7 @@ export async function getEvents(kind: "reply" | "bounce", from: string, to: stri
       left join domain_standing st on st.domain_id = e.domain_id
       where e.kind = ${kind}::event_kind
         and (e.occurred_at at time zone tz.z)::date between ${from}::date and ${to}::date
+          and e.occurred_at >= ${from}::date::timestamp at time zone tz.z and e.occurred_at < (${to}::date + 1)::timestamp at time zone tz.z
       order by e.occurred_at desc
       limit 5000`,
     sql<{ domainId: string; sent: number; current: boolean }[]>`
@@ -1166,6 +1177,7 @@ export async function getReview(from: string, to: string): Promise<import("./rev
           from email_events cross join tz
           where kind = 'bounce' and domain_id is not null
             and (occurred_at at time zone tz.z)::date between ${pf}::date and ${to}::date
+            and occurred_at >= ${pf}::date::timestamp at time zone tz.z and occurred_at < (${to}::date + 1)::timestamp at time zone tz.z
             and ((occurred_at at time zone tz.z)::date <= ${pt}::date or (occurred_at at time zone tz.z)::date >= ${from}::date)
           group by 1, 2, 3) e
         group by 1),
@@ -1246,6 +1258,7 @@ export async function getReview(from: string, to: string): Promise<import("./rev
       left join domains d on d.id = e.domain_id left join clients c on c.id = coalesce(d.client_id, e.client_id)
       where e.kind = 'bounce' and e.campaign_id is not null
         and (e.occurred_at at time zone tz.z)::date between ${from}::date and ${to}::date
+          and e.occurred_at >= ${from}::date::timestamp at time zone tz.z and e.occurred_at < (${to}::date + 1)::timestamp at time zone tz.z
       group by e.campaign_id`,
   ]);
   const { idleDays } = await import("./review");
@@ -1270,6 +1283,7 @@ export async function getCompareDaily(from: string, to: string): Promise<Compare
       from email_events e cross join tz
       where e.kind = 'bounce' and e.bounce_cause in ('spam', 'blocklist') and e.domain_id is not null
         and (e.occurred_at at time zone tz.z)::date between ${from}::date and ${to}::date
+          and e.occurred_at >= ${from}::date::timestamp at time zone tz.z and e.occurred_at < (${to}::date + 1)::timestamp at time zone tz.z
       group by 1, 2)
     select s.domain_id, to_char(s.day, 'YYYY-MM-DD') as day, s.sent, s.replies, s.human_replies as human, s.ooo, s.auto_replies as auto, s.bounces, coalesce(b.n, 0) as blocked, s.warmup_reputation as rep
     from domain_daily_stats s left join blocked b on b.domain_id = s.domain_id and b.day = s.day
@@ -1382,6 +1396,7 @@ export async function getBounceDetail(domainId: string, from: string, to: string
     from email_events e cross join tz
     where e.kind = 'bounce' and e.domain_id = ${domainId}
       and (e.occurred_at at time zone tz.z)::date between ${from}::date and ${to}::date
+      and e.occurred_at >= ${from}::date::timestamp at time zone tz.z and e.occurred_at < (${to}::date + 1)::timestamp at time zone tz.z
     order by e.occurred_at desc
     limit 2000`;
   const { summarizeBounces } = await import("./bounce-detail");

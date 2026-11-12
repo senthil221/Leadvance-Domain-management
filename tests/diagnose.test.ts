@@ -1,7 +1,8 @@
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
-import { answerWithoutAi, buildFacts, checkDiagnosis, DEFAULT_DIAGNOSIS_MODEL, DIAGNOSIS_SYSTEM, diagnosisCost, factLabel, modelName, gapBetween, resolveFacts, sent28, type DiagnosisInput, type DiagnosisRaw } from "../src/lib/diagnose";
+import { answerWithoutAi, buildFacts, checkDiagnosis, DEFAULT_DIAGNOSIS_MODEL, DIAGNOSIS_SYSTEM, factLabel, gapBetween, resolveFacts, sent28, type DiagnosisInput, type DiagnosisRaw } from "../src/lib/diagnose";
+import { diagnosisCost, modelName } from "../src/lib/diagnose-meta";
 import type { FixFact } from "../src/lib/fix-queue";
 
 vi.mock("../src/lib/db", () => ({ sql: Object.assign(() => ({}), { json: (v: unknown) => v }) }));

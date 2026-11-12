@@ -23,7 +23,8 @@ import { MoveToTagDialog } from "./MoveToTagDialog";
 import { PlansCard } from "./PlansCard";
 import { ago, inboxAge, int } from "@/lib/format";
 import { drainState, orderGrace } from "@/lib/lifecycle";
-import type { ClientRow, InboxListRow, OrderState, PlanRow } from "@/lib/queries";
+import { unpackRows } from "@/lib/pack";
+import type { ClientRow, InboxListRow, OrderState, PackedInboxes, PlanRow } from "@/lib/queries";
 import { DOMAIN_STATUSES, canReplace, isStepFinished, type DomainStatus } from "@/lib/status";
 import { Select } from "@/components/Select";
 import { setupLabel, type SetupRow } from "@/lib/replacement-setups";
@@ -520,8 +521,9 @@ function ChangeBadge({ change }: { change: InboxListRow["change"] }) {
   return null;
 }
 
-export function InboxesView({ inboxes, setups = [], clients, plans, smartleadConnected, dryRun, timezone, appProblem, newMaxAgeDays, inboxLimit }: {
-  inboxes: InboxListRow[];
+export function InboxesView({ packed, setups = [], clients, plans, smartleadConnected, dryRun, timezone, appProblem, newMaxAgeDays, inboxLimit }: {
+  /** Each domain's fields come once (lib/pack) and go back on its inboxes here. */
+  packed: PackedInboxes;
   /** Replacement domains still being set up, for Warming up. */
   setups?: SetupRow[]; clients: ClientRow[]; plans: PlanRow[]; smartleadConnected: boolean; dryRun: boolean; timezone: string;
   /** Settings → Warming up: how young a domain counts as new. */
@@ -531,6 +533,7 @@ export function InboxesView({ inboxes, setups = [], clients, plans, smartleadCon
   /** Why the Smartlead token can't be used, or null when it can. */
   appProblem: string | null;
 }) {
+  const inboxes = useMemo(() => unpackRows(packed), [packed]);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [editOpen, setEditOpen] = useState(false);
   const params = useSearchParams();

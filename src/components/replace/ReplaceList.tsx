@@ -9,7 +9,7 @@ import { ReplaceDialog } from "@/components/domains/ReplaceDialog";
 import { AllDomains } from "@/components/replace/AllDomains";
 import { Select } from "@/components/Select";
 import { Badge, ClientCell } from "@/components/ui";
-import { DIAGNOSIS_ACTIONS, diagnosisCost, type DiagnosisAction, type StoredDiagnosis } from "@/lib/diagnose";
+import { DIAGNOSIS_ACTIONS, diagnosisCost, type DiagnosisAction, type StoredDiagnosis } from "@/lib/diagnose-meta";
 import { ago, int } from "@/lib/format";
 import type { AiOpinion, ReplaceListData } from "@/lib/queries";
 import { OUTCOME_META, outcomeOf, REPLACE_RULES, replaceCsv, type GroupNote, type ReplaceCall, type ReplaceItem, type ReplyRate } from "@/lib/replace-list";

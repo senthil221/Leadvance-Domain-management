@@ -5,7 +5,7 @@ import { useState } from "react";
 import { toast } from "sonner";
 import { markDiagnosis } from "@/app/actions";
 import { Badge } from "@/components/ui";
-import { DIAGNOSIS_ACTIONS, DIAGNOSIS_VERDICTS, diagnosisCost, modelName, type StoredDiagnosis } from "@/lib/diagnose";
+import { DIAGNOSIS_ACTIONS, DIAGNOSIS_VERDICTS, diagnosisCost, modelName, type StoredDiagnosis } from "@/lib/diagnose-meta";
 import { ago } from "@/lib/format";
 
 /** Asks the AI why this domain is or isn't performing. It only advises: nothing here changes the domain. */

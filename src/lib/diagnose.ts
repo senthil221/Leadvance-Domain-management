@@ -4,30 +4,9 @@
 
 import { z } from "zod";
 import { MIN_SENT, zScore } from "./compare";
+import { ACTION_KEYS, VERDICT_KEYS, type CitedFact, type Diagnosis } from "./diagnose-meta";
 import { fixQueue, problemsOf, type FixFact } from "./fix-queue";
 import { RULES } from "./review";
-
-export const VERDICT_KEYS = ["healthy", "watch", "underperforming", "failing", "not_enough_data"] as const;
-export type DiagnosisVerdict = (typeof VERDICT_KEYS)[number];
-export const DIAGNOSIS_VERDICTS: Record<DiagnosisVerdict, { label: string; tone: "success" | "info" | "warning" | "danger" | "faint" }> = {
-  healthy: { label: "Healthy", tone: "success" },
-  watch: { label: "Keep an eye on it", tone: "info" },
-  underperforming: { label: "Underperforming", tone: "warning" },
-  failing: { label: "Failing", tone: "danger" },
-  not_enough_data: { label: "Not enough data", tone: "faint" },
-};
-
-export const ACTION_KEYS = ["keep_sending", "lower_volume", "rest", "replace", "fix_setup", "check_lists", "wait_for_data"] as const;
-export type DiagnosisAction = (typeof ACTION_KEYS)[number];
-export const DIAGNOSIS_ACTIONS: Record<DiagnosisAction, string> = {
-  keep_sending: "Keep sending",
-  lower_volume: "Lower its volume",
-  rest: "Rest it",
-  replace: "Replace it",
-  fix_setup: "Fix the setup",
-  check_lists: "Check the lists and copy",
-  wait_for_data: "Wait for more data",
-};
 
 /** What the AI must send back. Kept plain, since the API accepts only simple schemas. */
 export const DiagnosisSchema = z.object({
@@ -40,23 +19,8 @@ export const DiagnosisSchema = z.object({
   wouldChange: z.string(),
   cannotSee: z.array(z.string()),
 });
+// checkDiagnosis turns it into a Diagnosis (diagnose-meta.ts), so the two can't drift apart.
 export type DiagnosisRaw = z.infer<typeof DiagnosisSchema>;
-
-export type CitedFact = { path: string; label: string; value: string };
-export type Diagnosis = Omit<DiagnosisRaw, "reasons"> & { reasons: { claim: string; facts: CitedFact[] }[] };
-
-export type StoredDiagnosis = {
-  id: number;
-  createdAt: Date;
-  createdBy: string;
-  /** Null when the rules answered without asking the AI. */
-  model: string | null;
-  result: Diagnosis;
-  inputTokens: number | null;
-  outputTokens: number | null;
-  costUsd: number | null;
-  feedback: "right" | "wrong" | null;
-};
 
 type Week = { sent: number; daysSent: number; humanReplies: number; allReplies: number; ooo: number; bounces: number; humanReplyRate: number | null; bounceRate: number | null };
 type PeerGroup = { domains: number; sent28: number; humanReplyRate28: number | null; bounceRate28: number | null; humanReplyRateWeek1: number | null; humanReplyRateWeek2: number | null };
@@ -249,16 +213,6 @@ export function checkDiagnosis(raw: DiagnosisRaw, facts: DiagnosisFacts): Diagno
 
 /** Cheap, and good enough to read numbers. Set OPENROUTER_MODEL to use another one. */
 export const DEFAULT_DIAGNOSIS_MODEL = "deepseek/deepseek-v4.1-flash-1017";
-
-/** What a run cost, as OpenRouter reported it. */
-export function diagnosisCost(costUsd: number | null | undefined) {
-  if (costUsd == null) return null;
-  if (costUsd < 0.001) return "under $0.001";
-  return `$${costUsd.toFixed(costUsd < 0.01 ? 3 : 2)}`;
-}
-
-/** "deepseek/deepseek-v4.1-flash" reads as "deepseek-v4.1-flash". */
-export const modelName = (model: string) => model.split("/").pop()!;
 
 export const DIAGNOSIS_SYSTEM = `You diagnose one sending domain for a cold email agency. The user will act on your answer, so a wrong call costs real sending volume.
 
