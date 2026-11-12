@@ -33,7 +33,12 @@ export function createSmartlead({ apiKey, sql, dryRun = true, baseUrl = "https:/
     } catch { /* logging must never break a sync */ }
   }
 
-  async function request<T = unknown>(method: "GET" | "POST" | "PATCH" | "DELETE", path: string, opts: { query?: Query; body?: unknown } = {}): Promise<T> {
+  /**
+   * `once` is for a call that creates something new each time: after a network
+   * error or a 5xx Smartlead may already have made it, so it isn't sent again
+   * (a 429 means it was refused, and is retried).
+   */
+  async function request<T = unknown>(method: "GET" | "POST" | "PATCH" | "DELETE", path: string, opts: { query?: Query; body?: unknown; once?: boolean } = {}): Promise<T> {
     const qs = new URLSearchParams();
     for (const [k, v] of Object.entries(opts.query ?? {})) if (v !== undefined) qs.set(k, String(v));
     const shownPath = qs.size ? `${path}?${qs}` : path;
@@ -60,15 +65,15 @@ export function createSmartlead({ apiKey, sql, dryRun = true, baseUrl = "https:/
           signal: AbortSignal.timeout(30_000),
         });
       } catch (e) {
-        if (attempt < 3) { await wait(1000 * 2 ** attempt); continue; }
+        if (attempt < 3 && !opts.once) { await wait(1000 * 2 ** attempt); continue; }
         const msg = e instanceof Error ? e.message : String(e);
         await log(method, shownPath, null, started, msg);
         throw new SmartleadError(`Smartlead unreachable: ${msg}`, null, path);
       }
 
-      if ((res.status === 429 || res.status >= 500) && attempt < 4) {
+      if ((res.status === 429 || (res.status >= 500 && !opts.once)) && attempt < 4) {
         const retryAfter = Number(res.headers.get("retry-after"));
-        await wait(Number.isFinite(retryAfter) && retryAfter > 0 ? retryAfter * 1000 : 1000 * 2 ** attempt);
+        await wait(Number.isFinite(retryAfter) && retryAfter > 0 ? Math.min(retryAfter, 60) * 1000 : 1000 * 2 ** attempt);
         continue;
       }
 
@@ -118,8 +123,6 @@ export function createSmartlead({ apiKey, sql, dryRun = true, baseUrl = "https:/
       request<unknown>("GET", "/master-inbox/untracked-replies", { query: { limit, offset, fetchAttachments: false, fetchBody: true } }),
 
     // Writes: logged but not sent while dry-run is on.
-    updateDailyLimit: (accountId: number, maxEmailPerDay: number) =>
-      request("POST", `/email-accounts/${accountId}`, { body: { max_email_per_day: maxEmailPerDay } }),
     updateWarmup: (accountId: number, w: { warmup_enabled: boolean; total_warmup_per_day?: number; daily_rampup?: number; reply_rate_percentage?: number }) =>
       request("POST", `/email-accounts/${accountId}/warmup`, { body: w }),
     /** Campaign sending settings. Both fields are always sent together so neither falls back to a default. */
@@ -136,7 +139,7 @@ export function createSmartlead({ apiKey, sql, dryRun = true, baseUrl = "https:/
     /** One page of a campaign's leads with when each was sent, replied and whether it bounced. */
     campaignStatistics: (campaignId: number, offset = 0, limit = 100) =>
       request<unknown>("GET", `/campaigns/${campaignId}/statistics`, { query: { offset, limit } }),
-    createCampaign: (name: string) => request<unknown>("POST", "/campaigns/create", { body: { name } }),
+    createCampaign: (name: string) => request<unknown>("POST", "/campaigns/create", { body: { name }, once: true }),
     updateCampaignSettings: (campaignId: number, settings: Record<string, unknown>) =>
       request("POST", `/campaigns/${campaignId}/settings`, { body: settings }),
     updateCampaignSchedule: (campaignId: number, schedule: Record<string, unknown>) =>

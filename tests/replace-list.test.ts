@@ -2,7 +2,7 @@ import { PGlite } from "@electric-sql/pglite";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { loadMigrations } from "../scripts/migrations";
 import type { FixFact } from "../src/lib/fix-queue";
-import { outcomeOf, REPLACE_OUTCOMES_SQL, REPLACE_STATS_SQL, replaceCsv, replaceList, replaceSummary, severityOf, type OutcomeRow, type ReplaceStat } from "../src/lib/replace-list";
+import { outcomeOf, REPLACE_OUTCOMES_SQL, REPLACE_STATS_SQL, replaceCsv, replaceList, severityOf, type OutcomeRow, type ReplaceStat } from "../src/lib/replace-list";
 
 // Made-up domains only. A client's fleet is nine steady domains plus the one under test.
 let seq = 0;
@@ -344,7 +344,8 @@ describe("the list", () => {
     const a = fact({ name: "watch.com", sent7: 2000 }), b = fact({ name: "small.com" }), c = fact({ name: "big.com", sent7: 3000 }), d = fact({ name: "listed.com", listed: 1 });
     const r = replaceList([...peers, a, b, c, d], [...peers.map((f) => stat(f.domainId)), stat(a.domainId, { sent7: 2000, sender7: 16 }), stat(b.domainId, { sender7: 12 }), stat(c.domainId, { sent7: 3000, sender7: 36 }), stat(d.domainId)]);
     expect(r.items.map((i) => i.name)).toEqual(["listed.com", "big.com", "small.com", "watch.com"]);
-    expect(replaceSummary(r.items)).toMatchObject({ replace_now: { count: 1 }, replace: { count: 2, perDay: 800 }, watch: { count: 1 }, fix: { count: 0 } });
+    expect(r.items.map((i) => i.call)).toEqual(["replace_now", "replace", "replace", "watch"]);
+    expect(r.items[1].perDay + r.items[2].perDay).toBe(800);
     const csv = replaceCsv(r.items).split("\n");
     expect(csv[0]).toBe("Domain,Client,Tag,Provider,Call,Why,Next step,Sent in 7 days,Sends a day,Human replies,Out-of-office replies,Others' human + out-of-office,Also");
     expect(csv[1]).toContain("listed.com,Client One,,Hypertide,Replace now,On 1 block list,");

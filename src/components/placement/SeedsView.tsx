@@ -6,6 +6,7 @@ import { toast } from "sonner";
 import { runJobNow } from "@/app/actions";
 import { Empty } from "@/components/ui";
 import { ago, int, summarize } from "@/lib/format";
+import { unfinishedRunText } from "@/lib/job-queue";
 import { EXCLUDED, FRESH_DAYS, STATUS_HINT, STATUS_LABEL, seedStatus, type MxProvider, type SeedStatus } from "@/lib/placement-seeds";
 
 export type SeedItem = {
@@ -65,7 +66,8 @@ export function SeedsView({ seeds, lastSync }: {
   const checkNow = () => start(async () => {
     const r = await runJobNow("placement-seeds");
     if (!r.ok) return void toast.error(r.error);
-    toast.success(`Seeds: ${summarize(r.data) ?? "done"}`);
+    if (!r.data.finished) return void toast(unfinishedRunText(r.data));
+    toast.success(`Seeds: ${summarize(r.data.detail) ?? "done"}`);
   });
 
   return (

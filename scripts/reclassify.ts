@@ -1,21 +1,25 @@
 // Re-runs the reply classifier on every stored reply that nobody tagged by
-// hand, then rebuilds the daily stats from the oldest changed day.
+// hand, then rebuilds the daily stats from the oldest changed day. Each reply
+// is read from its stored webhook payload exactly as the webhook reads it
+// (parseSmartleadEvent), so a re-run gives what a new delivery would.
 // Usage: npx tsx scripts/reclassify.ts   (add --dry to only count changes)
 import postgres from "postgres";
-import { classifyReply } from "../src/lib/classify";
+import { parseSmartleadEvent } from "../src/lib/smartlead-events";
 
 const url = process.env.DATABASE_URL;
 if (!url) throw new Error("DATABASE_URL is not set");
 const dry = process.argv.includes("--dry");
 const sql = postgres(url, { max: 1, onnotice: () => {} });
 
-const rows = await sql<{ id: number; cls: string | null; body: string | null; subject: string | null; at: Date }[]>`
-  select id, reply_class::text as cls, occurred_at as at,
-    coalesce(payload->'reply_message'->>'text', payload->>'reply_body', payload->'reply_message'->>'html', preview) as body,
-    coalesce(payload->>'subject', subject) as subject
+const rows = await sql<{ id: number; cls: string | null; payload: unknown; at: Date }[]>`
+  select id, reply_class::text as cls, payload, occurred_at as at
   from email_events where kind = 'reply' and not class_overridden`;
 
-const changes = rows.map((r) => ({ id: r.id, from: r.cls, to: classifyReply(r.body, r.subject), at: r.at })).filter((c) => c.from !== c.to);
+const changes = rows.flatMap((r) => {
+  const to = parseSmartleadEvent(r.payload)?.replyClass;
+  // A payload the webhook wouldn't read as a reply is left as it is.
+  return to && to !== r.cls ? [{ id: r.id, from: r.cls, to, at: r.at }] : [];
+});
 const moves = new Map<string, number>();
 for (const c of changes) moves.set(`${c.from} → ${c.to}`, (moves.get(`${c.from} → ${c.to}`) ?? 0) + 1);
 console.log(`${rows.length} replies checked, ${changes.length} change${changes.length === 1 ? "" : "s"}${dry ? " (dry run)" : ""}`);

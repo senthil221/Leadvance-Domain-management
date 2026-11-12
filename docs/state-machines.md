@@ -67,7 +67,7 @@ them without force.
 | From | To | Who |
 |---|---|---|
 | in_storage | provisioning | Person: Set up (`setupDomains`). Job: Hypertide sync (live order) and Icemail sync (mailboxes). SQL: `start_replacement` (new domain). |
-| provisioning | in_storage | Person: Status dialog (setup cancelled) |
+| provisioning | in_storage | Person: Status dialog (setup cancelled), Cancel or Swap on Replacements (the new domain goes back to storage) |
 | provisioning | warming | Job: replacement steps (Smartlead step done). Job: Smartlead sync (inboxes connected, outside a replacement). |
 | warming | active | Person: Move to active (`markWarming`), Move to tag. Job: replacement (campaigns step done). |
 | active | warming | Person: Move to warming up (added in 0033) |
@@ -175,14 +175,15 @@ flowchart LR
 stateDiagram-v2
   [*] --> running: start_replacement()
   running --> completed: advanceReplacements, once every pair has completed_at
-  running --> cancelled: not used
+  running --> cancelled: cancelReplacement, when it removes the batch's last pair
   running --> partial: not used
 ```
 
-- Only running → completed happens.
-- Nothing sets partial or cancelled.
-- Queries still leave out `status = 'cancelled'`, so a batch cancelled by hand
-  in the database drops out of every page.
+- Cancel on Replacements (`cancelReplacement`) deletes the pair, sends the new
+  domain back to storage, and cancels the batch once it has no pairs left.
+- Nothing sets partial.
+- Queries leave out `status = 'cancelled'`, so a cancelled batch drops out of
+  every page.
 
 ## 4. Replacement pair: the four steps on `replacement_items`
 
@@ -221,6 +222,13 @@ stateDiagram-v2
 - Only the current step can be acted on. `actOnStep` refuses any other step
   ("Finish the earlier steps first").
 - The worker leaves a step alone while it is manual or failed.
+- One caller moves a pair at a time. The worker, the Hypertide sync and every
+  person's action (Retry, Mark done, Skip, Approve payment, Add to campaigns,
+  Swap, Cancel) claim the pair through `busy_until` first, and let go when
+  done. The worker skips a claimed pair until its next run; a person gets
+  "being worked on right now". A claim left by a crash runs out after 15
+  minutes. Without this, a click and the worker could both place a Hypertide
+  order for the same pair.
 - When campaigns finishes, the pair gets `completed_at`. It is never cleared.
 
 **Domain moves that follow the steps** (`syncStatuses`):
@@ -531,10 +539,9 @@ what the app does.
    - Its filter (`nsState`) can disagree with the nameserver cell (`nsOf`) when
      a switch is pending.
    - Turn the watch off once every answer is in, and filter on `nsOf`.
-9. **Decide on the unused states.** Batch `partial` and `cancelled`, and inbox
-   `pending`, are allowed but never set. Either add a Cancel replacement
-   action, which would also free the new domain back to storage, or drop them
-   from the check constraints.
+9. **Decide on the unused states.** Batch `partial` and inbox `pending` are
+   allowed but never set (batch `cancelled` is set by Cancel replacement).
+   Drop them from the check constraints, or give them a use.
 10. **Make history's `forced` flag mean the move skipped the table.** Callers
     pass force on moves the table allows anyway (the Smartlead sync on
     provisioning → warming, Move to recovery on burned → resting), and history

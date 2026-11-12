@@ -452,13 +452,6 @@ export const SEVERITY_META: Record<Severity, { label: string; tone: "danger" | "
 export const severityOf = (d: Pick<DomainRow, "call" | "weakTag">): Severity => (d.call === "keep" ? (d.weakTag ? "weak" : "ok") : d.call);
 const severity = (d: DomainRow) => SEVERITY_ORDER.indexOf(severityOf(d));
 
-/** How many domains got each call. */
-export function replaceSummary(items: ReplaceItem[]) {
-  const counts = Object.fromEntries(CALLS.map((c) => [c, { count: 0, perDay: 0 }])) as Record<ReplaceCall, { count: number; perDay: number }>;
-  for (const i of items) { counts[i.call].count++; counts[i.call].perDay += i.perDay; }
-  return counts;
-}
-
 /** CSV of the list, as it's filtered. */
 export function replaceCsv(items: ReplaceItem[]) {
   const esc = (v: string | number | null) => { const s = v == null ? "" : String(v); return /^[=+\-@]/.test(s) ? `'${s}` : /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s; };

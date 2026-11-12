@@ -2,7 +2,7 @@ import { PGlite } from "@electric-sql/pglite";
 import { PGLiteSocketServer } from "@electric-sql/pglite-socket";
 import postgres from "postgres";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { createIcemail, monthlyCost, parseIcemailMailbox } from "../src/integrations/icemail";
+import { createIcemail, parseIcemailMailbox } from "../src/integrations/icemail";
 import { loadIcemailAccounts, syncAllIcemail, type IcemailAccount } from "../src/jobs/icemail-sync";
 import { seal } from "../src/lib/secret-box";
 import { loadMigrations } from "../scripts/migrations";
@@ -25,12 +25,6 @@ describe("Icemail client", () => {
     expect(m).toMatchObject({ id: "mb1", email: "john1@sendwell.com", domain: "sendwell.com", cost: 4.9, billingCycle: "MONTHLY", nextBillingOn: "2026-11-05" });
     expect(JSON.stringify(m)).not.toContain("Plaintext");
     expect(parseIcemailMailbox({ id: "x", username: "not an email" })).toBeNull();
-  });
-
-  it("spreads yearly plans over twelve months", () => {
-    expect(monthlyCost(60, "YEARLY")).toBe(5);
-    expect(monthlyCost(4.9, "MONTHLY")).toBe(4.9);
-    expect(monthlyCost(null, "MONTHLY")).toBeNull();
   });
 
   it("sends the key in x-api-key and pages 50 at a time until total_count", async () => {

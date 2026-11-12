@@ -1,7 +1,7 @@
 import type { CSSProperties, ReactNode } from "react";
 import type { LucideIcon } from "lucide-react";
 import { SectionTabs } from "@/components/shell/SectionTabs";
-import { initials } from "@/lib/format";
+import { daysSince, initials } from "@/lib/format";
 import { MARK_TAGS } from "@/lib/tag-map";
 import { STATUS_META, type DomainStatus, type Tone } from "@/lib/status";
 
@@ -17,9 +17,6 @@ export function PageHead({ title, sub, children }: { title: string; sub?: ReactN
     </header>
   );
 }
-
-/** Whole days from `since` to now, never below 0. */
-export const daysSince = (since: Date | string, now = Date.now()) => Math.max(0, Math.floor((now - new Date(since).getTime()) / 86_400_000));
 
 /** A domain's status; with `since`, how many days it has been in it ("Draining · 6d"). */
 export function StatusDot({ status, since }: { status: DomainStatus; since?: Date | string | null }) {
@@ -86,14 +83,10 @@ export function ClientCell({ name, hue }: { name: string | null; hue: number | n
   );
 }
 
-export function Monogram({ name, hue }: { name: string; hue?: number }) {
-  // Hue from the name when none is given, so a person keeps one colour.
-  const h = hue ?? [...name].reduce((a, c) => (a * 31 + c.charCodeAt(0)) % 360, 7);
+export function Monogram({ name }: { name: string }) {
+  // Hue from the name, so a person keeps one colour.
+  const h = [...name].reduce((a, c) => (a * 31 + c.charCodeAt(0)) % 360, 7);
   return <span className="monogram" style={{ "--h": h } as CSSProperties}>{initials(name)}</span>;
-}
-
-export function Kbd({ children }: { children: ReactNode }) {
-  return <kbd className="kbd">{children}</kbd>;
 }
 
 export function Empty({ icon: Icon, title, children, action }: { icon: LucideIcon; title: string; children?: ReactNode; action?: ReactNode }) {
@@ -107,8 +100,8 @@ export function Empty({ icon: Icon, title, children, action }: { icon: LucideIco
   );
 }
 
-export function Skeleton({ w, h = 14, className = "" }: { w?: number | string; h?: number; className?: string }) {
-  return <span className={`skeleton block ${className}`} style={{ width: w ?? "100%", height: h }} />;
+export function Skeleton({ w, h = 14 }: { w?: number | string; h?: number }) {
+  return <span className="skeleton block" style={{ width: w ?? "100%", height: h }} />;
 }
 
 export function TableSkeleton({ rows = 10 }: { rows?: number }) {
@@ -127,30 +120,24 @@ export function TableSkeleton({ rows = 10 }: { rows?: number }) {
 }
 
 // 14-day sparkline. Flat zero lines are drawn faint at the bottom.
-export function Spark({ values, bad = false, width = 64, height = 18 }: { values: number[]; bad?: boolean; width?: number; height?: number }) {
+export function Spark({ values, width = 64 }: { values: number[]; width?: number }) {
+  const height = 18;
   const max = Math.max(1, ...values);
   const step = values.length > 1 ? width / (values.length - 1) : width;
   const d = values.map((v, i) => `${i ? "L" : "M"}${(i * step).toFixed(1)},${(height - 1 - (v / max) * (height - 2)).toFixed(1)}`).join(" ");
   return (
-    <svg className={`spark${bad ? " is-bad" : ""}`} width={width} height={height} viewBox={`0 0 ${width} ${height}`} aria-hidden="true">
+    <svg className="spark" width={width} height={height} viewBox={`0 0 ${width} ${height}`} aria-hidden="true">
       <path d={d} />
     </svg>
   );
 }
 
 // A rate cell: faint when there is no data, coloured when past a threshold.
-export function Metric({ value, warn, bad, invert = false, digits = 1, suffix = "%" }: {
-  value: number | null;
-  warn?: number;
-  bad?: number;
-  invert?: boolean;
-  digits?: number;
-  suffix?: string;
-}) {
+export function Metric({ value, warn, bad, digits = 1 }: { value: number | null; warn?: number; bad?: number; digits?: number }) {
   if (value == null) return <span className="metric zero">—</span>;
-  const past = (t?: number) => t != null && (invert ? value < t : value > t);
+  const past = (t?: number) => t != null && value > t;
   const cls = past(bad) ? " is-bad" : past(warn) ? " is-warn" : "";
-  return <span className={`metric${cls}${value === 0 && !cls ? " zero" : ""}`}>{value.toFixed(digits)}{suffix}</span>;
+  return <span className={`metric${cls}${value === 0 && !cls ? " zero" : ""}`}>{value.toFixed(digits)}%</span>;
 }
 
 /**

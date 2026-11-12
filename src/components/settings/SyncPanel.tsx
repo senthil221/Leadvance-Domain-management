@@ -6,6 +6,7 @@ import { toast } from "sonner";
 import { runJobNow } from "@/app/actions";
 import { AutoRefresh } from "@/components/AutoRefresh";
 import { ago, summarize, took } from "@/lib/format";
+import { unfinishedRunText } from "@/lib/job-queue";
 
 export type SyncJob = { name: string; label: string; everyMinutes: number; lastStartedAt: Date | null; lastFinishedAt: Date | null; lastOk: boolean | null; lastError: string | null; summary: string | null };
 
@@ -23,11 +24,20 @@ const SECTIONS: { key: string; title: string; sub: string; jobs: string[] }[] = 
     jobs: ["bounce-causes", "placement-seeds", "rollup"] },
 ];
 
-type Outcome = { ok: boolean; text: string | null };
+/** unfinished: still queued or running on the server when the wait ran out. */
+type Outcome = { ok: boolean; text: string | null; unfinished?: boolean };
 type Current = { job: SyncJob; startedAt: number; done: number; total: number };
-type RowState = "here" | "queued" | "server" | "idle";
+type RowState = "here" | "queued" | "server" | "server-queued" | "idle";
 
 const ms = (d: Date | string) => new Date(d).getTime();
+/** Ran before, then asked for (here, another tab or a webhook) and waiting for the worker, which runs one job at a time. */
+const queuedOnServer = (j: SyncJob) => j.lastStartedAt == null && j.lastFinishedAt != null;
+/** When the worker last started or finished anything, if it isn't in the middle of a job. */
+function workerIdleSince(jobs: SyncJob[], now: number) {
+  if (jobs.some((j) => onServer(j, now))) return null;
+  const last = Math.max(...jobs.flatMap((j) => [j.lastStartedAt, j.lastFinishedAt].flatMap((d) => (d ? [ms(d)] : []))));
+  return Number.isFinite(last) ? last : null;
+}
 /** Started by the background worker and not finished yet (a start over 3 hours old is a crash, not a run). */
 const onServer = (j: SyncJob, now: number) =>
   j.lastStartedAt != null && (!j.lastFinishedAt || ms(j.lastStartedAt) > ms(j.lastFinishedAt)) && now - ms(j.lastStartedAt) < 3 * 3600_000;
@@ -66,7 +76,9 @@ export function SyncPanel({ jobs }: { jobs: SyncJob[] }) {
     let o: Outcome;
     try {
       const r = await runJobNow(job.name);
-      o = r.ok ? { ok: true, text: summarize(r.data) ?? null } : { ok: false, text: r.error };
+      o = !r.ok ? { ok: false, text: r.error }
+        : r.data.finished ? { ok: true, text: summarize(r.data.detail) ?? null }
+        : { ok: true, text: unfinishedRunText(r.data), unfinished: true };
     } catch (e) {
       o = { ok: false, text: e instanceof Error ? e.message : "The server didn't answer" };
     }
@@ -93,13 +105,21 @@ export function SyncPanel({ jobs }: { jobs: SyncJob[] }) {
     setStopping(false);
     const note = left ? `Stopped; ${left} not run.` : null;
     const failed = results.filter((r) => !r.o.ok);
+    const unfinished = results.filter((r) => r.o.unfinished);
+    const done = results.length - failed.length - unfinished.length;
     if (results.length === 1) {
       const [{ job, o }] = results;
       const description = [o.text, note].filter(Boolean).join(" ") || undefined;
-      if (o.ok) toast.success(`${job.label} done`, { description });
+      if (o.unfinished) toast(job.label, { description });
+      else if (o.ok) toast.success(`${job.label} done`, { description });
       else toast.error(`${job.label} failed`, { description });
-    } else if (failed.length) {
-      toast.error(`${results.length - failed.length} of ${results.length} jobs done`, { description: [`Failed: ${failed.map((r) => r.job.label).join(", ")}.`, note].filter(Boolean).join(" ") });
+    } else if (failed.length || unfinished.length) {
+      const description = [
+        failed.length ? `Failed: ${failed.map((r) => r.job.label).join(", ")}.` : null,
+        unfinished.length ? `Still on the server: ${unfinished.map((r) => r.job.label).join(", ")}.` : null,
+        note,
+      ].filter(Boolean).join(" ");
+      (failed.length ? toast.error : toast)(`${done} of ${results.length} jobs done`, { description });
     } else {
       toast.success(`All ${results.length} jobs done`, { description: note ?? undefined });
     }
@@ -107,7 +127,7 @@ export function SyncPanel({ jobs }: { jobs: SyncJob[] }) {
 
   const enqueue = (list: SyncJob[]) => {
     const have = new Set([...waiting.current.map((j) => j.name), ...(current ? [current.job.name] : [])]);
-    const add = list.filter((j) => !have.has(j.name) && !onServer(j, Date.now()));
+    const add = list.filter((j) => !have.has(j.name) && !onServer(j, Date.now()) && !queuedOnServer(j));
     if (!add.length) return;
     waiting.current.push(...add);
     setQueued(waiting.current.map((j) => j.name));
@@ -118,9 +138,12 @@ export function SyncPanel({ jobs }: { jobs: SyncJob[] }) {
   const failing = jobs.filter((j) => (outcomes[j.name] ? !outcomes[j.name].ok : j.lastOk === false));
   const serverNow = jobs.filter((j) => onServer(j, now) && current?.job.name !== j.name);
   const behind = jobs.filter((j) => !outcomes[j.name] && isBehind(j, now));
+  // Three jobs run every minute, so three quiet minutes means the worker is down.
+  const idleSince = workerIdleSince(jobs, now);
+  const workerDown = idleSince != null && now - idleSince > 3 * 60_000;
   const usual = current ? lastTook(current.job) : null;
   const rowState = (j: SyncJob): RowState =>
-    current?.job.name === j.name ? "here" : queued.includes(j.name) ? "queued" : onServer(j, now) ? "server" : "idle";
+    current?.job.name === j.name ? "here" : queued.includes(j.name) ? "queued" : onServer(j, now) ? "server" : queuedOnServer(j) ? "server-queued" : "idle";
 
   return (
     <div className="sync">
@@ -130,7 +153,7 @@ export function SyncPanel({ jobs }: { jobs: SyncJob[] }) {
           {current ? (
             <>
               <span className="list-title" suppressHydrationWarning>
-                Running {current.done + 1} of {current.total}: {current.job.label} · {took(now - current.startedAt)}
+                Asked the server for {current.done + 1} of {current.total}: {current.job.label} · {took(now - current.startedAt)}
                 {usual != null ? <span className="text-faint"> (took {took(usual)} last time)</span> : null}
               </span>
               <span className="sync-progress" aria-hidden><i style={{ width: `${(100 * current.done) / current.total}%` }} /></span>
@@ -148,7 +171,11 @@ export function SyncPanel({ jobs }: { jobs: SyncJob[] }) {
               Running on the server now: {serverNow.map((j) => `${j.label} (started ${ago(j.lastStartedAt, now)})`).join(", ")}
             </span>
           ) : null}
-          {behind.length ? (
+          {workerDown ? (
+            <span className="list-meta text-warning-ink" style={{ whiteSpace: "normal" }} suppressHydrationWarning>
+              The background worker last ran a job {ago(new Date(idleSince ?? now), now)}. Jobs only run there, so anything asked for here waits until it&apos;s back.
+            </span>
+          ) : behind.length ? (
             <span className="list-meta text-warning-ink" style={{ whiteSpace: "normal" }} suppressHydrationWarning>
               {behind.length} {behind.length === 1 ? "job is" : "jobs are"} behind schedule: {behind.map((j) => j.label).join(", ")}. The server runs one job at a time, so a slow one holds up the rest.
             </span>
@@ -193,8 +220,9 @@ export function SyncPanel({ jobs }: { jobs: SyncJob[] }) {
 function JobRow({ job, now, state, startedHere, outcome, onRun }: { job: SyncJob; now: number; state: RowState; startedHere: number | null; outcome?: Outcome; onRun: () => void }) {
   const ok = outcome ? outcome.ok : job.lastOk;
   const active = state === "here" || state === "server";
+  const waiting = state === "queued" || state === "server-queued";
   const late = state === "idle" && !outcome && isBehind(job, now);
-  const tone = active ? "info" : state === "queued" || ok == null ? "faint" : !ok ? "danger" : late ? "warning" : "success";
+  const tone = active ? "info" : waiting || ok == null ? "faint" : !ok ? "danger" : late ? "warning" : "success";
   const said = outcome ? outcome.text : ok === false ? job.lastError : job.summary;
   const length = lastTook(job);
   const usual = length != null ? ` · took ${took(length)} last time` : "";
@@ -204,8 +232,9 @@ function JobRow({ job, now, state, startedHere, outcome, onRun }: { job: SyncJob
       <div className="list-main">
         <span className="list-title">{job.label}</span>
         <span className="list-meta" style={{ whiteSpace: "normal" }} suppressHydrationWarning>
-          {state === "here" ? <>Running from here · {took(now - (startedHere ?? now))}{usual}</>
+          {state === "here" ? <>Asked for from here · {took(now - (startedHere ?? now))}{usual}</>
             : state === "server" ? <>Running on the server · started {ago(job.lastStartedAt, now)}{usual}</>
+            : state === "server-queued" ? <>Waiting for the server: it runs one job at a time</>
             : state === "queued" ? <>Waiting in the queue</>
             : (
               <>
@@ -219,8 +248,8 @@ function JobRow({ job, now, state, startedHere, outcome, onRun }: { job: SyncJob
         </span>
       </div>
       <button type="button" className="btn btn-sm" disabled={state !== "idle"} onClick={onRun}
-        title={state === "server" ? "The server is running it now" : state === "queued" ? "Waiting its turn in the queue" : undefined}>
-        <Play size={12} /> {active ? "Running…" : state === "queued" ? "Queued" : "Run now"}
+        title={state === "server" ? "The server is running it now" : waiting ? "Waiting its turn in the queue" : undefined}>
+        <Play size={12} /> {active ? "Running…" : waiting ? "Queued" : "Run now"}
       </button>
     </div>
   );

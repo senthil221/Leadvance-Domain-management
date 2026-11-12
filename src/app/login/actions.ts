@@ -3,6 +3,7 @@
 import { redirect } from "next/navigation";
 import { z } from "zod";
 import { supabaseServer } from "@/lib/auth";
+import { samePagePath } from "@/lib/next-path";
 
 const input = z.object({ email: z.email("Enter a valid email"), password: z.string().min(1, "Enter your password") });
 
@@ -12,8 +13,7 @@ export async function signIn(_prev: string | null, form: FormData): Promise<stri
   const supabase = await supabaseServer();
   const { error } = await supabase.auth.signInWithPassword(parsed.data);
   if (error) return error.status === 400 ? "Wrong email or password" : "Sign-in is unavailable right now. Try again shortly.";
-  const next = String(form.get("next") ?? "/");
-  redirect(next.startsWith("/") && !next.startsWith("//") ? next : "/");
+  redirect(samePagePath(String(form.get("next") ?? "/")));
 }
 
 export async function signOut() {

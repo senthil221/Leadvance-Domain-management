@@ -140,6 +140,62 @@ describe("replacement steps", () => {
   });
 });
 
+describe("one caller moves a pair at a time", () => {
+  const claimFor = (interval: string) => sql`update replacement_items set busy_until = now() + ${interval}::interval where id = ${itemId}`;
+  const busyUntil = async () => (await sql`select busy_until from replacement_items where id = ${itemId}`)[0].busy_until as Date | null;
+
+  beforeEach(async () => {
+    await sql`update settings set value = '["ns1.hypertide.io","ns2.hypertide.io"]' where key = 'hypertide_nameservers'`;
+  });
+
+  it("leaves a pair alone while someone else is moving it", async () => {
+    await claimFor("10 minutes");
+    const pb = fakePorkbun();
+    expect(await advanceItem(sql, { porkbun: pb }, itemId)).toBe(false);
+    expect(pb.updateNs).not.toHaveBeenCalled();
+    expect((await step("step_nameservers")).s).toBe("pending");
+    // The worker skips it this run and says so.
+    expect(await advanceReplacements(sql, { porkbun: pb })).toMatchObject({ open: 1, errors: 0, busy: 1 });
+    expect(pb.updateNs).not.toHaveBeenCalled();
+  });
+
+  it("turns a person away with a clear message, without changing the step", async () => {
+    await sql`update replacement_items set step_nameservers = 'failed' where id = ${itemId}`;
+    await claimFor("10 minutes");
+    await expect(actOnStep(sql, { porkbun: fakePorkbun() }, itemId, "nameservers", "retry", "me")).rejects.toThrow(/being worked on right now/);
+    await expect(swapNewDomain(sql, itemId, "me")).rejects.toThrow(/being worked on right now/);
+    await expect(cancelReplacement(sql, itemId, "me")).rejects.toThrow(/being worked on right now/);
+    expect((await step("step_nameservers")).s).toBe("failed");
+    expect(await status(newId)).toBe("provisioning");
+  });
+
+  it("takes over a claim that ran out (its holder crashed), and lets go when done", async () => {
+    await claimFor("-1 minute");
+    const pb = fakePorkbun();
+    expect(await advanceItem(sql, { porkbun: pb }, itemId)).toBe(true);
+    expect(pb.updateNs).toHaveBeenCalledWith("freshsend.com", ["ns1.hypertide.io", "ns2.hypertide.io"]);
+    expect(await busyUntil()).toBeNull();
+  });
+
+  it("lets go when the work fails, and holds the pair while it runs", async () => {
+    let during: Date | null = null;
+    const pb = fakePorkbun({ updateNs: vi.fn(async () => { during = await busyUntil(); throw new Error("Porkbun is down"); }) } as Partial<Porkbun>);
+    await advanceItem(sql, { porkbun: pb }, itemId);
+    expect(during).not.toBeNull();
+    expect((await step("step_nameservers")).last_error).toMatch(/Porkbun is down/);
+    expect(await busyUntil()).toBeNull();
+  });
+
+  it("never clears a claim someone else took after its own ran out", async () => {
+    const pb = fakePorkbun({
+      // Ours runs out mid-work and another caller claims the pair.
+      updateNs: vi.fn(async () => { await claimFor("10 minutes"); return {}; }),
+    } as Partial<Porkbun>);
+    await advanceItem(sql, { porkbun: pb }, itemId);
+    expect(await busyUntil()).not.toBeNull();
+  });
+});
+
 describe("replacement steps through Hypertide", () => {
   const pair = ["ada.ns.cloudflare.com", "bob.ns.cloudflare.com"];
   const creds = { api_key: "sl", username: "ops@leadvance.io", password: "pw", oauth_link: "https://login.microsoftonline.com/x" };
@@ -186,6 +242,7 @@ describe("replacement steps through Hypertide", () => {
     expect((await step("step_smartlead")).s).toBe("running");
 
     await expect(approveHypertidePayment(sql, ctx, [itemId], "me")).rejects.toThrow(/Nothing to pay for/);
+    expect(ht.charge).toHaveBeenCalledTimes(1);
   });
 
   it("in dry-run, has Hypertide check the order without placing it", async () => {

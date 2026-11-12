@@ -2,18 +2,16 @@ import { BOUNCE_ORDER, bounceLine, type BounceReason } from "./bounces";
 
 // One domain's bounces in a range, for Performance: how many of each cause,
 // what the receiving servers actually said (similar notices counted
-// together), which campaigns they came from and which recipient providers
-// refused.
+// together) and which campaigns they came from.
 
 export type BounceDetail = {
   total: number;
   causes: { cause: BounceReason; n: number }[];
   lines: { cause: BounceReason; line: string; n: number; last: string }[];
   campaigns: { id: number | null; name: string; n: number; missing: number }[];
-  recipients: { esp: string; n: number; spam: number }[];
 };
 
-export type BounceEvent = { cause: string | null; text: string | null; remote: string | null; campaignId: number | null; campaignName: string | null; esp: string | null; at: Date };
+export type BounceEvent = { cause: string | null; text: string | null; remote: string | null; campaignId: number | null; campaignName: string | null; at: Date };
 
 /** The notice with its addresses, ids and numbers blanked, so the same rejection reads as one line. */
 export function lineKey(line: string) {
@@ -28,7 +26,6 @@ export function summarizeBounces(events: BounceEvent[]): BounceDetail {
   const causes = new Map<BounceReason, number>();
   const lines = new Map<string, { cause: BounceReason; line: string; n: number; last: string }>();
   const camps = new Map<string, { id: number | null; name: string; n: number; missing: number }>();
-  const recips = new Map<string, { esp: string; n: number; spam: number }>();
   for (const e of events) {
     const cause = (BOUNCE_ORDER.includes(e.cause as BounceReason) ? e.cause : "other") as BounceReason;
     causes.set(cause, (causes.get(cause) ?? 0) + 1);
@@ -43,17 +40,11 @@ export function summarizeBounces(events: BounceEvent[]): BounceDetail {
     c.n++;
     if (cause === "missing") c.missing++;
     camps.set(ck, c);
-    const esp = e.esp?.trim() || "Unknown";
-    const r = recips.get(esp) ?? { esp, n: 0, spam: 0 };
-    r.n++;
-    if (cause === "spam" || cause === "blocklist") r.spam++;
-    recips.set(esp, r);
   }
   return {
     total: events.length,
     causes: [...causes].map(([cause, n]) => ({ cause, n })).sort((a, b) => b.n - a.n || BOUNCE_ORDER.indexOf(a.cause) - BOUNCE_ORDER.indexOf(b.cause)),
     lines: [...lines.values()].sort((a, b) => b.n - a.n || b.last.localeCompare(a.last)).slice(0, 12),
     campaigns: [...camps.values()].sort((a, b) => b.n - a.n).slice(0, 8),
-    recipients: [...recips.values()].sort((a, b) => b.n - a.n).slice(0, 6),
   };
 }

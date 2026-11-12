@@ -8,6 +8,7 @@ import { MultiSelect } from "@/components/MultiSelect";
 import { Select } from "@/components/Select";
 import { Empty } from "@/components/ui";
 import { ago, int, summarize } from "@/lib/format";
+import { unfinishedRunText } from "@/lib/job-queue";
 import { PRESETS, fmt, presetRange, type PresetKey } from "@/lib/range";
 
 export type UntrackedItem = {
@@ -108,7 +109,8 @@ export function UntrackedView({ all, other, counts, lastSync, handledDays }: {
   const checkNow = () => start(async () => {
     const r = await runJobNow("untracked-replies");
     if (!r.ok) return void toast.error(r.error);
-    toast.success(`Smartlead read: ${summarize(r.data) ?? "done"}`);
+    if (!r.data.finished) return void toast(unfinishedRunText(r.data));
+    toast.success(`Smartlead read: ${summarize(r.data.detail) ?? "done"}`);
   });
 
   return (

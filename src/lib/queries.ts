@@ -1036,12 +1036,6 @@ export async function getStats(from: string, to: string): Promise<StatsData> {
   return { from, to, today, domains, days, slSyncedAt };
 }
 
-export type ReplyRow = {
-  id: number; occurredAt: Date; replyClass: import("./classify").ReplyClass | null; classOverridden: boolean;
-  preview: string | null; leadEmail: string | null; inboxEmail: string | null; domainId: string | null; domain: string | null;
-  campaignName: string | null; clientName: string | null; clientHue: number | null; recipientEsp: string | null;
-};
-
 /** One reply or bounce in full, for the detail panel: what they wrote and what was sent. */
 export type EventDetail = { body: string | null; sent: string | null; sentSubject: string | null; notice: string | null; remote: string | null; ccs: string[] };
 
@@ -1071,12 +1065,6 @@ export async function getEventDetail(id: number): Promise<EventDetail | null> {
   };
 }
 
-/** Monday to today, in the stats timezone. */
-export async function thisWeek() {
-  const { to } = await lastDays(1);
-  return { from: monday(to), to };
-}
-
 /**
  * Last week's Monday to today, in the stats timezone: what the pages open on,
  * since this week alone is only today on a Monday, before anything has gone out.
@@ -1096,10 +1084,10 @@ export async function lastDays(n: number) {
 
 /** A reply or bounce for the client → domain views. */
 export type EventRow = {
-  id: number; occurredAt: Date; replyClass: ReplyRow["replyClass"]; classOverridden: boolean;
+  id: number; occurredAt: Date; replyClass: import("./classify").ReplyClass | null; classOverridden: boolean;
   preview: string | null; subject: string | null; leadEmail: string | null; leadName: string | null; inboxEmail: string | null;
   domainId: string | null; domain: string | null; campaignName: string | null; sequence: number | null;
-  clientId: string | null; clientName: string | null; clientHue: number | null; recipientEsp: string | null;
+  clientId: string | null; clientName: string | null; clientHue: number | null;
   /** Smartlead's master-inbox link for the lead. */
   link: string | null;
   /** The bounce notice's text (bounces only), shortened. */
@@ -1126,7 +1114,7 @@ export async function getEvents(kind: "reply" | "bounce", from: string, to: stri
       select e.id, e.occurred_at, e.reply_class, e.class_overridden, e.preview, e.subject, e.lead_email,
         nullif(trim(e.payload->>'to_name'), '') as lead_name, e.inbox_email,
         e.domain_id, coalesce(d.name, e.domain_name) as domain, e.campaign_name, e.sequence_number as sequence,
-        coalesce(d.client_id, e.client_id) as client_id, c.name as client_name, c.hue as client_hue, e.recipient_esp, e.bounce_cause,
+        coalesce(d.client_id, e.client_id) as client_id, c.name as client_name, c.hue as client_hue, e.bounce_cause,
         coalesce(st.current, false) as current,
         coalesce(e.payload->>'ui_master_inbox_link', e.payload->>'app_url') as link,
         case when e.kind = 'bounce' then left(coalesce(e.payload->'bounce_message'->>'text', e.payload->>'description'), 600) end as bounce_text,
@@ -1387,7 +1375,7 @@ export async function getClientSending(id: string, from: string, to: string): Pr
 export async function getBounceDetail(domainId: string, from: string, to: string): Promise<import("./bounce-detail").BounceDetail> {
   const events = await sql<import("./bounce-detail").BounceEvent[]>`
     with tz as (select coalesce((select value #>> '{}' from settings where key = 'stats_timezone'), 'UTC') as z)
-    select e.bounce_cause as cause, e.occurred_at as at, e.campaign_id::int as campaign_id, e.campaign_name, e.recipient_esp as esp,
+    select e.bounce_cause as cause, e.occurred_at as at, e.campaign_id::int as campaign_id, e.campaign_name,
       left(coalesce(e.payload->'bounce_message'->>'text', e.payload->>'description', e.payload->>'bounce_reason'), 600) as text,
       left(replace(substring(regexp_replace(coalesce(e.payload->'bounce_message'->>'html', ''), '<[^>]+>', ' ', 'g')
         from '(?:Remote server returned an error|[[:<:]]Error:[[:space:]]+[45][0-9]{2}[ -]).{0,250}'), '&gt;', '>'), 300) as remote

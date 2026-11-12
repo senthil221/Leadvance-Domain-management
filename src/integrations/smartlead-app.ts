@@ -44,16 +44,6 @@ export function jwtProblem(token: string, now = Date.now()): string | null {
   return null;
 }
 
-/** When the token stops working, if it says. */
-export function jwtExpiry(token: string): Date | null {
-  try {
-    const exp = (JSON.parse(Buffer.from(token.split(".")[1], "base64url").toString("utf8")) as { exp?: unknown }).exp;
-    return typeof exp === "number" ? new Date(exp * 1000) : null;
-  } catch {
-    return null;
-  }
-}
-
 /** One campaign's blacklist scan (GET /api/email-campaigns/:id/black-list-domains). */
 export function readBlacklist(json: unknown): BlacklistEntry[] {
   return arr(json).map((e) => {

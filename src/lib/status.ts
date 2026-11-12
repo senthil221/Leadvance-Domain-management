@@ -127,13 +127,12 @@ export function replacementsRefreshSeconds(rows: readonly (Record<StepKey, StepS
 }
 
 /**
- * A replacement batch (replacement_batches.status). Only running → completed
- * happens today: the worker completes a batch once every pair is finished.
- * "partial" and "cancelled" are allowed by the column but nothing sets them;
- * queries still skip cancelled batches so a hand-cancelled one drops out.
+ * A replacement batch (replacement_batches.status). The worker completes a
+ * batch once every pair is finished, and cancelling a batch's last pair
+ * (cancelReplacement) cancels it. "partial" is allowed by the column but
+ * nothing sets it.
  */
 export const BATCH_STATUSES = ["running", "completed", "partial", "cancelled"] as const;
-export type BatchStatus = (typeof BATCH_STATUSES)[number];
 
 // Reply types, in the order the filter lists them. "human" is a person
 // replying with interest or a question, shown as Interested.

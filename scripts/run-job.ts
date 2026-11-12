@@ -1,4 +1,6 @@
-// Runs one worker job now and prints the result.
+// Runs one worker job here and now and prints the result, for local work and
+// debugging. It doesn't take the worker's lock: with a worker running, use
+// Run now in Settings instead, so the job can't run twice at once.
 // Usage: npm run job -- smartlead-accounts   (no name lists the jobs)
 import postgres from "postgres";
 import { JOBS, runJob } from "../src/jobs";

@@ -4,7 +4,7 @@ import { loadMigrations } from "../scripts/migrations";
 import { currentStep } from "../src/jobs/replacements";
 import { inboxAge } from "../src/lib/format";
 import { drainState, graceEndsOn, htOf, isDefaultNs, lifeOf, orderGrace, type Life } from "../src/lib/lifecycle";
-import { HT_CANCELLED, INBOX_STATUSES, NS_REQUEST_STATUSES, OPEN_QUEUE_STATUSES, SETTING_CHANGE_STATUSES } from "../src/lib/states";
+import { HT_CANCELLED, INBOX_STATUSES, NS_REQUEST_STATUSES, SETTING_CHANGE_STATUSES } from "../src/lib/states";
 import {
   BATCH_STATUSES, DOMAIN_STATUSES, FORCED_MOVES, NEXT_STATUSES, REPLACEABLE_STATUSES, REPLACEMENT_REASONS, RETIRED_STATUSES, STEP_STATUSES,
   canMove, canReplace, currentStepStatus, isStepFinished, replacementsRefreshSeconds, stepWaitsOnPerson, type DomainStatus, type StepStatus,
@@ -47,10 +47,6 @@ describe("states agree with the database", () => {
     expect(await checkValues("nameserver_requests", "status")).toEqual([...NS_REQUEST_STATUSES]);
     expect(await checkValues("inbox_setting_changes", "status")).toEqual([...SETTING_CHANGE_STATUSES]);
     expect(await checkValues("replacement_batches", "status")).toEqual([...BATCH_STATUSES]);
-    for (const s of OPEN_QUEUE_STATUSES) {
-      expect(NS_REQUEST_STATUSES).toContain(s);
-      expect(SETTING_CHANGE_STATUSES).toContain(s);
-    }
   });
 });
 

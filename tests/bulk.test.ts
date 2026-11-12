@@ -64,18 +64,17 @@ describe("bounce detail", () => {
     expect(lineKey("5.1.1 <a@x.com> user unknown [BN8P220]")).toBe(lineKey("5.1.1 <b@y.org> user unknown [ZZ1]"));
   });
 
-  it("sums causes, notices, campaigns and recipient providers", () => {
+  it("sums causes, notices and campaigns", () => {
     const at = new Date("2026-10-30T10:00:00Z");
-    const ev = (cause: string, text: string, campaignId: number, esp: string) => ({ cause, text, remote: null, campaignId, campaignName: `C${campaignId}`, esp, at });
+    const ev = (cause: string, text: string, campaignId: number) => ({ cause, text, remote: null, campaignId, campaignName: `C${campaignId}`, at });
     const d = summarizeBounces([
-      ev("missing", "550 5.1.1 a@x.com: Recipient address rejected: User unknown", 1, "Google"),
-      ev("missing", "550 5.1.1 b@y.com: Recipient address rejected: User unknown", 1, "Google"),
-      ev("spam", "550 5.7.1 Message rejected as spam", 2, "Outlook"),
+      ev("missing", "550 5.1.1 a@x.com: Recipient address rejected: User unknown", 1),
+      ev("missing", "550 5.1.1 b@y.com: Recipient address rejected: User unknown", 1),
+      ev("spam", "550 5.7.1 Message rejected as spam", 2),
     ]);
     expect(d.total).toBe(3);
     expect(d.causes).toEqual([{ cause: "missing", n: 2 }, { cause: "spam", n: 1 }]);
     expect(d.lines[0]).toMatchObject({ cause: "missing", n: 2 });
     expect(d.campaigns[0]).toMatchObject({ id: 1, n: 2, missing: 2 });
-    expect(d.recipients).toEqual([{ esp: "Google", n: 2, spam: 0 }, { esp: "Outlook", n: 1, spam: 1 }]);
   });
 });

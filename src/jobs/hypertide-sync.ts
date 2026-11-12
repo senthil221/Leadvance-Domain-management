@@ -1,6 +1,6 @@
 import type postgres from "postgres";
 import type { Hypertide, OrderStatus } from "../integrations/hypertide";
-import { advanceItem, type StepContext } from "./replacements";
+import { inboxOrderDone, type StepContext } from "./replacements";
 
 type Sql = postgres.Sql;
 
@@ -88,10 +88,7 @@ export async function syncHypertideOrders(sql: Sql, ctx: StepContext & { hyperti
     where rb.status = 'running' and ri.completed_at is null and ri.step_inboxes not in ('done', 'skipped')
       and (rb.manual_inboxes or ri.hypertide_order_id is null)
       and exists (select 1 from hypertide_orders o where o.domain_id = ri.new_domain_id and o.gone_at is null and o.status = 'Done')`;
-  for (const r of ready) {
-    await sql`update replacement_items set step_inboxes = 'done', note = null, last_error = null where id = ${r.id}`;
-    await advanceItem(sql, ctx, r.id as string, "hypertide sync");
-  }
+  for (const r of ready) await inboxOrderDone(sql, ctx, r.id as string);
 
   return { orders: valid.length, paid: paid.length, unpaid: unpaid.length, ...result, replacementsReady: ready.length };
 }

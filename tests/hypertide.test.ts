@@ -95,6 +95,26 @@ describe("createHypertide", () => {
     expect(order.nameservers.get("farnholt.com")).toHaveLength(2);
   });
 
+  it("never resends an order or a charge after a timeout, but retries a read", async () => {
+    const down = vi.fn(async () => { throw new DOMException("The operation timed out.", "TimeoutError"); });
+    const ht = createHypertide({ baseUrl: "https://ht.example/api/v1", apiKey: "k", dryRun: false, minSpacingMs: 0, fetchImpl: down as unknown as typeof fetch });
+    await expect(ht.createOrder({})).rejects.toThrow(/unreachable/);
+    await expect(ht.charge(["recX"])).rejects.toThrow(/unreachable/);
+    expect(down).toHaveBeenCalledTimes(2);
+    let n = 0;
+    const flaky = vi.fn(async () => { if (++n === 1) throw new TypeError("fetch failed"); return res({ success: true, data: { nameservers: { domains: [] } } }); });
+    const ht2 = createHypertide({ baseUrl: "https://ht.example/api/v1", apiKey: "k", dryRun: false, minSpacingMs: 0, fetchImpl: flaky as unknown as typeof fetch });
+    vi.useFakeTimers();
+    try {
+      const read = ht2.previewNameservers(["a.com"]);
+      await vi.runAllTimersAsync();
+      expect((await read).size).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+    expect(flaky).toHaveBeenCalledTimes(2);
+  });
+
   it("explains validation failures with their fields", async () => {
     const fetchImpl = vi.fn(async () => res({ success: false, error: "VALIDATION_FAILED", message: "Order validation failed",
       details: [{ field: "tool_credentials.api_key", reason: "api_key is required for Smartlead" }] }, 400));

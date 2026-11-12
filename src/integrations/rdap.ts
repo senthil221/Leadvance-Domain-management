@@ -79,10 +79,6 @@ function whois(host: string, query: string, timeoutMs: number): Promise<string> 
   });
 }
 
-/** Statuses that mean the registry is deleting the name. */
-const DELETING = ["redemption period", "pending delete", "pending restore"];
-export const isBeingDeleted = (status: readonly string[]) => status.some((s) => DELETING.includes(s.toLowerCase()));
-
 /** A WHOIS server saying we asked too often. */
 const WHOIS_LIMITED = /rate limit|limit exceeded|too many (?:requests|queries)|query quota|exceeded the (?:maximum|allowed)/i;
 

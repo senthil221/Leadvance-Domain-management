@@ -84,10 +84,12 @@ export async function processNameserverRequests(sql: Sql, ctx: NsContext, limit 
         await sql`update domains set nameservers = ${res.outcome === "done" ? res.now : ns}, nameservers_checked_at = now() where id = ${r.domainid}`;
         await finish(sql, id, "done", res.outcome === "pending" ? `${at} accepted the change; it can take a few minutes to show` : null, ns);
         // A replacement stuck on this domain's nameserver step (Hypertide's pair set
-        // here instead, e.g. pasted from its sheet) goes on to the next step.
+        // here instead, e.g. pasted from its sheet) goes on to the next step,
+        // unless a person is acting on it right now.
         await sql`
           update replacement_items set step_nameservers = 'done', note = null, last_error = null
-          where new_domain_id = ${r.domainid} and completed_at is null and step_nameservers in ('failed', 'manual')`;
+          where new_domain_id = ${r.domainid} and completed_at is null and step_nameservers in ('failed', 'manual')
+            and (busy_until is null or busy_until < now())`;
         count("done");
       } else {
         await finish(sql, id, "failed", `${at} accepted the change but still reports ${res.now.join(", ") || "no nameservers"}`, ns);
@@ -117,7 +119,7 @@ export type Records = { spf: boolean; dkim: boolean; dmarc: boolean; mx: boolean
  * - Domains whose registrar gave no purchase date get one from RDAP (domain age).
  */
 export async function checkNameservers(
-  sql: Sql, scope: RegistrarScope | Porkbun | null, batch = 150,
+  sql: Sql, scope: RegistrarScope | null, batch = 150,
   lookup = dnsLookup, registry: (name: string) => Promise<Registry> = rdapLookup, records: (name: string, esps: string[]) => Promise<Records> = recordsLookup,
 ) {
   const due = await sql`
@@ -130,8 +132,7 @@ export async function checkNameservers(
         when cardinality(d.nameservers) = 0 and d.nameservers_checked_at < now() - interval '6 hours' then 1 else 2 end,
       d.nameservers_checked_at, d.name
     limit greatest(${batch}::int, least(1000, (select count(*)::int from domains x where x.nameservers_checked_at is null and x.status not in ('burned', 'resting'))))`;
-  // Older callers pass the .env Porkbun on its own.
-  const accounts: RegistrarScope = scope && "getNs" in scope ? { porkbun: scope } : (scope ?? {});
+  const accounts: RegistrarScope = scope ?? {};
   let checked = 0, notAnswering = 0, empty = 0, failed = 0, dnsMissing = 0;
   const queue = [...due];
   const worker = async () => {

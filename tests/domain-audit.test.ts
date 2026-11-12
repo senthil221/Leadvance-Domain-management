@@ -3,7 +3,7 @@ import { PGLiteSocketServer } from "@electric-sql/pglite-socket";
 import postgres from "postgres";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { loadMigrations } from "../scripts/migrations";
-import { createRdap, isBeingDeleted, parseBootstrap, parseRdapDomain, parseWhois, type RdapClient } from "../src/integrations/rdap";
+import { createRdap, parseBootstrap, parseRdapDomain, parseWhois, type RdapClient } from "../src/integrations/rdap";
 import type { RegistrarAccount, RegistrarClient } from "../src/integrations/registrars";
 import { syncRegistrarDomains } from "../src/jobs/registrar-sync";
 import { checkRegistry, type HostPace } from "../src/jobs/registry-check";
@@ -41,7 +41,6 @@ describe("RDAP answers", () => {
       entities: [{ roles: ["registrar"], vcardArray: ["vcard", [["version", {}, "text", "4.0"], ["fn", {}, "text", "Unstoppable Domains Inc."]]] }],
     });
     expect(r).toEqual({ found: true, registrar: "Unstoppable Domains Inc.", expiresAt: "2027-02-06", status: ["client delete prohibited", "redemption period"] });
-    expect(isBeingDeleted((r as { status: string[] }).status)).toBe(true);
     const map = parseBootstrap({ services: [[["com", "net"], ["https://rdap.verisign.com/com/v1/"]], [["info"], ["http://x/", "https://rdap.identitydigital.services/rdap"]]] });
     expect(map.get("net")).toBe("https://rdap.verisign.com/com/v1/");
     expect(map.get("info")).toBe("https://rdap.identitydigital.services/rdap/");

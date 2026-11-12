@@ -6,6 +6,7 @@ import { toast } from "sonner";
 import { cancelPlacementTest, runJobNow } from "@/app/actions";
 import { Empty } from "@/components/ui";
 import { ago, int, summarize } from "@/lib/format";
+import { unfinishedRunText } from "@/lib/job-queue";
 import { VERDICT_META, WAIT_HOURS, emptyTally, placementVerdict, rate, type Tally } from "@/lib/placement-tests";
 import type { BatchRow } from "@/lib/placement-tests-db";
 
@@ -130,7 +131,8 @@ export function TestsView({ batches, readySeeds, onNew, lastRun }: {
   const checkNow = () => start(async () => {
     const r = await runJobNow("placement-tests");
     if (!r.ok) return void toast.error(r.error);
-    toast.success(`Placement tests: ${summarize(r.data) ?? "nothing to do"}`);
+    if (!r.data.finished) return void toast(unfinishedRunText(r.data));
+    toast.success(`Placement tests: ${summarize(r.data.detail) ?? "nothing to do"}`);
   });
 
   return (

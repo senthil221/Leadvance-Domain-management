@@ -99,10 +99,6 @@ export function parseIcemailMailbox(raw: unknown): IcemailMailbox | null {
   };
 }
 
-/** What one mailbox costs a month: yearly plans are spread over twelve. */
-export const monthlyCost = (cost: number | null, cycle: string | null) =>
-  cost == null ? null : cycle === "YEARLY" ? cost / 12 : cost;
-
 export function createIcemail({ apiKey, baseUrl = "https://app.icemail.ai/api/v1", sql, fetchImpl, minSpacingMs = 2100 }: Options) {
   // Read-only for now, so dry run never applies.
   const http = createHttp({ service: "icemail", baseUrl, sql, dryRun: false, fetchImpl, minSpacingMs });

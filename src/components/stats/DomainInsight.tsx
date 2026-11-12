@@ -61,21 +61,21 @@ export function DomainInsight({ id, name, call, trends, from, to, sent, bounces,
   onReplace?: () => void; replaceNote?: string;
 }) {
   const key = `${id}|${from}|${to}`;
-  const [detail, setDetail] = useState<BounceDetail | null>(() => cache.get(key) ?? null);
-  const [error, setError] = useState<string | null>(null);
+  // Keyed by range, so a new range never shows the last one's bounces or error.
+  const [loaded, setLoaded] = useState<{ key: string; detail?: BounceDetail; error?: string } | null>(null);
+  const detail = cache.get(key) ?? (loaded?.key === key ? loaded.detail : undefined) ?? null;
+  const error = loaded?.key === key ? loaded.error ?? null : null;
   useEffect(() => {
     if (cache.has(key)) return;
     let live = true;
     loadBounceDetail({ domainId: id, from, to }).then((r) => {
       if (r.ok) cache.set(key, r.data);
-      if (!live) return;
-      if (r.ok) setDetail(r.data); else setError(r.error);
+      if (live) setLoaded(r.ok ? { key, detail: r.data } : { key, error: r.error });
     });
     return () => { live = false; };
   }, [key, id, from, to]);
   const list = call ? advise(call) : [];
   const meta = call ? VERDICT_META[call.verdict] : null;
-  const refused = detail?.recipients.filter((r) => r.esp !== "Unknown") ?? [];
 
   return (
     <div className="st-insight">
@@ -115,20 +115,6 @@ export function DomainInsight({ id, name, call, trends, from, to, sent, bounces,
               </ul>
             ) : <p className="rv-none">{detail ? "None" : error ? "—" : "Loading…"}</p>}
           </section>
-          {/* Smartlead doesn't always say who the recipient's provider is: shown only when it does. */}
-          {refused.length ? (
-            <section className="st-in-card">
-              <h3 className="st-in-h">Refused by</h3>
-              <ul className="st-mini">
-                {detail!.recipients.map((r) => (
-                  <li key={r.esp}>
-                    <span className="st-mini-name">{r.esp}</span>
-                    <span className="st-mini-n"><b>{int(r.n)}</b>{r.spam ? <span className="text-danger-ink">{int(r.spam)} spam</span> : null}</span>
-                  </li>
-                ))}
-              </ul>
-            </section>
-          ) : null}
         </div>
 
         <section className="st-in-card st-in-main">

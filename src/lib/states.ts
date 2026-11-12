@@ -11,10 +11,6 @@
  * or disconnected again. "pending" is the column default and nothing sets it.
  */
 export const INBOX_STATUSES = ["pending", "connected", "disconnected", "removed"] as const;
-export type InboxStatus = (typeof INBOX_STATUSES)[number];
-
-/** Statuses a queued job is still open in: claimed rows go pending → running, then finish. */
-export const OPEN_QUEUE_STATUSES = ["pending", "running"] as const;
 
 /**
  * A queued nameserver change (nameserver_requests.status). The Set up dialog
@@ -23,7 +19,6 @@ export const OPEN_QUEUE_STATUSES = ["pending", "running"] as const;
  * set the pair at the registrar), dry_run (only logged) or failed.
  */
 export const NS_REQUEST_STATUSES = ["pending", "running", "done", "manual", "dry_run", "failed"] as const;
-export type NsRequestStatus = (typeof NS_REQUEST_STATUSES)[number];
 
 /**
  * A queued inbox setting change for Smartlead (inbox_setting_changes.status):
@@ -31,7 +26,6 @@ export type NsRequestStatus = (typeof NS_REQUEST_STATUSES)[number];
  * manual end: every change can go through the API.
  */
 export const SETTING_CHANGE_STATUSES = ["pending", "running", "done", "dry_run", "failed"] as const;
-export type SettingChangeStatus = (typeof SETTING_CHANGE_STATUSES)[number];
 
 // Hypertide orders (hypertide_orders.status and payment_status) are Hypertide's
 // own words, stored as given: Todo, In progress, Done, NPC or Cancelled, and

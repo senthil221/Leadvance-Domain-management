@@ -1,11 +1,12 @@
 import { jobSql as sql } from "@/lib/db";
+import { queueJob } from "@/lib/job-queue";
 
 // Icemail webhook: each workspace added in Settings has its own address,
 // https://<app>/api/webhooks/icemail/<token>, pasted into Icemail under
 // Settings → Notification → Add Webhook URL. Icemail doesn't sign deliveries,
 // so the token is the only proof. Each event is stored (app passwords
-// removed) and the Icemail sync is brought forward so the worker picks the
-// change up within a minute. The plain (job) connection keeps the JSON keys
+// removed) and the Icemail sync is queued so the worker picks the change up
+// as soon as it's free. The plain (job) connection keeps the JSON keys
 // exactly as Icemail sent them.
 
 /** The delivery without any app password, however deep. */
@@ -38,7 +39,7 @@ export async function POST(request: Request, ctx: RouteContext<"/api/webhooks/ic
   try {
     await sql`insert into icemail_events (account_id, event, workspace_id, payload)
       values (${account.id}, ${event}, ${workspace}, ${sql.json(scrub(body) as never)})`;
-    await sql`update job_state set last_started_at = null where job = 'icemail'`;
+    await queueJob(sql, "icemail");
   } catch (e) {
     console.error("icemail webhook failed", e);
     // 500 makes Icemail retry later.

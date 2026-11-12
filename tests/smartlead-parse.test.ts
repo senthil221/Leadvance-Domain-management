@@ -82,7 +82,7 @@ describe("createSmartlead", () => {
     const fetchImpl = vi.fn(async () => new Response(JSON.stringify([{ id: 1 }]), { status: 200 }));
     const sl = createSmartlead({ apiKey: "k", dryRun: true, minSpacingMs: 0, fetchImpl: fetchImpl as unknown as typeof fetch });
     expect(await sl.listCampaigns()).toEqual([{ id: 1 }]);
-    expect(await sl.updateDailyLimit(5, 20)).toEqual({ dryRun: true });
+    expect(await sl.updateSending(5, { max_email_per_day: 20, time_to_wait_in_mins: 10 })).toEqual({ dryRun: true });
     expect(fetchImpl).toHaveBeenCalledTimes(1);
     expect(String((fetchImpl.mock.calls[0] as unknown[])[0])).toContain("api_key=k");
   });
@@ -93,6 +93,23 @@ describe("createSmartlead", () => {
     const sl = createSmartlead({ apiKey: "k", minSpacingMs: 0, fetchImpl: fetchImpl as unknown as typeof fetch });
     expect(await sl.listCampaigns()).toEqual([]);
     expect(fetchImpl).toHaveBeenCalledTimes(2);
+  });
+
+  it("never sends a new campaign twice after a failure Smartlead may have acted on", async () => {
+    const down = vi.fn(async () => { throw new TypeError("fetch failed"); });
+    const sl = createSmartlead({ apiKey: "k", dryRun: false, minSpacingMs: 0, fetchImpl: down as unknown as typeof fetch });
+    await expect(sl.createCampaign("Test")).rejects.toThrow(/unreachable/);
+    expect(down).toHaveBeenCalledTimes(1);
+    const error = vi.fn(async () => new Response("Bad gateway", { status: 502 }));
+    const sl2 = createSmartlead({ apiKey: "k", dryRun: false, minSpacingMs: 0, fetchImpl: error as unknown as typeof fetch });
+    await expect(sl2.createCampaign("Test")).rejects.toThrow(/HTTP 502/);
+    expect(error).toHaveBeenCalledTimes(1);
+    // Refused outright, so it's safe to ask again.
+    let n = 0;
+    const limited = vi.fn(async () => (++n === 1 ? new Response("slow down", { status: 429, headers: { "retry-after": "0" } }) : new Response(JSON.stringify({ id: 7 }), { status: 200 })));
+    const sl3 = createSmartlead({ apiKey: "k", dryRun: false, minSpacingMs: 0, fetchImpl: limited as unknown as typeof fetch });
+    expect(await sl3.createCampaign("Test")).toEqual({ id: 7 });
+    expect(limited).toHaveBeenCalledTimes(2);
   });
 
   it("raises a readable error on a failed call", async () => {

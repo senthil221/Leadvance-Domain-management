@@ -1,35 +1,29 @@
-// Background worker: runs each job in src/jobs on its interval. Schedule
-// state lives in job_state, so restarts pick up where they left off. A
-// Postgres advisory lock makes sure only one worker runs jobs at a time.
+// Background worker: runs each job in src/jobs on its interval, one at a
+// time. Schedule state lives in job_state, so restarts pick up where they left
+// off. A Postgres advisory lock makes sure only one worker runs jobs at a time,
+// and it's the only place jobs run: the app asks for a run by clearing a job's
+// last start (src/lib/job-queue.ts), and such a job goes first.
 // Usage: npm run worker
 import postgres from "postgres";
-import { JOBS, jobContext, runJob } from "../src/jobs";
+import { JOBS, jobContext, runJob, type JobContext } from "../src/jobs";
+import { nextDueJob, type JobLast } from "../src/lib/job-queue";
 
 const url = process.env.DATABASE_URL;
 if (!url) throw new Error("DATABASE_URL is not set");
 
 const sql = postgres(url, { max: 4, onnotice: () => {} });
-const TICK_MS = 30_000;
+// How often an idle worker looks for due jobs and for runs asked for in the app.
+const TICK_MS = 10_000;
 const LOCK_KEY = 4_221_017; // any constant shared by all workers
 
 let stopping = false;
 const log = (msg: string, extra?: unknown) =>
   console.log(`${new Date().toISOString()} ${msg}${extra === undefined ? "" : " " + JSON.stringify(extra)}`);
 
-// A job skipped for a missing key is retried every 5 minutes, so adding the
-// key takes effect quickly instead of after the job's full interval.
-const SKIPPED_RETRY_MIN = 5;
-
-async function dueJobs() {
-  const state = await sql<{ job: string; last_started_at: Date | null; skipped: boolean }[]>`
-    select job, last_started_at, coalesce(last_detail ? 'skipped', false) as skipped from job_state`;
-  const last = new Map(state.map((s) => [s.job, s]));
-  return JOBS.filter((j) => {
-    const s = last.get(j.name);
-    if (!s?.last_started_at) return true;
-    const every = s.skipped ? Math.min(SKIPPED_RETRY_MIN, j.everyMinutes) : j.everyMinutes;
-    return Date.now() - s.last_started_at.getTime() >= every * 60_000;
-  });
+async function nextJob() {
+  const state = await sql<JobLast[]>`
+    select job, last_started_at as "lastStartedAt", coalesce(last_detail ? 'skipped', false) as skipped from job_state`;
+  return nextDueJob(JOBS, state);
 }
 
 async function main() {
@@ -46,15 +40,13 @@ async function main() {
 
   while (!stopping) {
     try {
-      const due = await dueJobs();
-      if (due.length) {
-        const ctx = await jobContext(sql);
-        for (const job of due) {
-          if (stopping) break;
-          const started = Date.now();
-          const r = await runJob(sql, job, ctx);
-          log(`${job.name} ${r.ok ? "ok" : "FAILED"} in ${Date.now() - started}ms`, r.ok ? r.detail : r.error);
-        }
+      // One context for a run of due jobs, so keys saved in Settings apply from the next.
+      let ctx: JobContext | null = null;
+      for (let job = await nextJob(); job && !stopping; job = await nextJob()) {
+        ctx ??= await jobContext(sql);
+        const started = Date.now();
+        const r = await runJob(sql, job, ctx);
+        log(`${job.name} ${r.ok ? "ok" : "FAILED"} in ${Date.now() - started}ms`, r.ok ? r.detail : r.error);
       }
     } catch (e) {
       log("tick failed", e instanceof Error ? e.message : String(e));

@@ -98,8 +98,6 @@ export function auditIssues(d: AuditRow, today = new Date().toISOString().slice(
   return out;
 }
 
-/** The first issue decides the group a domain is listed under. */
-export const mainIssue = (d: AuditRow, today?: string) => auditIssues(d, today)[0] ?? null;
 
 /** One line on what's wrong, in words. */
 export function issueText(k: IssueKey, d: AuditRow): string {

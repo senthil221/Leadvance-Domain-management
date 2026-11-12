@@ -1,6 +1,6 @@
-import { timingSafeEqual } from "node:crypto";
 import { sql } from "@/lib/db";
 import { ingestEvent } from "@/lib/ingest";
+import { tokenMatches } from "@/lib/sheet-token";
 import { parseSmartleadEvent } from "@/lib/smartlead-events";
 
 // Smartlead webhook: point EMAIL_SENT, EMAIL_REPLY and EMAIL_BOUNCE here as
@@ -8,15 +8,9 @@ import { parseSmartleadEvent } from "@/lib/smartlead-events";
 // Answers fast and always 200 for events we accept or ignore, so Smartlead
 // doesn't retry them; only a bad token or a database failure fails.
 
-function tokenOk(given: string) {
-  const expected = process.env.SMARTLEAD_WEBHOOK_TOKEN ?? "";
-  if (!expected || given.length !== expected.length) return false;
-  return timingSafeEqual(Buffer.from(given), Buffer.from(expected));
-}
-
 export async function POST(request: Request, ctx: RouteContext<"/api/webhooks/smartlead/[token]">) {
   const { token } = await ctx.params;
-  if (!tokenOk(token)) return new Response("Not found", { status: 404 });
+  if (!tokenMatches(token, process.env.SMARTLEAD_WEBHOOK_TOKEN)) return new Response("Not found", { status: 404 });
 
   let body: unknown;
   try {
@@ -31,7 +25,8 @@ export async function POST(request: Request, ctx: RouteContext<"/api/webhooks/sm
   // apart from one whose events we don't read (docker compose logs web).
   const types: Record<string, number> = {};
   try {
-    for (const item of items.slice(0, 500)) {
+    // Every item: answering 200 for a batch tells Smartlead all of it arrived.
+    for (const item of items) {
       const o = item && typeof item === "object" ? (item as Record<string, unknown>) : {};
       const type = String(o.event_type ?? o.event ?? o.type ?? "none");
       types[type] = (types[type] ?? 0) + 1;

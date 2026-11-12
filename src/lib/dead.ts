@@ -11,5 +11,3 @@ export const DEAD_CAUSES: Record<DeadCause, { label: string; hint: string }> = {
   deleted: { label: "All inboxes deleted in Smartlead", hint: "Every inbox on the domain was deleted in Smartlead" },
   dns_gone: { label: "DNS gone", hint: "Inboxes still show connected in Smartlead, but the domain's DNS doesn't answer: the zone or the registration is gone, so mail fails" },
 };
-
-export const isDeadCause = (v: unknown): v is DeadCause => typeof v === "string" && v in DEAD_CAUSES;

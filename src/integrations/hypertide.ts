@@ -100,7 +100,9 @@ export function createHypertide({ baseUrl, apiKey, sql, dryRun = true, minSpacin
           signal: AbortSignal.timeout(60_000),
         });
       } catch (e) {
-        if (attempt < 2) { await wait(2000 * 2 ** attempt); continue; }
+        // A timeout may come after Hypertide placed the order or took the
+        // payment, so those are never sent twice (the same rule as for 5xx).
+        if (attempt < 2 && !opts.sideEffect) { await wait(2000 * 2 ** attempt); continue; }
         const msg = e instanceof Error ? e.message : String(e);
         await log(method, path, null, started, msg, dry);
         throw new HypertideError(`Hypertide unreachable: ${msg}`, null, null);
@@ -138,7 +140,6 @@ export function createHypertide({ baseUrl, apiKey, sql, dryRun = true, minSpacin
 
   return {
     dryRun,
-    health: () => call("GET", "/health"),
 
     /** Reserves (or returns the already reserved) Cloudflare pair per domain. */
     async previewNameservers(domains: string[]) {

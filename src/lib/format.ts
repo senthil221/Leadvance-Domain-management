@@ -4,10 +4,6 @@ export function int(n: number | null | undefined) {
   return n == null ? "—" : intFmt.format(n);
 }
 
-export function pct(n: number | null | undefined, digits = 1) {
-  return n == null ? "—" : `${n.toFixed(digits)}%`;
-}
-
 export function initials(name: string) {
   const parts = name.replace(/[^\p{L}\p{N} ]/gu, " ").trim().split(/\s+/);
   return ((parts[0]?.[0] ?? "") + (parts[1]?.[0] ?? parts[0]?.[1] ?? "")).toUpperCase();

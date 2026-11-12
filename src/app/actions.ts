@@ -1,11 +1,13 @@
 "use server";
 
 import { refresh } from "next/cache";
+import { unstable_rethrow } from "next/navigation";
 import { after } from "next/server";
 import { z } from "zod";
 import { FIX_KINDS, type FixKind } from "@/lib/fix-queue";
 import { requireActor } from "@/lib/auth";
 import { jobSql, sql } from "@/lib/db";
+import { queueJob, waitForJob } from "@/lib/job-queue";
 import { hypertideAcceptsDomain } from "@/integrations/hypertide";
 import { SmartleadError } from "@/integrations/smartlead";
 import { getDomainDetail, listStorageCandidates } from "@/lib/queries";
@@ -18,9 +20,13 @@ export type ActionResult<T = undefined> = { ok: true; data: T } | { ok: false; e
 class UserError extends Error {}
 
 // Database rules raise check_violation / no_data_found with a message written
-// for people; anything else is unexpected and gets a generic message.
+// for people; anything else is unexpected and gets a generic message. The
+// sign-in redirect from requireActor() is thrown inside each action's try, so
+// it's passed on to Next here rather than reported as a failure.
 function fail(e: unknown): { ok: false; error: string } {
-  if (e instanceof UserError) return { ok: false, error: e.message };
+  unstable_rethrow(e);
+  // UserError, and a replacement someone else is moving right now (jobs/replacements PairBusyError).
+  if (e instanceof UserError || (e instanceof Error && e.name === "PairBusyError")) return { ok: false, error: e.message };
   const err = e as { code?: string; message?: string };
   if (err?.code === "23514" || err?.code === "P0002") return { ok: false, error: err.message ?? "Not allowed" };
   if (err?.code === "23505") return { ok: false, error: "That already exists" };
@@ -160,20 +166,6 @@ export async function markDomainsUsed(input: { ids: string[]; undo?: boolean }):
       await tx`select refresh_last_used()`;
       return changed;
     });
-    refresh();
-    return { ok: true, data: { changed: rows.length } };
-  } catch (e) {
-    return fail(e);
-  }
-}
-
-const assignClientInput = z.object({ ids, clientId: z.uuid().nullable() });
-
-export async function assignClient(input: z.input<typeof assignClientInput>): Promise<ActionResult<{ changed: number }>> {
-  try {
-    await requireActor();
-    const { ids, clientId } = assignClientInput.parse(input);
-    const rows = await sql`update domains set client_id = ${clientId} where id in ${sql(ids)} and status <> 'in_storage' returning id`;
     refresh();
     return { ok: true, data: { changed: rows.length } };
   } catch (e) {
@@ -590,7 +582,7 @@ export async function reclassifyReply(id: number, cls: import("@/lib/classify").
   }
 }
 
-const hostname = z.string().trim().toLowerCase().regex(/^[a-z0-9-]+(.[a-z0-9-]+)+.?$/, "Nameservers must be hostnames like ns1.example.com");
+const hostname = z.string().trim().toLowerCase().regex(/^[a-z0-9-]+(\.[a-z0-9-]+)+\.?$/, "Nameservers must be hostnames like ns1.example.com");
 const settingsInput = z.object({
   drainDays: z.number().int().min(1).max(60),
   storageLowThreshold: z.number().int().min(0).max(10_000),
@@ -616,15 +608,24 @@ export async function saveSettings(input: z.input<typeof settingsInput>): Promis
   }
 }
 
-export async function runJobNow(name: string): Promise<ActionResult<Record<string, unknown>>> {
+export type JobRunResult = { finished: true; detail: Record<string, unknown> | null } | { finished: false; started: boolean; noWorker?: boolean };
+
+/**
+ * Has the worker run a job next and waits up to five minutes for it, so two
+ * runs of one job never overlap. Past that it's still queued or running, and
+ * the page shows it when it finishes.
+ */
+export async function runJobNow(name: string): Promise<ActionResult<JobRunResult>> {
   try {
     await requireActor();
-    const { JOBS, runJob } = await import("@/jobs");
-    const job = JOBS.find((j) => j.name === name);
-    if (!job) return { ok: false, error: "Unknown job" };
-    const r = await runJob(jobSql, job);
+    const { JOBS } = await import("@/jobs");
+    if (!JOBS.some((j) => j.name === name)) return { ok: false, error: "Unknown job" };
+    const since = await queueJob(jobSql, name);
+    const r = await waitForJob(jobSql, name, since);
     refresh();
-    return r.ok ? { ok: true, data: r.detail } : { ok: false, error: r.error };
+    if (r.state === "no-worker") return { ok: true, data: { finished: false, started: false, noWorker: true } };
+    if (r.state === "waiting") return { ok: true, data: { finished: false, started: r.started } };
+    return r.ok ? { ok: true, data: { finished: true, detail: r.detail } } : { ok: false, error: r.error };
   } catch (e) {
     return fail(e);
   }
@@ -710,7 +711,7 @@ export async function approveHypertidePayment(itemIds: string[]): Promise<Action
     const { approveHypertidePayment: approve } = await import("@/jobs/replacements");
     const ctx = await jobContext(jobSql);
     if (!ctx.hypertide) return { ok: false, error: "Hypertide isn't connected" };
-    const r = await approve(sql, { porkbun: ctx.porkbun, registrars: ctx.registrars, hypertide: ctx.hypertide, hypertideCredentials: ctx.hypertideCredentials }, ids, actor);
+    const r = await approve(jobSql, { porkbun: ctx.porkbun, registrars: ctx.registrars, hypertide: ctx.hypertide, hypertideCredentials: ctx.hypertideCredentials }, ids, actor);
     refresh();
     return { ok: true, data: r };
   } catch (e) {
@@ -794,13 +795,7 @@ export async function setupDomains(input: z.input<typeof setupInput>): Promise<A
       }
       return { provisioning, nameservers, updated: v.ids.length };
     });
-    if (result.nameservers) {
-      after(async () => {
-        const { JOBS, runJob } = await import("@/jobs");
-        const job = JOBS.find((j) => j.name === "nameserver-requests");
-        if (job) await runJob(jobSql, job);
-      });
-    }
+    if (result.nameservers) kickJob("nameserver-requests");
     refresh();
     return { ok: true, data: result };
   } catch (e) {
@@ -846,13 +841,7 @@ export async function pasteNameservers(input: z.input<typeof pastedInput>): Prom
         skipped: found.filter((d) => !usable.includes(d)).map((d) => d.name),
       };
     });
-    if (result.queued.length) {
-      after(async () => {
-        const { JOBS, runJob } = await import("@/jobs");
-        const job = JOBS.find((j) => j.name === "nameserver-requests");
-        if (job) await runJob(jobSql, job);
-      });
-    }
+    if (result.queued.length) kickJob("nameserver-requests");
     refresh();
     return { ok: true, data: result };
   } catch (e) {
@@ -891,12 +880,9 @@ const inboxSettingsInput = z.object({
   warmupReplyRate: count(100).optional(),
 }).refine((v) => !("min" in v.dailyLimit) || v.dailyLimit.min <= v.dailyLimit.max, "The lowest daily limit can't be above the highest");
 
+/** Has the worker run this job next instead of on its schedule. If asking fails, it still runs on its schedule. */
 function kickJob(name: string) {
-  after(async () => {
-    const { JOBS, runJob } = await import("@/jobs");
-    const job = JOBS.find((j) => j.name === name);
-    if (job) await runJob(jobSql, job);
-  });
+  after(() => queueJob(jobSql, name).then(() => undefined, () => undefined));
 }
 
 /** Queues setting changes for Smartlead; the worker pushes them within a minute. */
@@ -1217,8 +1203,7 @@ export async function validateDns(domainIds: string[] = []): Promise<ActionResul
     }
     return { ok: true, data: { message: `Checking DNS on ${due.length} domain${due.length === 1 ? "" : "s"} now. ${smartlead}` } };
   } catch (e) {
-    if (e instanceof Error && /Smartlead|token/.test(e.message)) return { ok: false, error: e.message };
-    return fail(e);
+    return appError(e);
   }
 }
 
@@ -1664,14 +1649,11 @@ export async function reconnectInboxes(): Promise<ActionResult<{ message: string
     // Smartlead reconnects in the background; re-read the inboxes shortly after.
     after(async () => {
       await new Promise((r) => setTimeout(r, 45_000));
-      const { JOBS, runJob } = await import("@/jobs");
-      const job = JOBS.find((j) => j.name === "smartlead-accounts");
-      if (job) await runJob(jobSql, job);
+      await queueJob(jobSql, "smartlead-accounts").catch(() => undefined);
     });
     return { ok: true, data: { message: `Smartlead is reconnecting ${n} disconnected inbox${n === 1 ? "" : "es"}. Statuses refresh in about a minute.` } };
   } catch (e) {
-    if (e instanceof Error && /Smartlead|token/.test(e.message)) return { ok: false, error: e.message };
-    return fail(e);
+    return appError(e);
   }
 }
 
@@ -1729,7 +1711,16 @@ export async function saveRegistrarAccount(input: z.input<typeof registrarInput>
 
     const { syncRegistrarDomains } = await import("@/jobs/registrar-sync");
     const account = { id: row.id as string, provider, vendor: info.vendor, label, client: { ...client, listAll: async () => list } };
-    const r = await syncRegistrarDomains(jobSql, account);
+    let r;
+    try {
+      r = await syncRegistrarDomains(jobSql, account);
+    } catch (e) {
+      // The account is saved by now: say so, and let the next sync try again.
+      const msg = e instanceof Error ? e.message : String(e);
+      await sql`update registrar_accounts set last_synced_at = now(), last_ok = false, last_error = ${msg.slice(0, 1000)} where id = ${row.id}`;
+      refresh();
+      return { ok: true, data: { message: `Saved, but the first sync failed: ${msg}` } };
+    }
     await sql`update registrar_accounts set last_synced_at = now(), last_ok = true, last_error = null, domain_count = ${r.domains} where id = ${row.id}`;
     refresh();
     const found = `${r.domains} domain${r.domains === 1 ? "" : "s"}`;
@@ -1905,17 +1896,20 @@ export async function addDomainsToTag(input: { domainIds: string[]; tag: string;
     if (ctx.smartlead.dryRun) return { ok: true, data: { message: `${moved.data.message}. Dry run: not added to campaigns` } };
     const { addInboxesToCampaigns } = await import("@/jobs/replacements");
     let inboxes = 0;
-    const skipped: string[] = [];
+    // Why each domain that wasn't added wasn't, in its own words, counted.
+    const notAdded = new Map<string, number>();
     for (const id of v.domainIds) {
       try {
         inboxes += await addInboxesToCampaigns(jobSql, ctx.smartlead, id, v.campaignIds);
-      } catch {
-        skipped.push(id);
+      } catch (e) {
+        const why = e instanceof Error ? e.message : String(e);
+        notAdded.set(why, (notAdded.get(why) ?? 0) + 1);
       }
     }
     refresh();
     const c = `${v.campaignIds.length} campaign${v.campaignIds.length === 1 ? "" : "s"}`;
-    return { ok: true, data: { message: `${moved.data.message}. Added ${inboxes} inboxes to ${c}${skipped.length ? ` (${skipped.length} domain${skipped.length === 1 ? "" : "s"} skipped: no connected inbox)` : ""}` } };
+    const notes = [...notAdded].map(([why, n]) => `${n} domain${n === 1 ? "" : "s"} not added: ${why}`).join("; ");
+    return { ok: true, data: { message: `${moved.data.message}. Added ${inboxes} inboxes to ${c}${notes ? ` (${notes})` : ""}` } };
   } catch (e) {
     return appError(e);
   }

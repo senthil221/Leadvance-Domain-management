@@ -194,8 +194,62 @@ async function orderTemplate(sql: Sql): Promise<OrderTemplate> {
   };
 }
 
-/** Runs whatever the pair's current step can do on its own. */
-export async function advanceItem(sql: Sql, ctx: StepContext, id: string, actor = "system") {
+// Only one caller moves a pair at a time: the worker, or a person's click. Two
+// at once could place a second Hypertide order or replacement request. Each
+// claims the pair (replacement_items.busy_until) for the length of its work;
+// a claim left by a crash runs out after 15 minutes, while moving a pair takes
+// seconds, or a few minutes at worst.
+
+export class PairBusyError extends Error {
+  name = "PairBusyError";
+  constructor() {
+    super("This replacement is being worked on right now, by the background worker or another click. Try again in a minute.");
+  }
+}
+
+/** Runs fn with the pair claimed. Null, without running it, when someone else has the pair. */
+async function withPair<T>(sql: postgres.Sql, id: string, fn: () => Promise<T>): Promise<{ value: T } | null> {
+  const [claim] = await sql<{ claimed: Date }[]>`
+    update replacement_items set busy_until = date_trunc('milliseconds', now() + interval '15 minutes')
+    where id = ${id} and (busy_until is null or busy_until < now())
+    returning busy_until as claimed`;
+  if (!claim) {
+    const [exists] = await sql`select 1 as x from replacement_items where id = ${id}`;
+    if (exists) return null;
+    // No such pair: nothing to guard, and fn says it wasn't found.
+    return { value: await fn() };
+  }
+  try {
+    return { value: await fn() };
+  } finally {
+    // Only our own claim: if it ran out and someone else took the pair, theirs stays.
+    await sql`update replacement_items set busy_until = null where id = ${id} and busy_until = ${claim.claimed}`;
+  }
+}
+
+/** Runs fn with every one of these pairs claimed, or throws PairBusyError. */
+async function holdPairs<T>(sql: postgres.Sql, ids: string[], fn: () => Promise<T>): Promise<T> {
+  if (!ids.length) return fn();
+  const r = await withPair(sql, ids[0], () => holdPairs(sql, ids.slice(1), fn));
+  if (!r) throw new PairBusyError();
+  return r.value;
+}
+
+/** Runs whatever the pair's current step can do on its own. False when someone else is moving it. */
+export async function advanceItem(sql: postgres.Sql, ctx: StepContext, id: string, actor = "system") {
+  return Boolean(await withPair(sql, id, () => advance(sql, ctx, id, actor)));
+}
+
+/** A hand-placed order shows Done: the inbox step is finished. False when someone else is moving the pair (the next sync does it). */
+export async function inboxOrderDone(sql: postgres.Sql, ctx: StepContext, id: string) {
+  return Boolean(await withPair(sql, id, async () => {
+    await sql`update replacement_items set step_inboxes = 'done', note = null, last_error = null where id = ${id} and step_inboxes not in ('done', 'skipped')`;
+    await advance(sql, ctx, id, "hypertide sync");
+  }));
+}
+
+/** advanceItem's work, for a caller already holding the pair. */
+async function advance(sql: Sql, ctx: StepContext, id: string, actor: string) {
   for (let guard = 0; guard < 5; guard++) {
     const item = await loadItem(sql, id);
     if (!item || item.completed) return;
@@ -363,7 +417,11 @@ export async function addInboxesToCampaigns(sql: Sql, sl: Smartlead, domainId: s
  * From Replacements, once the new inboxes have warmed up: adds them to the
  * campaigns the old domain's inboxes are in, and the new domain goes Active.
  */
-export async function addReplacementToCampaigns(sql: Sql, sl: Smartlead, id: string, actor: string) {
+export function addReplacementToCampaigns(sql: postgres.Sql, sl: Smartlead, id: string, actor: string) {
+  return holdPairs(sql, [id], () => addToCampaigns(sql, sl, id, actor));
+}
+
+async function addToCampaigns(sql: Sql, sl: Smartlead, id: string, actor: string) {
   const item = await loadItem(sql, id);
   if (!item) throw new Error("Replacement not found");
   if (!finished(item.smartlead)) throw new Error("The new inboxes aren't in Smartlead yet");
@@ -382,7 +440,7 @@ export async function addReplacementToCampaigns(sql: Sql, sl: Smartlead, id: str
   // The Smartlead "New" tag comes off with the next tag pass.
   await sql`update replacement_items set sl_new_tagged_at = null where id = ${id} and sl_new_tagged_at is not null`;
   // Still mid-run: let the runner finish it (old domain, completion).
-  if (!item.completed) await advanceItem(sql, { porkbun: null, smartlead: sl }, id, actor);
+  if (!item.completed) await advance(sql, { porkbun: null, smartlead: sl }, id, actor);
   return { inboxes, campaigns: campaigns.length };
 }
 
@@ -392,10 +450,10 @@ export async function advanceReplacements(sql: postgres.Sql, ctx: StepContext) {
     select ri.id from replacement_items ri join replacement_batches rb on rb.id = ri.batch_id
     where rb.status = 'running' and ri.completed_at is null
     order by ri.created_at limit 200`;
-  let errors = 0;
+  let errors = 0, busy = 0;
   for (const r of open) {
     try {
-      await advanceItem(sql, ctx, r.id as string);
+      if (!(await advanceItem(sql, ctx, r.id as string))) busy++;
     } catch (e) {
       errors++;
       await sql`update replacement_items set last_error = ${e instanceof Error ? e.message : String(e)} where id = ${r.id}`;
@@ -409,7 +467,8 @@ export async function advanceReplacements(sql: postgres.Sql, ctx: StepContext) {
     update replacement_batches b set status = 'completed', completed_at = now()
     where b.status = 'running' and not exists (select 1 from replacement_items i where i.batch_id = b.id and i.completed_at is null)
     returning id`;
-  return { open: open.length, batchesCompleted: closed.length, errors, tagged: tagged?.tagged ?? 0, warmupsStarted };
+  // busy: pairs someone was moving from the app; they're picked up next run.
+  return { open: open.length, batchesCompleted: closed.length, errors, tagged: tagged?.tagged ?? 0, warmupsStarted, ...(busy ? { busy } : {}) };
 }
 
 /** A person acting on a pair's current step from the Replacements page. */
@@ -422,7 +481,11 @@ export async function advanceReplacements(sql: postgres.Sql, ctx: StepContext) {
  * domain goes back to storage, the next free domain takes its place (same
  * ending first, never used before first, then oldest), and the steps start again.
  */
-export async function swapNewDomain(sql: postgres.Sql, id: string, actor: string) {
+export function swapNewDomain(sql: postgres.Sql, id: string, actor: string) {
+  return holdPairs(sql, [id], () => swap(sql, id, actor));
+}
+
+async function swap(sql: postgres.Sql, id: string, actor: string) {
   const item = await loadItem(sql, id);
   if (!item) throw new Error("Replacement not found");
   const stuckRequest = Boolean(item.htop) && item.nameservers === "failed" && item.htopstatus !== "completed";
@@ -464,8 +527,8 @@ export async function swapNewDomain(sql: postgres.Sql, id: string, actor: string
  * the replacement, so it stays as it is. A swap request Hypertide still holds
  * is only cancelled in Hypertide's dashboard; openRequest says there is one.
  */
-export async function cancelReplacement(sql: postgres.Sql, id: string, actor: string) {
-  return sql.begin(async (tx) => {
+export function cancelReplacement(sql: postgres.Sql, id: string, actor: string) {
+  return holdPairs(sql, [id], () => sql.begin(async (tx) => {
     const [row] = await tx`select batch_id as batch from replacement_items where id = ${id} for update`;
     const item = row ? await loadItem(tx, id) : undefined;
     if (!item) throw new Error("Replacement not found");
@@ -482,20 +545,22 @@ export async function cancelReplacement(sql: postgres.Sql, id: string, actor: st
     await tx`update replacement_batches set status = 'cancelled', completed_at = now()
       where id = ${row.batch} and status = 'running' and not exists (select 1 from replacement_items where batch_id = ${row.batch})`;
     return { from: item.oldname, to: item.newname, openRequest, request: openRequest ? item.htop : null };
-  });
+  }));
 }
 
-export async function actOnStep(sql: Sql, ctx: StepContext, id: string, step: StepName, action: "done" | "retry" | "skip", actor: string) {
-  const item = await loadItem(sql, id);
-  if (!item) throw new Error("Replacement not found");
-  if (item.completed) throw new Error("This replacement is already finished");
-  if (currentStep(item) !== step) throw new Error("Finish the earlier steps first");
-  if (action === "retry") await setStep(sql, id, step, "pending", null);
-  else await setStep(sql, id, step, action === "done" ? "done" : "skipped", null);
-  await advanceItem(sql, ctx, id, actor);
-  const after = await loadItem(sql, id);
-  const s = after ? currentStep(after) : null;
-  return { next: s, completed: Boolean(after?.completed) };
+export function actOnStep(sql: postgres.Sql, ctx: StepContext, id: string, step: StepName, action: "done" | "retry" | "skip", actor: string) {
+  return holdPairs(sql, [id], async () => {
+    const item = await loadItem(sql, id);
+    if (!item) throw new Error("Replacement not found");
+    if (item.completed) throw new Error("This replacement is already finished");
+    if (currentStep(item) !== step) throw new Error("Finish the earlier steps first");
+    if (action === "retry") await setStep(sql, id, step, "pending", null);
+    else await setStep(sql, id, step, action === "done" ? "done" : "skipped", null);
+    await advance(sql, ctx, id, actor);
+    const after = await loadItem(sql, id);
+    const s = after ? currentStep(after) : null;
+    return { next: s, completed: Boolean(after?.completed) };
+  });
 }
 
 const errText = (e: unknown) => (e instanceof Error ? e.message : String(e));
@@ -726,22 +791,37 @@ export async function trackHypertideOrders(sql: postgres.Sql, ctx: StepContext &
   return { open: open.length, verified, done };
 }
 
-/** A person approved paying for these orders: charge once, then move on. */
-export async function approveHypertidePayment(sql: Sql, ctx: StepContext & { hypertide: Hypertide }, itemIds: string[], actor: string) {
-  const rows = await sql`
-    select ri.id, ri.hypertide_order_id as order from replacement_items ri
-    join replacement_batches rb on rb.id = ri.batch_id
-    where ri.id = any(${itemIds}::uuid[]) and rb.status = 'running' and ri.completed_at is null
-      and ri.hypertide_order_id is not null and ri.hypertide_paid_at is null`;
-  if (!rows.length) throw new Error("Nothing to pay for: these orders are already paid or not placed yet");
-  const r = await ctx.hypertide.charge(rows.map((x) => x.order as string), `Domain Engine replacement, approved by ${actor}`);
-  if (r.dryRun) return { charged: 0, dryRun: true };
-  const ids = rows.map((x) => x.id as string);
-  // Paid: the step is no longer waiting on a person, so the runner takes over.
-  await sql`update replacement_items set hypertide_paid_at = now(), hypertide_status = 'Paid', note = null,
-      step_inboxes = 'pending' where id = any(${ids}::uuid[])`;
-  for (const x of rows) await advanceItem(sql, ctx, x.id as string, actor);
-  return { charged: rows.length, dryRun: false };
+/**
+ * A person approved paying for these orders: charge once, then move on. The
+ * pairs are claimed and the unpaid rows locked while Hypertide charges, so a
+ * second approval (a double click, another tab) is turned away or, once this
+ * one is done, finds them paid.
+ */
+export function approveHypertidePayment(sql: postgres.Sql, ctx: StepContext & { hypertide: Hypertide }, itemIds: string[], actor: string) {
+  return holdPairs(sql, [...new Set(itemIds)], () => approvePayment(sql, ctx, itemIds, actor));
+}
+
+async function approvePayment(sql: postgres.Sql, ctx: StepContext & { hypertide: Hypertide }, itemIds: string[], actor: string) {
+  const ht = ctx.hypertide;
+  const paid = await sql.begin(async (tx) => {
+    const rows = await tx`
+      select ri.id, ri.hypertide_order_id as order from replacement_items ri
+      join replacement_batches rb on rb.id = ri.batch_id
+      where ri.id = any(${itemIds}::uuid[]) and rb.status = 'running' and ri.completed_at is null
+        and ri.hypertide_order_id is not null and ri.hypertide_paid_at is null
+      for update of ri`;
+    if (!rows.length) throw new Error("Nothing to pay for: these orders are already paid or not placed yet");
+    const r = await ht.charge(rows.map((x) => x.order as string), `Domain Engine replacement, approved by ${actor}`);
+    if (r.dryRun) return null;
+    const ids = rows.map((x) => x.id as string);
+    // Paid: the step is no longer waiting on a person, so the runner takes over.
+    await tx`update replacement_items set hypertide_paid_at = now(), hypertide_status = 'Paid', note = null,
+        step_inboxes = 'pending' where id = any(${ids}::uuid[])`;
+    return ids;
+  });
+  if (!paid) return { charged: 0, dryRun: true };
+  for (const id of paid) await advance(sql, ctx, id, actor);
+  return { charged: paid.length, dryRun: false };
 }
 
 /**
