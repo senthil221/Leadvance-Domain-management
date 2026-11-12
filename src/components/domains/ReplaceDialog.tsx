@@ -317,7 +317,7 @@ export function ReplaceDialog({
                           </span>
                           <ArrowRight size={14} strokeWidth={1.5} className="flex-none text-faint" />
                           {candidates === null ? <span className="rp-side"><Skeleton h={22} /></span> : skipped.has(t.id) ? (
-                            <span className="rp-side text-[12px] text-warning-ink" title="Hypertide only replaces domains whose order is Done. Replace this one by hand, or with I'll do it in Hypertide.">Skipped: order isn&apos;t Done</span>
+                            <span className="rp-side text-[length:var(--fs-12)] text-warning-ink" title="Hypertide only replaces domains whose order is Done. Replace this one by hand, or with I'll do it in Hypertide.">Skipped: order isn&apos;t Done</span>
                           ) : c ? (
                             <span className="rp-side">
                               <span className="list-title">{c.name}</span>
@@ -364,7 +364,7 @@ export function ReplaceDialog({
               <Check checked={autoWarmup} onChange={setAutoWarmup} label="Turn warmup on for the new inboxes" hint="As soon as they're in Smartlead, using the old domain's warmup numbers. The new domain is tagged New until it joins campaigns." />
               <Check checked={addToCampaigns} onChange={setAddToCampaigns} label="Add the new inboxes to campaigns straight away" hint="Only for domains that are already warmed up. Otherwise they warm first and you add them from Replacements when they're ready." />
               <Check checked={stopOldSending} onChange={setStopOldSending} label="Stop sending from the old domain when the new one is live" hint="Off by default: the old domain keeps sending through its grace period, so you still get every reply it can bring in, then retires when the grace period ends. Turn this on to set its daily limit to 0 once the new inboxes are in Smartlead." />
-              <p className="field-hint flex items-start gap-1.5">
+              <p className="field-hint flex items-start gap-2">
                 <Info size={13} className="mt-0.5 flex-none" aria-hidden />
                 <span>Done for you on every replacement: the old domains are tagged Replaced, here and on their Smartlead inboxes, and start their grace period; the new ones are tagged New while they warm up.</span>
               </p>

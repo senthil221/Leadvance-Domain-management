@@ -117,7 +117,7 @@ export function AuditView({ rows, accounts, progress, today }: { rows: AuditRow[
         </div>
         <div className="stat">
           <span className="stat-label"><Dot tone="success" />Registry checked</span>
-          <span className="stat-value">{int(progress.checked)}<span className="text-muted" style={{ fontSize: 14, fontWeight: 400 }}> / {int(progress.total)}</span></span>
+          <span className="stat-value">{int(progress.checked)}<span className="text-muted" style={{ fontSize: "var(--fs-13)", fontWeight: 400 }}> / {int(progress.total)}</span></span>
           <span className="stat-foot" title="Each domain is asked again every week">
             {unchecked ? `${int(unchecked)} still to ask, about ${Math.max(1, Math.ceil(unchecked / 540))}h` : progress.lastCheckedAt ? `last ${ago(progress.lastCheckedAt)}` : "not started"}
             {progress.failed ? ` · ${int(progress.failed)} couldn't be asked` : ""}

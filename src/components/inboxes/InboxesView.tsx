@@ -770,7 +770,7 @@ export function InboxesView({ inboxes, setups = [], clients, plans, smartleadCon
             <input type="checkbox" className="checkbox" checked={gSel} ref={(el) => { if (el) el.indeterminate = !gSel && gSome; }} onChange={() => {}} aria-label={`Select inboxes on ${g.domain}`} tabIndex={-1} />
           </td>
           <td className="col-first" style={{ paddingLeft: pad }}>
-            <span className="flex items-center gap-1.5">
+            <span className="flex items-center gap-2">
               <span className="st-n">{gi + 1}</span>
               <ChevronRight size={14} className="flex-none text-faint transition-transform" style={{ transform: isOpen ? "rotate(90deg)" : undefined }} />
               <DomainLink id={g.domainId} tab="inboxes" className="strong hover:underline">{g.domain}</DomainLink>
@@ -1012,7 +1012,7 @@ export function InboxesView({ inboxes, setups = [], clients, plans, smartleadCon
                       </td>
                       <td className="col-first">
                         <span className="wu-name">
-                          <span className="flex items-center gap-1.5">
+                          <span className="flex items-center gap-2">
                             <DomainLink id={g.domainId} tab="inboxes" className="strong hover:underline">{g.domain}</DomainLink>
                             <TagList tags={g.domainTags} graceDaysLeft={g.graceDaysLeft} />
                           </span>

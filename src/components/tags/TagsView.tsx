@@ -281,7 +281,7 @@ export function TagsView({ domains, campaigns, targets, dryRun, appProblem }: {
         {newTag == null ? (
           <button type="button" className="btn btn-sm" onClick={() => setNewTag("")}><Plus size={14} /> New tag</button>
         ) : (
-          <span className="flex items-center gap-1.5">
+          <span className="flex items-center gap-2">
             <input className="input" autoFocus value={newTag} onChange={(e) => setNewTag(e.target.value)} placeholder="Tag name, as in Smartlead"
               onKeyDown={(e) => { if (e.key === "Enter") createTag(); if (e.key === "Escape") setNewTag(null); }} aria-label="New tag name" />
             <button type="button" className="btn btn-sm btn-primary" disabled={pending || !newTag.trim()} onClick={createTag}>Add</button>

@@ -66,7 +66,7 @@ export function StepActions({ itemId, step, status, compact = false, canSwap = f
   // order already placed is never placed twice.
   const canRetry = status === "failed" || (status === "manual" && (step === "nameservers" || step === "inboxes"));
   return (
-    <span className="flex items-center gap-1.5">
+    <span className="flex items-center gap-2">
       {canRetry ? (
         <button type="button" className="btn btn-sm" disabled={pending} onClick={() => act("retry")}>
           <RotateCw size={12} className={pending ? "animate-spin" : undefined} /> Retry
