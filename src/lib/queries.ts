@@ -849,6 +849,8 @@ export type InboxListRow = InboxRow & {
   blDomain: number | null; blIp: number | null; blListings: { kind: string; list: string }[] | null; blCheckedAt: Date | null;
   /** The domain's order at its inbox provider; null when the provider's orders aren't synced. */
   domainOrder: OrderState | null; domainOrderStatus: string | null; domainProvider: string | null;
+  /** Days of grace left since the domain's order ended (cancelled, removed or moved); null when it hasn't, or the day it ended isn't known. */
+  domainOrderGraceLeft: number | null;
   /** The domain is the old one in a replacement still running: Replace isn't offered. */
   domainBeingReplaced: boolean;
   /** All the domain's inboxes in Smartlead (not deleted), and how many are disconnected, whatever a view shows. */
@@ -912,6 +914,7 @@ export async function listInboxes() {
       d.dns_spf, d.dns_dkim, d.dns_dmarc, d.dns_mx, d.dns_checked_at, d.nameservers_answering as ns_answering,
       d.blacklist_domain_count as bl_domain, d.blacklist_ip_count as bl_ip, d.blacklist_listings as bl_listings, d.blacklist_checked_at as bl_checked_at,
       ord.state as domain_order, ord.order_status as domain_order_status, ord.provider as domain_provider,
+      case when st.order_state in ('cancelled', 'gone', 'replaced') then st.grace_left end as domain_order_grace_left,
       dom.n as domain_inboxes, dom.disconnected as domain_disconnected,
       coalesce(st.current or st.order_live, false) as domain_in_scope
     from inboxes i join domains d on d.id = i.domain_id left join clients c on c.id = d.client_id

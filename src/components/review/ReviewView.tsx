@@ -465,7 +465,7 @@ export function ReviewView({ initial, clients }: { initial: ReviewData; clients:
                     </td>
                     <td>{r.provider ? <span className={`badge${r.provider === "Icemail" ? " tone-violet" : ""}`}>{r.provider}</span> : <span className="zero">—</span>}</td>
                     <td><EspBadge esp={r.esp} /></td>
-                    <td className="is-num" title={r.ageDays != null ? `Domain bought ${int(r.ageDays)} days ago` : undefined}>{r.connectedDays != null ? `${int(r.connectedDays)}d` : <span className="zero">—</span>}</td>
+                    <td className="is-num" title={r.connectedDays != null ? `First inbox added to Smartlead ${int(r.connectedDays)} days ago${r.ageDays != null ? `. The domain was bought ${int(r.ageDays)} days ago` : ""}` : "Smartlead gave no date for when its inboxes were added"}>{r.connectedDays != null ? `${int(r.connectedDays)}d` : <span className="zero">—</span>}</td>
                     <td><SlBadge c={{ slConnected: r.inboxes, slDisconnected: r.disconnected, slRemoved: r.removed }} /></td>
                     <td className="is-num">{r.sent ? int(r.sent) : <span className="zero">0</span>}</td>
                     <td className="is-num">{r.replies ? int(r.replies) : <span className={r.sent >= RULES.silentSent ? "metric is-bad" : "zero"}>0</span>}</td>

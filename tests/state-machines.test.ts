@@ -2,7 +2,8 @@ import { PGlite } from "@electric-sql/pglite";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { loadMigrations } from "../scripts/migrations";
 import { currentStep } from "../src/jobs/replacements";
-import { drainState, graceEndsOn, htOf, isDefaultNs, lifeOf, type Life } from "../src/lib/lifecycle";
+import { inboxAge } from "../src/lib/format";
+import { drainState, graceEndsOn, htOf, isDefaultNs, lifeOf, orderGrace, type Life } from "../src/lib/lifecycle";
 import { HT_CANCELLED, INBOX_STATUSES, NS_REQUEST_STATUSES, OPEN_QUEUE_STATUSES, SETTING_CHANGE_STATUSES } from "../src/lib/states";
 import {
   BATCH_STATUSES, DOMAIN_STATUSES, FORCED_MOVES, NEXT_STATUSES, REPLACEABLE_STATUSES, REPLACEMENT_REASONS, RETIRED_STATUSES, STEP_STATUSES,
@@ -164,6 +165,27 @@ describe("views over the lifecycle", () => {
     expect(drainState({ status: "burned", inboxCount: 52 })).toMatchObject({ label: "Burned · 52 inboxes left", tone: "danger" });
     expect(drainState({ status: "burned", inboxCount: 0 })).toMatchObject({ label: "Burned", tone: "faint" });
     expect(drainState({ status: "active" })).toBeNull();
+  });
+
+  it("orderGrace counts down from the day the order ended", () => {
+    const now = Date.parse("2026-11-12T15:00:00Z");
+    expect(orderGrace(12, now)).toMatchObject({ suffix: "12d left", tone: "warning" });
+    expect(orderGrace(12, now)?.note).toMatch(/until 24 Nov \(12 days left\)/);
+    expect(orderGrace(2, now)).toMatchObject({ suffix: "2d left", tone: "danger" });
+    expect(orderGrace(0, now)).toMatchObject({ suffix: "grace over", tone: "danger" });
+    expect(orderGrace(null, now)).toBeNull();
+  });
+
+  it("inboxAge counts from the day each inbox was added to Smartlead, as a range when they differ", () => {
+    const now = Date.parse("2026-11-12T15:00:00Z");
+    const ago = (d: number) => new Date(now - d * 86_400_000).toISOString();
+    // 56 inboxes from April, 48 from September: one domain, two batches.
+    const mixed = inboxAge([...Array(56).fill(ago(210)), ...Array(48).fill(ago(62)), null], now)!;
+    expect(mixed).toMatchObject({ oldest: 210, newest: 62, label: "2–7mo" });
+    expect(mixed.title).toMatch(/^Inboxes added to Smartlead: 56 on 16 Apr 2026 \(7mo ago\), 48 on 11 Sept? 2026 \(2mo ago\)$/);
+    expect(inboxAge([ago(33), ago(33)], now)).toMatchObject({ label: "33d", title: "Inboxes added to Smartlead on 10 Oct 2026, 33 days ago" });
+    expect(inboxAge([ago(20), ago(70)], now)?.label).toBe("20d–2mo");
+    expect(inboxAge([null, undefined], now)).toBeNull();
   });
 
   it("htOf reads both words for a cancelled Hypertide order the same way", () => {

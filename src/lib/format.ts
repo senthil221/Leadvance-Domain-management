@@ -60,6 +60,32 @@ export function summarize(detail: Record<string, unknown> | null | undefined) {
 /** An age in days as people say it: 45d, 8mo, 3.1y. */
 export const ageLabel = (days: number | null) => (days == null ? null : days < 60 ? `${days}d` : days < 730 ? `${Math.round(days / 30)}mo` : `${(days / 365).toFixed(1)}y`);
 
+/**
+ * How long a domain's inboxes have been in Smartlead, from the day each was
+ * added there (never from when the domain was bought). Inboxes added at
+ * different times read as a range, "2–7mo", and the title says how many came
+ * in on which day. Null when Smartlead gave no date for any of them.
+ */
+export function inboxAge(added: (Date | string | null | undefined)[], now = Date.now()) {
+  const days = added.filter((a): a is Date | string => !!a).map((a) => Math.floor((now - new Date(a).getTime()) / 86_400_000)).filter((d) => Number.isFinite(d));
+  if (!days.length) return null;
+  const oldest = Math.max(...days), newest = Math.min(...days);
+  const lo = ageLabel(newest)!, hi = ageLabel(oldest)!;
+  const unit = (s: string) => s.replace(/^[\d.]+/, "");
+  const label = lo === hi ? hi : unit(lo) === unit(hi) ? `${lo.slice(0, -unit(lo).length)}–${hi}` : `${lo}–${hi}`;
+  // How many inboxes came in on each day, oldest first.
+  const byDay = new Map<number, number>();
+  for (const d of days) byDay.set(d, (byDay.get(d) ?? 0) + 1);
+  const when = (d: number) => new Date(now - d * 86_400_000).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric", timeZone: "UTC" });
+  const list = [...byDay].sort((a, b) => b[0] - a[0]);
+  const parts = list.slice(0, 4).map(([d, k]) => `${k} on ${when(d)} (${ageLabel(d)} ago)`);
+  const more = list.length > 4 ? `, and ${list.slice(4).reduce((a, [, k]) => a + k, 0)} on ${list.length - 4} other days` : "";
+  const title = byDay.size === 1
+    ? `Inboxes added to Smartlead on ${when(oldest)}, ${oldest} days ago`
+    : `Inboxes added to Smartlead: ${parts.join(", ")}${more}`;
+  return { oldest, newest, label, title };
+}
+
 /** A date that keeps its width down a column: Mar 05, 2027. */
 export function fixedDate(d: Date | string | null | undefined) {
   if (!d) return "—";

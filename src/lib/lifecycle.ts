@@ -78,6 +78,23 @@ export function drainState(d: { status: string; graceDaysLeft?: number | null; i
   return null;
 }
 
+/**
+ * The countdown on a domain whose order at the inbox provider ended (cancelled,
+ * removed, or moved to another domain): its inboxes are counted as staying up
+ * for the grace period from the day the app first saw the order end. Null when
+ * that day isn't known (the order had ended before the app first saw it).
+ */
+export function orderGrace(graceLeft: number | null | undefined, now = Date.now()): { suffix: string; tone: Tone; note: string } | null {
+  if (graceLeft == null) return null;
+  const ends = graceEndsOn(graceLeft, now)!;
+  if (graceLeft <= 0) return { suffix: "grace over", tone: "danger", note: `Its grace period ended ${dayLabel(ends)}: its inboxes can go at any time.` };
+  return {
+    suffix: `${graceLeft}d left`,
+    tone: graceLeft <= 3 ? "danger" : "warning",
+    note: `Its inboxes are counted as staying up until ${dayLabel(ends)} (${graceLeft} day${graceLeft === 1 ? "" : "s"} left), the grace period from the day the order ended.`,
+  };
+}
+
 // Who hosts a domain's DNS, from its nameserver names.
 const HOSTS: [RegExp, string][] = [
   [/\.ns\.cloudflare\.com$/, "Cloudflare"], [/dnsimple/, "DNSimple"], [/porkbun/, "Porkbun"], [/domaincontrol\.com$/, "GoDaddy"],

@@ -21,8 +21,8 @@ import { InboxSettingsDialog } from "./InboxSettingsDialog";
 import { WarmingButtons } from "@/components/domains/DomainBulk";
 import { MoveToTagDialog } from "./MoveToTagDialog";
 import { PlansCard } from "./PlansCard";
-import { ageLabel, ago, int } from "@/lib/format";
-import { drainState } from "@/lib/lifecycle";
+import { ago, inboxAge, int } from "@/lib/format";
+import { drainState, orderGrace } from "@/lib/lifecycle";
 import type { ClientRow, InboxListRow, OrderState, PlanRow } from "@/lib/queries";
 import { DOMAIN_STATUSES, canReplace, isStepFinished, type DomainStatus } from "@/lib/status";
 import { Select } from "@/components/Select";
@@ -105,7 +105,7 @@ function reasonsOf(g: Group): Reason[] {
   else if (g.dns.state === "missing") r.push({ label: `DNS: ${g.dns.missing.join(", ")}`, tone: "warning" });
   if ((g.bl ?? 0) > 0) r.push({ label: `Blacklisted (${g.bl})`, tone: "danger" });
   if (g.alerts) r.push({ label: g.alerts === 1 ? "Health alert" : `${g.alerts} health alerts`, tone: "warning" });
-  if (g.order && g.order !== "active") r.push({ label: ORDER_META[g.order].label, tone: ORDER_META[g.order].tone });
+  if (g.order && g.order !== "active") { const o = orderState(g)!; r.push({ label: o.label, tone: o.tone }); }
   return r;
 }
 
@@ -117,6 +117,17 @@ const ORDER_META: Record<Exclude<OrderState, "active">, { label: string; tone: "
   missing: { label: "No order", tone: "danger", hint: "No live order for this domain at the provider" },
 };
 
+/** The order's state in words, with its grace countdown once it has ended: "Order cancelled · 12d left". */
+function orderState(g: Group): { label: string; tone: "danger" | "warning"; hint: string } | null {
+  if (!g.order || g.order === "active") return null;
+  const meta = ORDER_META[g.order];
+  const where = g.provider ? ` (${g.provider}${g.orderStatus ? `: ${g.orderStatus}` : ""})` : "";
+  const ended = g.order === "cancelled" || g.order === "gone" || g.order === "replaced";
+  const grace = ended ? orderGrace(g.orderGraceLeft) : null;
+  if (!grace) return { ...meta, hint: `${meta.hint}${where}${ended ? ". The app didn't see the day it ended, so there's no countdown" : ""}` };
+  return { label: `${meta.label} · ${grace.suffix}`, tone: grace.tone === "warning" ? "warning" : "danger", hint: `${meta.hint}${where}. ${grace.note}` };
+}
+
 /**
  * Why an active domain doesn't count as Active: its order at Hypertide or
  * Icemail isn't active, or some of its inboxes are disconnected in Smartlead.
@@ -124,8 +135,8 @@ const ORDER_META: Record<Exclude<OrderState, "active">, { label: string; tone: "
  */
 function notLive(g: Group): { label: string; tone: "danger" | "warning"; hint: string } | null {
   if (g.status !== "active") return null;
-  const where = g.provider ? ` (${g.provider}${g.orderStatus ? `: ${g.orderStatus}` : ""})` : "";
-  if (g.order && g.order !== "active") return { ...ORDER_META[g.order], hint: `${ORDER_META[g.order].hint}${where}` };
+  const o = orderState(g);
+  if (o) return o;
   const { inboxes: n, disconnected: off } = g.all;
   if (off) {
     return off === n
@@ -155,8 +166,9 @@ type Group = {
   sentToday: number; avgWait: number | null; pending: number; tags: string[]; esp: string | null;
   domainTags: string[]; graceDaysLeft: number | null; alerts: number;
   warm: { day: number; days: number; ready: boolean; left: number; pct: number } | null;
-  ageDays: number | null; dns: Dns; bl: number | null; blListings: string[]; blocked: number; paused: number; disconnected: number;
-  order: OrderState | null; orderStatus: string | null; provider: string | null;
+  /** Days since its oldest inbox was added to Smartlead; age is the same as a range, with the dates for a tooltip. */
+  ageDays: number | null; age: ReturnType<typeof inboxAge>; dns: Dns; bl: number | null; blListings: string[]; blocked: number; paused: number; disconnected: number;
+  order: OrderState | null; orderStatus: string | null; provider: string | null; orderGraceLeft: number | null;
   /** Every inbox on the domain, not just those the view shows. */
   all: { inboxes: number; disconnected: number };
   /** Inboxes by sender name, most first; `added` is the earliest inbox's age in days. */
@@ -204,19 +216,15 @@ function group(rows: InboxListRow[]): Group[] {
       graceDaysLeft: f.domainGraceDaysLeft,
       alerts: f.domainAlerts,
       warm: f.domainWarmupDoneAt ? null : warmupProgress(f.domainWarmupStartedAt, f.domainWarmupDays),
-      ageDays: (() => {
-        // Age counts from the first inbox added to Smartlead; registration only when no inbox has a date.
-        const t = list.map((i) => (i.smartleadCreatedAt ? new Date(i.smartleadCreatedAt).getTime() : NaN)).filter((x) => !Number.isNaN(x));
-        const born = t.length ? Math.min(...t) : f.domainBornAt ? new Date(f.domainBornAt).getTime() : null;
-        return born == null ? null : Math.floor((Date.now() - born) / 86_400_000);
-      })(),
+      // From the day each inbox was added to Smartlead, never the day the domain was bought.
+      ...(() => { const age = inboxAge(list.map((i) => i.smartleadCreatedAt)); return { age, ageDays: age?.oldest ?? null }; })(),
       dns: dnsOf(f),
       bl: f.blDomain == null && f.blIp == null ? null : (f.blDomain ?? 0) + (f.blIp ?? 0),
       blListings: (f.blListings ?? []).map((l) => `${l.list}${l.kind === "ip" ? " (IP)" : ""}`),
       blocked: list.filter((i) => warmupOf(i) === "blocked").length,
       paused: list.filter((i) => warmupOf(i) === "paused").length,
       disconnected: list.filter((i) => i.status === "disconnected").length,
-      order: f.domainOrder, orderStatus: f.domainOrderStatus, provider: f.domainProvider,
+      order: f.domainOrder, orderStatus: f.domainOrderStatus, provider: f.domainProvider, orderGraceLeft: f.domainOrderGraceLeft,
       all: { inboxes: f.domainInboxes, disconnected: f.domainDisconnected },
       senders: (() => {
         const by = new Map<string, { name: string; ids: string[]; born: number }>();
@@ -246,8 +254,8 @@ function setupGroup(s: SetupRow): Group {
     domainId: s.domainId, domain: s.domain, status: s.status, clientName: s.clientName, clientHue: s.clientHue,
     inboxes: [], count: 0, warmupOff: 0, avgWarmup: null, avgLimit: null, capacity: 0, avgRep: null, minRep: null, lowRep: 0, campaigns: 0, camp: { live: 0, paused: 0, liveNames: [], pausedNames: [] },
     sent7: 0, replies7: 0, human7: 0, bounces7: 0, sentToday: 0, avgWait: null, pending: 0, tags: [], esp: null,
-    domainTags: s.tags.filter((t) => MARK_TAGS.includes(t.toLowerCase())), graceDaysLeft: null, alerts: 0, warm: null, ageDays: null, dns,
-    bl: null, blListings: [], blocked: 0, paused: 0, disconnected: 0, order: null, orderStatus: null, provider: null,
+    domainTags: s.tags.filter((t) => MARK_TAGS.includes(t.toLowerCase())), graceDaysLeft: null, alerts: 0, warm: null, ageDays: null, age: null, dns,
+    bl: null, blListings: [], blocked: 0, paused: 0, disconnected: 0, order: null, orderStatus: null, provider: null, orderGraceLeft: null,
     all: { inboxes: 0, disconnected: 0 }, senders: [], setup: s,
   };
 }
@@ -278,6 +286,7 @@ function roll(key: string, label: string, clientName: string | null, domains: Gr
     clientHue: domains[0].clientHue,
     inboxes: list,
     ageDays: null,
+    age: null,
     domainTags: [],
     graceDaysLeft: null,
     warm: null,
@@ -787,7 +796,7 @@ export function InboxesView({ inboxes, setups = [], clients, plans, smartleadCon
               <Rep value={g.avgRep} low={g.lowRep} />
             </td>
           ) : null}
-          {on("age") ? <td className="is-num" title={g.ageDays != null ? `${g.ageDays} days since the first inbox was added to Smartlead` : "Not known yet"}>{ageLabel(g.ageDays) ?? <span className="zero">—</span>}</td> : null}
+          {on("age") ? <td className="is-num" title={g.age?.title ?? "Smartlead gave no date for when its inboxes were added"}>{g.age?.label ?? <span className="zero">—</span>}</td> : null}
           {on("dns") ? <td><DnsCell dns={g.dns} /></td> : null}
           {on("warmupState") ? <td><WarmupCell blocked={g.blocked} paused={g.paused} total={g.count} /></td> : null}
           {on("blacklist") ? <td><BlacklistCell count={g.bl} listings={g.blListings} /></td> : null}
@@ -820,7 +829,7 @@ export function InboxesView({ inboxes, setups = [], clients, plans, smartleadCon
             {on("today") ? <td className="is-num st-vol">{i.dailySent ? int(i.dailySent) : <span className="zero">0</span>}</td> : null}
             {on("gap") ? <td className="is-num st-vol">{i.minWaitMins != null ? `${i.minWaitMins}m` : <span className="zero">—</span>}</td> : null}
             {on("rep") ? <td className="is-num st-health st-start"><Rep value={i.warmupReputation} low={0} /></td> : null}
-            {on("age") ? <td className="is-num text-muted" title="Inbox added to Smartlead">{i.smartleadCreatedAt ? ageLabel(Math.floor((Date.now() - new Date(i.smartleadCreatedAt).getTime()) / 86_400_000)) : <span className="zero">—</span>}</td> : null}
+            {on("age") ? (() => { const age = inboxAge([i.smartleadCreatedAt]); return <td className="is-num text-muted" title={age?.title.replace("Inboxes", "Inbox") ?? "Smartlead gave no date for when it was added"}>{age?.label ?? <span className="zero">—</span>}</td>; })() : null}
             {on("dns") ? <td /> : null}
             {on("warmupState") ? <td><WarmupCell blocked={warmupOf(i) === "blocked" ? 1 : 0} paused={warmupOf(i) === "paused" ? 1 : 0} total={1} reason={i.warmupBlockedReason} /></td> : null}
             {on("blacklist") ? <td /> : null}
@@ -1011,7 +1020,7 @@ export function InboxesView({ inboxes, setups = [], clients, plans, smartleadCon
                         </span>
                       </td>
                       <td className="wu-col-track"><WarmTrack g={g} /></td>
-                      <td className="is-num" title={g.ageDays != null ? `${g.ageDays} days since the first inbox was added to Smartlead` : "Not known yet"}>{g.ageDays == null ? <span className="zero">—</span> : `${g.ageDays}d`}</td>
+                      <td className="is-num" title={g.age?.title ?? "Smartlead gave no date for when its inboxes were added"}>{g.age == null ? <span className="zero">—</span> : g.age.oldest === g.age.newest ? `${g.age.oldest}d` : `${g.age.newest}–${g.age.oldest}d`}</td>
                       <td><DnsCell dns={g.dns} /></td>
                       <td>{g.count ? <WarmupCell blocked={g.blocked} paused={g.paused} total={g.count} /> : <span className="zero" title="No inbox in Smartlead yet">—</span>}</td>
                       <td className="is-num">{g.avgWarmup == null ? <span className="zero">—</span> : Math.round(g.avgWarmup)}</td>
@@ -1080,7 +1089,7 @@ export function InboxesView({ inboxes, setups = [], clients, plans, smartleadCon
                           })}
                         </span>
                       </td>
-                      <td className="is-num" title={g.ageDays != null ? `${g.ageDays} days since the first inbox was added to Smartlead` : "Not known yet"}>{ageLabel(g.ageDays) ?? <span className="zero">—</span>}</td>
+                      <td className="is-num" title={g.age?.title ?? "Smartlead gave no date for when its inboxes were added"}>{g.age?.label ?? <span className="zero">—</span>}</td>
                       <td><Tags tags={g.tags.filter((t) => !isMark(t))} /></td>
                       <td><DomainState g={g} /></td>
                     </tr>
@@ -1136,7 +1145,7 @@ export function InboxesView({ inboxes, setups = [], clients, plans, smartleadCon
                         </td>
                       ) : null}
                       <td className="is-num">{int(g.count)}</td>
-                      <td className="is-num" title={g.ageDays != null ? `${g.ageDays} days since the first inbox was added to Smartlead` : "Not known yet"}>{ageLabel(g.ageDays) ?? <span className="zero">—</span>}</td>
+                      <td className="is-num" title={g.age?.title ?? "Smartlead gave no date for when its inboxes were added"}>{g.age?.label ?? <span className="zero">—</span>}</td>
                       <td><WarmupCell blocked={g.blocked} paused={g.paused} total={g.count} /></td>
                       <td className="is-num" title={g.minRep != null ? `Lowest ${g.minRep.toFixed(0)}` : undefined}><Rep value={g.avgRep} low={g.lowRep} /></td>
                     </tr>
