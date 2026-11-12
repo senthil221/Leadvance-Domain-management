@@ -34,13 +34,13 @@ export const PROVIDERS: Record<Provider, ProviderInfo> = {
     label: "Spaceship",
     vendor: "Spaceship",
     fields: [{ key: "apiKey", label: "API key" }, { key: "apiSecret", label: "API secret" }],
-    where: "API Manager → New API key, with domains:read and domains:write",
+    where: "API Manager → New API key, with domains:read and domains:write (and domains:billing, contacts:read and asyncoperations:read to buy domains)",
   },
   porkbun: {
     label: "Porkbun",
     vendor: "Porkbun",
     fields: [{ key: "apiKey", label: "API key", prefix: "pk1_" }, { key: "secretKey", label: "Secret key", prefix: "sk1_" }],
-    where: "porkbun.com/account/api → Create API key (Manage, but no purchases)",
+    where: "porkbun.com/account/api → Create API key (Manage; add the purchase permission to buy domains)",
     note: "Turn on API access for each domain at Porkbun so nameservers can be changed.",
   },
 };

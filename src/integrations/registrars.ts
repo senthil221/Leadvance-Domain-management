@@ -2,7 +2,8 @@ import type postgres from "postgres";
 import { open } from "../lib/secret-box";
 import { API_REGISTRARS, PROVIDERS, isProvider, type Provider } from "../lib/registrar-providers";
 import { createDynadot } from "./dynadot";
-import { createPorkbun, sameNameservers, type Porkbun } from "./porkbun";
+import type { Buyer } from "./buy";
+import { createPorkbun, porkbunBuyer, sameNameservers, type Porkbun } from "./porkbun";
 import { createSpaceship } from "./spaceship";
 import { createUnstoppable } from "./unstoppable";
 
@@ -29,6 +30,8 @@ export type RegistrarClient = {
   getNs(domain: string): Promise<string[]>;
   /** pending: the registrar queued the change, so a read-back may lag. */
   updateNs(domain: string, ns: string[]): Promise<{ pending: boolean }>;
+  /** Buys new domains from the account's balance. */
+  buyer?: Buyer;
 };
 
 export type RegistrarAccount = { id: string | null; provider: Provider; vendor: string; label: string; client: RegistrarClient };
@@ -40,6 +43,7 @@ export function porkbunClient(pb: Porkbun): RegistrarClient {
     listAll: async () => (await pb.listAll()).map((d) => ({ ...d, nameservers: null })),
     getNs: (d) => pb.getNs(d),
     updateNs: async (d, ns) => { await pb.updateNs(d, ns); return { pending: false }; },
+    buyer: porkbunBuyer(pb),
   };
 }
 

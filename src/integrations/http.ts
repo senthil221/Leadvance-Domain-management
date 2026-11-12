@@ -29,6 +29,8 @@ export type Request = {
   headers?: Record<string, string>;
   body?: unknown;
   write?: boolean;
+  /** Called with the response headers of a successful reply (an async operation id, say). */
+  onHeaders?: (headers: Headers) => void;
 };
 
 export function createHttp({ service, baseUrl, sql, dryRun = true, minSpacingMs = 300, timeoutMs = 60_000, fetchImpl = fetch }: HttpOptions) {
@@ -85,6 +87,7 @@ export function createHttp({ service, baseUrl, sql, dryRun = true, minSpacingMs 
         throw new ApiError(`${service} ${req.path.split("?")[0]} failed: ${problem}${hint}`, res.status);
       }
       await log(method, req.path, res.status, started, null);
+      req.onHeaders?.(res.headers);
       return json as T;
     }
   }

@@ -1,4 +1,4 @@
-import { Activity, ArrowLeftRight, BarChart3, CalendarClock, CircleCheck, ClipboardCheck, Columns2, FlaskConical, Globe, Inbox, LayoutGrid, ListChecks, MailQuestion, MailX, MessageSquareText, Settings2, ShieldCheck, Tags, Users, Wrench, type LucideIcon } from "lucide-react";
+import { Activity, ArrowLeftRight, BarChart3, CalendarClock, CircleCheck, ClipboardCheck, Columns2, FlaskConical, Globe, Inbox, LayoutGrid, ListChecks, MailQuestion, MailX, MessageSquareText, Settings2, ShieldCheck, ShoppingCart, Tags, Users, Wrench, type LucideIcon } from "lucide-react";
 
 export type NavItem = { href: string; label: string; icon: LucideIcon; key: string };
 export type NavGroup = NavItem & { pages: NavItem[] };
@@ -13,6 +13,7 @@ export const PAGES = {
   inventory: { href: "/inventory", label: "Domains", icon: Globe, key: "d" },
   replacements: { href: "/replacements", label: "Replacements", icon: ArrowLeftRight, key: "r" },
   freeDomains: { href: "/free-domains", label: "Free domains", icon: CircleCheck, key: "f" },
+  buy: { href: "/buy", label: "Buy domains", icon: ShoppingCart, key: "y" },
   expiring: { href: "/expiring", label: "Expiring", icon: CalendarClock, key: "e" },
   audit: { href: "/audit", label: "Audit", icon: ShieldCheck, key: "k" },
   inboxes: { href: "/inboxes", label: "Smartlead", icon: Inbox, key: "i" },
@@ -42,7 +43,7 @@ export const NAV: { label: string; items: NavGroup[] }[] = [
       { ...P.replace, pages: [] },
       { ...P.clients, pages: [] },
       { ...P.inboxes, pages: [{ ...P.inboxes, label: "Inboxes" }, P.tags, P.untracked] },
-      { ...P.inventory, pages: [{ ...P.inventory, label: "Inventory" }, P.replacements, P.freeDomains, P.expiring, P.audit] },
+      { ...P.inventory, pages: [{ ...P.inventory, label: "Inventory" }, P.replacements, P.freeDomains, P.buy, P.expiring, P.audit] },
       { ...P.review, label: "Performance", icon: BarChart3, pages: [P.review, P.compare, P.stats, P.replies, P.bounces, P.placement] },
     ],
   },
