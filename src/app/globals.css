@@ -289,6 +289,9 @@ a, button, input, select, textarea, td, tr {
 .page-title { font-size: var(--fs-16); font-weight: 600; letter-spacing: -0.01em; color: var(--ink); white-space: nowrap; }
 .page-sub { color: var(--faint); font-size: var(--fs-12); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .section-tabs { display: inline-flex; gap: var(--s-2); padding: var(--s-2); border-radius: 8px; background: var(--surface-3); border: 1px solid var(--line); }
+/* Wider than the header on narrow screens: the tabs scroll on their own instead of the page. */
+.section-tabs { max-width: 100%; overflow-x: auto; scrollbar-width: none; }
+.section-tabs::-webkit-scrollbar { display: none; }
 .section-tabs a { height: 24px; display: inline-flex; align-items: center; padding: 0 var(--s-12); border-radius: 6px; color: var(--muted); font-size: var(--fs-12); white-space: nowrap; }
 .section-tabs a:hover { color: var(--ink); }
 .section-tabs a[aria-current="page"] { background: var(--surface); color: var(--ink); font-weight: 500; box-shadow: 0 1px 2px color-mix(in srgb, var(--shade) 6%, transparent), 0 0 0 1px var(--line); }
