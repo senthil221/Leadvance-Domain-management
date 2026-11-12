@@ -198,7 +198,7 @@ export function NewTestSheet({ open, onClose, candidates, readySeeds, saturday, 
                     <textarea className="textarea" rows={7} value={copy.body} disabled={copy.loading}
                       onChange={(e) => setCopies((c) => ({ ...c, [g.key]: { ...copyOf(g.key), body: e.target.value } }))} />
                     {vars.length ? (
-                      <span className="field-hint flex items-start gap-1.5" style={{ color: "var(--warning-ink)" }}>
+                      <span className="field-hint flex items-start gap-2" style={{ color: "var(--warning-ink)" }}>
                         <AlertTriangle size={13} className="mt-0.5 flex-none" />
                         Seeds have only a first name and company, so {vars.map((v) => `{{${v}}}`).join(", ")} will go out empty. Edit them out if that reads badly.
                       </span>

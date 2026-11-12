@@ -96,7 +96,7 @@ export function WarmupProgramForm({ program }: { program: WarmupProgram }) {
         });
       }}
     >
-      <label className="flex cursor-pointer items-start gap-2.5">
+      <label className="flex cursor-pointer items-start gap-3">
         <input type="checkbox" className="checkbox mt-1" checked={on} onChange={(e) => setOn(e.target.checked)} />
         <span className="flex flex-col">
           <span className="strong">Start warm-up automatically once DNS is valid</span>

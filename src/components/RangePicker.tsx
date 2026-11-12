@@ -22,20 +22,20 @@ export function RangePicker({ from, to, today, loading, onChange, initial = matc
   const label = from === to ? nice(from) : `${nice(from)} – ${nice(to)} · ${daysBetween(from, to)} days`;
   return (
     <>
-      <label className="flex items-center gap-1.5">
+      <label className="flex items-center gap-2">
         <CalendarDays size={14} className="text-faint" />
         <Select className="select" style={{ width: 130 }} value={preset} onChange={(e) => pick(e.target.value as PresetKey)} aria-label="Date range">
           {PRESETS.map((p) => <option key={p.key} value={p.key}>{p.label}</option>)}
         </Select>
       </label>
       {preset === "custom" ? (
-        <span className="flex items-center gap-1.5">
+        <span className="flex items-center gap-2">
           <input type="date" className="input" style={{ width: 138 }} value={f} max={today} onChange={(e) => setF(e.target.value)} aria-label="From" />
           <span className="text-faint">–</span>
           <input type="date" className="input" style={{ width: 138 }} value={t} max={today} onChange={(e) => setT(e.target.value)} aria-label="To" />
           <button type="button" className="btn btn-sm btn-primary" disabled={!f || !t || loading} onClick={() => onChange(f, t)}>Apply</button>
         </span>
-      ) : <span className="text-[12.5px] text-muted">{label}</span>}
+      ) : <span className="text-[length:var(--fs-12)] text-muted">{label}</span>}
       {loading ? <Loader size={14} className="animate-spin text-faint" aria-label="Loading" /> : null}
     </>
   );

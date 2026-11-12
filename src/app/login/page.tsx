@@ -17,7 +17,7 @@ export default function LoginPage({ searchParams }: PageProps<"/login">) {
         <Suspense fallback={<LoginForm next="/" />}>
           <Form searchParams={searchParams} />
         </Suspense>
-        <p className="text-center text-[12px] text-faint">Accounts are created by your admin.</p>
+        <p className="text-center text-[length:var(--fs-12)] text-faint">Accounts are created by your admin.</p>
       </div>
     </main>
   );

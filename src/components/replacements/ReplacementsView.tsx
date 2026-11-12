@@ -162,7 +162,7 @@ function Row({ r, now, graceDays, smartleadLive, isOpen, onToggle }: {
     <Fragment>
       <tr className={`is-clickable ${state === "attention" ? "rpl-attn-row" : ""}`} aria-expanded={isOpen} onClick={onToggle}>
         <td className="col-first">
-          <span className="flex items-center gap-1.5">
+          <span className="flex items-center gap-2">
             <ChevronRight size={13} className="flex-none text-faint transition-transform" style={{ transform: isOpen ? "rotate(90deg)" : undefined }} />
             <DomainLink id={r.newDomainId} tab="inboxes" className="strong hover:underline">{r.newDomain}</DomainLink>
             {state === "live" ? null : r.ready ? <span className="rpl-tag is-ready" title="Warmed up: ready to add to campaigns">Ready</span> : <span className="rpl-tag is-new">New</span>}
@@ -176,7 +176,7 @@ function Row({ r, now, graceDays, smartleadLive, isOpen, onToggle }: {
         </td>
         <td><ClientCell name={r.clientName} hue={r.clientHue} /></td>
         <td>
-          <span className="flex items-center gap-2.5">
+          <span className="flex items-center gap-3">
             <span className="rpl-steps" aria-hidden="true">
               {STEPS.map((s) => {
                 const v = r[STEP_COL[s]];

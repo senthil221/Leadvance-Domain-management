@@ -16,7 +16,7 @@ export function LoginForm({ next }: { next: string }) {
         <span className="field-label">Password</span>
         <input className="input" name="password" type="password" autoComplete="current-password" required />
       </label>
-      {error ? <p className="text-[12.5px] text-danger-ink" role="alert">{error}</p> : null}
+      {error ? <p className="text-[length:var(--fs-12)] text-danger-ink" role="alert">{error}</p> : null}
       <button type="submit" className="btn btn-primary mt-1 h-9" disabled={pending}>{pending ? "Signing in…" : "Sign in"}</button>
     </form>
   );

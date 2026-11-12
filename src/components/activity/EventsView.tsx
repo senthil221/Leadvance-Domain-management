@@ -258,7 +258,7 @@ export function EventsView({ kind, initial }: { kind: Kind; initial: EventsData 
                       <span className="ev-snippet">{text ?? "No preview"}</span>
                     </span>
                     <span className="ev-item-side">
-                      <span className="flex items-center gap-1.5">
+                      <span className="flex items-center gap-2">
                         {code ? <span className="ev-code" title="The error code in the bounce notice">{code}</span> : null}
                         <span className={`badge tone-${m.tone}`}>{m.label}</span>
                       </span>
@@ -348,7 +348,7 @@ function EventPanel({ kind, row, onClose, onReclassify }: { kind: Kind; row: Row
                 <span className="ev-avatar is-lg" aria-hidden="true">{initialsOf(row.leadName, row.leadEmail)}</span>
                 <div className="min-w-0 flex-1">
                   <Dialog.Title className="sheet-title truncate">{row.leadName ?? row.leadEmail ?? "Unknown lead"}</Dialog.Title>
-                  <p className="truncate text-[12.5px] text-muted">{row.leadEmail}{companyOf(row.leadEmail) ? ` · ${companyOf(row.leadEmail)}` : ""}</p>
+                  <p className="truncate text-[length:var(--fs-12)] text-muted">{row.leadEmail}{companyOf(row.leadEmail) ? ` · ${companyOf(row.leadEmail)}` : ""}</p>
                 </div>
                 <Dialog.Close asChild><button type="button" className="btn btn-sm btn-icon" aria-label="Close"><X size={15} /></button></Dialog.Close>
               </div>
@@ -365,7 +365,7 @@ function EventPanel({ kind, row, onClose, onReclassify }: { kind: Kind; row: Row
                   <div className="flex items-center gap-2">
                     {bounceCode(`${row.bounceRemote ?? ""} ${row.bounceText ?? ""}`) ? <span className="ev-code">{bounceCode(`${row.bounceRemote ?? ""} ${row.bounceText ?? ""}`)}</span> : null}
                     <span className={`badge tone-${BOUNCE_META[row.tag as BounceReason].tone}`}>{BOUNCE_META[row.tag as BounceReason].label}</span>
-                    <span className="text-[12.5px] text-muted">{BOUNCE_META[row.tag as BounceReason].hint}</span>
+                    <span className="text-[length:var(--fs-12)] text-muted">{BOUNCE_META[row.tag as BounceReason].hint}</span>
                   </div>
                 )}
 

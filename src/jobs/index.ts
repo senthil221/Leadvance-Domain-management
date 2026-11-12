@@ -10,6 +10,7 @@ import { syncHypertideOrders } from "./hypertide-sync";
 import { loadIcemailAccounts, syncAllIcemail } from "./icemail-sync";
 import { processInboxChanges, runDuePlans } from "./inbox-settings";
 import { checkNameservers, processNameserverRequests } from "./nameservers";
+import { processPurchases } from "./purchases";
 import { advanceReplacements, trackHypertideOrders } from "./replacements";
 import { syncAllRegistrars } from "./registrar-sync";
 import { checkRegistry } from "./registry-check";
@@ -94,6 +95,12 @@ export const JOBS: Job[] = [
     label: "Nameserver changes",
     everyMinutes: 1,
     run: ({ sql, porkbun, registrars, hypertide }) => processNameserverRequests(sql, { porkbun, registrars, hypertide }),
+  },
+  {
+    name: "domain-purchases",
+    label: "Domain purchases",
+    everyMinutes: 1,
+    run: ({ sql, registrars }) => processPurchases(sql, { registrars }),
   },
   {
     name: "smartlead-accounts",

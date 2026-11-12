@@ -113,14 +113,14 @@ export function SetupDialog({
               <label className="field-label" htmlFor="setup-tags">Add tags</label>
               <input id="setup-tags" className="input" value={tagText} onChange={(e) => setTagText(e.target.value)} placeholder="e.g. Oct batch, Microsoft, Kapable test" />
               {suggestions.length ? (
-                <div className="flex flex-wrap gap-1.5 pt-1">
+                <div className="flex flex-wrap gap-2 pt-1">
                   {suggestions.map((t) => (
                     <button key={t} type="button" className="badge hover:text-ink" onClick={() => setTagText((s) => (s.trim() ? `${s.replace(/,\s*$/, "")}, ${t}` : t))}>+ {t}</button>
                   ))}
                 </div>
               ) : null}
               {current.length ? (
-                <div className="flex flex-wrap items-center gap-1.5 pt-1">
+                <div className="flex flex-wrap items-center gap-2 pt-1">
                   <span className="field-hint">Current:</span>
                   {current.map((t) => {
                     const off = removing.has(t);

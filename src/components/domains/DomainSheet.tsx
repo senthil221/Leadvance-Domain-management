@@ -46,7 +46,7 @@ export function DomainSheet({
         <Dialog.Overlay className="overlay" style={{ background: "transparent", backdropFilter: "none" }} />
         <Dialog.Content className="sheet" aria-describedby={undefined}>
           <div className="sheet-head">
-            <div className="flex min-w-0 flex-1 flex-col gap-1.5">
+            <div className="flex min-w-0 flex-1 flex-col gap-2">
               <Dialog.Title className="sheet-title truncate">{d?.domain.name ?? (loading ? <Skeleton w={200} h={18} /> : "Not found")}</Dialog.Title>
               {d ? (
                 <div className="flex flex-wrap items-center gap-3">
@@ -81,7 +81,7 @@ export function DomainSheet({
                 <Tabs.Trigger value="history">History</Tabs.Trigger>
               </Tabs.List>
 
-              <Tabs.Content value="overview" className="flex flex-col gap-5">
+              <Tabs.Content value="overview" className="flex flex-col gap-6">
                 {d.alerts.length > 0 ? (
                   <div className="flex flex-col gap-2">
                     {d.alerts.map((a) => (
@@ -127,13 +127,13 @@ export function DomainSheet({
                         {d.domain.icemailMailboxes ? `${d.domain.icemailMailboxes} mailbox${d.domain.icemailMailboxes === 1 ? "" : "es"} · $${(d.domain.icemailMonthly ?? 0).toFixed(2)}/month` : "No mailboxes"}
                         {d.domain.icemailNextBill ? <span className="text-muted"> · next bill {shortDate(d.domain.icemailNextBill)}</span> : null}
                       </span>
-                      {d.domain.icemailIssue ? <span className="text-[12px] text-danger-ink">{d.domain.icemailIssue}</span> : null}
+                      {d.domain.icemailIssue ? <span className="text-[length:var(--fs-12)] text-danger-ink">{d.domain.icemailIssue}</span> : null}
                     </dd>
                   </>) : null}
                   <dt>Nameservers</dt>
                   <dd className="flex flex-col">
                     {d.domain.nameservers.length ? d.domain.nameservers.map((ns) => <span key={ns} className="mono">{ns}</span>) : "—"}
-                    {d.domain.nameserversCheckedAt ? <span className="text-[12px] text-faint">checked {ago(d.domain.nameserversCheckedAt)}</span> : null}
+                    {d.domain.nameserversCheckedAt ? <span className="text-[length:var(--fs-12)] text-faint">checked {ago(d.domain.nameserversCheckedAt)}</span> : null}
                   </dd>
                   <dt>Active since</dt>
                   <dd>{d.domain.activeSince ? `${shortDate(d.domain.activeSince)} · ${daysSince(d.domain.activeSince)} days` : "—"}</dd>
@@ -178,12 +178,12 @@ export function DomainSheet({
                         {d.inboxes.map((i) => (
                           <tr key={i.id}>
                             <td>
-                              <div className="flex flex-col py-1.5 leading-tight">
-                                <button type="button" className="strong flex items-center gap-1.5 text-left hover:underline" title="Copy address"
+                              <div className="flex flex-col py-2 leading-tight">
+                                <button type="button" className="strong flex items-center gap-2 text-left hover:underline" title="Copy address"
                                   onClick={() => { navigator.clipboard?.writeText(i.email); toast("Copied", { description: i.email }); }}>
                                   {i.email} <Copy size={11} className="text-faint" />
                                 </button>
-                                <span className="text-[12px] text-faint">{i.senderName ?? "—"} · {i.status}{i.lastSyncedAt ? ` · synced ${ago(i.lastSyncedAt)}` : ""}</span>
+                                <span className="text-[length:var(--fs-12)] text-faint">{i.senderName ?? "—"} · {i.status}{i.lastSyncedAt ? ` · synced ${ago(i.lastSyncedAt)}` : ""}</span>
                               </div>
                             </td>
                             <td className="is-num">{i.warmupEnabled ? int(i.warmupPerDay) : <span className="zero">off</span>}</td>
@@ -199,13 +199,13 @@ export function DomainSheet({
 
               <Tabs.Content value="stats" className="flex flex-col gap-4">
                 <div className="stats" style={{ gridTemplateColumns: "repeat(3, minmax(0,1fr))" }}>
-                  <div className="stat"><span className="stat-label">Sent · 7d</span><span className="stat-value" style={{ fontSize: 20 }}>{int(d.domain.sent)}</span></div>
-                  <div className="stat"><span className="stat-label">Human replies</span><span className="stat-value" style={{ fontSize: 20 }}><Metric value={d.domain.humanReplyRate} digits={2} /></span><span className="stat-foot">{int(d.domain.humanReplies)} replies</span></div>
-                  <div className="stat"><span className="stat-label">Bounce rate</span><span className="stat-value" style={{ fontSize: 20 }}><Metric value={d.domain.bounceRate} warn={2} bad={3} /></span><span className="stat-foot">{int(d.domain.bounces)} bounces</span></div>
+                  <div className="stat"><span className="stat-label">Sent · 7d</span><span className="stat-value" style={{ fontSize: "var(--fs-16)" }}>{int(d.domain.sent)}</span></div>
+                  <div className="stat"><span className="stat-label">Human replies</span><span className="stat-value" style={{ fontSize: "var(--fs-16)" }}><Metric value={d.domain.humanReplyRate} digits={2} /></span><span className="stat-foot">{int(d.domain.humanReplies)} replies</span></div>
+                  <div className="stat"><span className="stat-label">Bounce rate</span><span className="stat-value" style={{ fontSize: "var(--fs-16)" }}><Metric value={d.domain.bounceRate} warn={2} bad={3} /></span><span className="stat-foot">{int(d.domain.bounces)} bounces</span></div>
                 </div>
 
                 {d.domain.sl7Sent != null ? (
-                  <p className="text-[12.5px] text-muted">
+                  <p className="text-[length:var(--fs-12)] text-muted">
                     Smartlead reports <span className="num text-ink">{int(d.domain.sl7Sent)}</span> sent,{" "}
                     <span className="num text-ink">{int(d.domain.sl7Replies)}</span> replies and{" "}
                     <span className="num text-ink">{int(d.domain.sl7Bounces)}</span> bounces over the last 7 days
@@ -270,7 +270,7 @@ function LineageRow({ label, link, self, direction, onOpen }: {
         <span className="w-20 text-muted">{label}</span>
         {direction === "in" ? <>{other}<ArrowRight size={13} className="text-faint" /><span>{self}</span></> : <><span>{self}</span><ArrowRight size={13} className="text-faint" />{other}</>}
       </div>
-      <p className="pl-[88px] text-[12px] text-faint">
+      <p className="pl-[88px] text-[length:var(--fs-12)] text-faint">
         {reasonsLabel(link.reasons, link.reason)}{link.note ? ` · ${link.note}` : ""} · {shortDate(link.at)}
       </p>
     </div>

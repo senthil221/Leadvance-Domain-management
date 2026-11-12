@@ -94,10 +94,10 @@ async function InventoryContent() {
 
       {htConnected ? (
         <section className="card" aria-label="Hypertide">
-          <div className="card-head flex-wrap gap-y-1 py-2.5">
+          <div className="card-head flex-wrap gap-y-1 py-3">
             <span className="card-title">Hypertide</span>
             <span className="card-sub">{ht.lastSync ? `synced ${ago(ht.lastSync)}` : "not synced yet"}</span>
-            <span className="ml-auto flex flex-wrap items-center gap-x-5 gap-y-1 text-[12.5px] text-muted">
+            <span className="ml-auto flex flex-wrap items-center gap-x-6 gap-y-1 text-[length:var(--fs-12)] text-muted">
               <span title="Only Done orders are billed"><b className="num text-ink">{int(ht.done)}</b> billed (Done)</span>
               <span><b className="num text-ink">{int(ht.inSetup)}</b> in setup</span>
               <span title="Shown as Cancelled in Hypertide (NPC in its API): not billed"><b className="num text-ink">{int(ht.cancelled)}</b> cancelled</span>

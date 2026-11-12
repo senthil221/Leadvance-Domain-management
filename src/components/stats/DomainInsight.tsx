@@ -34,7 +34,7 @@ export function TrendTags({ list, max }: { list: Trend[]; max?: number }) {
   return (
     <span className="st-trends">
       {shown.map((t) => <span key={t.key} className={`st-trend tone-${t.tone}`} title={t.hint}>{t.label}</span>)}
-      {shown.length < list.length ? <span className="text-faint text-[11.5px]" title={list.slice(shown.length).map((t) => `${t.label}: ${t.hint}`).join("\n")}>+{list.length - shown.length}</span> : null}
+      {shown.length < list.length ? <span className="text-faint text-[length:var(--fs-12)]" title={list.slice(shown.length).map((t) => `${t.label}: ${t.hint}`).join("\n")}>+{list.length - shown.length}</span> : null}
     </span>
   );
 }

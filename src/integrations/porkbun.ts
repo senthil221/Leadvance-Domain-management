@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type postgres from "postgres";
+import { AccountBlocked, SkipPurchase, withinBudget, type Buyer } from "./buy";
 
 // Porkbun API v3 (https://api.porkbun.com/api/json/v3). Keys go in the JSON
 // body. Errors carry a stable `code`. Writes send an Idempotency-Key so a
@@ -141,6 +142,53 @@ export function createPorkbun({ apiKey, secretKey, sql, dryRun = true, baseUrl =
 
     updateNs: (domain: string, ns: string[]) =>
       call<{ dryRun?: boolean; warnings?: string[] }>(`/domain/updateNs/${encodeURIComponent(domain)}`, { ns }, { write: true }),
+
+    /** Free or not, and the first-year price in dollars (Porkbun allows 10 checks in 10 seconds). */
+    checkDomain: async (domain: string) => {
+      const r = await call<{ response?: { avail?: string; price?: string; premium?: string } }>(`/domain/checkDomain/${encodeURIComponent(domain)}`);
+      const x = r.response ?? {};
+      return { available: x.avail === "yes", premium: x.premium === "yes", price: x.price ? Number(x.price) : null };
+    },
+
+    /** Registers for the registry minimum (a year for .com), paid from account credit. */
+    createDomain: (domain: string, cents: number) =>
+      call<{ orderId?: number; cost?: number; balance?: number }>(`/domain/create/${encodeURIComponent(domain)}`, { cost: cents, agreeToTerms: "yes", whoisPrivacy: true }, { write: true }),
+
+    /** Account credit in dollars. */
+    balance: async () => {
+      const r = await call<{ balance?: number }>("/account/balance");
+      return typeof r.balance === "number" ? r.balance / 100 : null;
+    },
+  };
+}
+
+// Errors that stop every purchase on the account until someone acts.
+const PORKBUN_BLOCKS: Record<string, string> = {
+  INSUFFICIENT_FUNDS: "Porkbun credit is too low: top it up, then resume",
+  MONTHLY_SPEND_LIMIT_EXCEEDED: "Porkbun's monthly API spending limit is reached: raise it at porkbun.com/account/api, then resume",
+  INSUFFICIENT_SCOPE: "This Porkbun key can't buy: give it the purchase permission at porkbun.com/account/api, then resume",
+  VERIFICATION_REQUIRED: "Porkbun wants the account's email and phone verified before it sells over the API",
+  ORDER_TOO_LARGE: "Porkbun refuses API orders over $100",
+};
+
+export function porkbunBuyer(pb: Porkbun): Buyer {
+  return {
+    async buy(domain, maxUsd) {
+      const c = await pb.checkDomain(domain);
+      if (!c.available) throw new SkipPurchase("Taken");
+      if (c.premium) throw new SkipPurchase("Premium name: Porkbun doesn't sell those over the API", c.price);
+      const price = withinBudget(domain, c.price, maxUsd);
+      if (pb.dryRun) return { status: "dry_run", quotedUsd: price };
+      try {
+        const r = await pb.createDomain(domain, Math.round(price * 100));
+        return { status: "bought", paidUsd: typeof r.cost === "number" ? r.cost / 100 : price, ref: r.orderId ? String(r.orderId) : null };
+      } catch (e) {
+        if (e instanceof PorkbunError && e.code === "DOMAIN_NOT_AVAILABLE") throw new SkipPurchase("Taken");
+        if (e instanceof PorkbunError && e.code && PORKBUN_BLOCKS[e.code]) throw new AccountBlocked(PORKBUN_BLOCKS[e.code]);
+        throw e;
+      }
+    },
+    balance: () => pb.balance(),
   };
 }
 

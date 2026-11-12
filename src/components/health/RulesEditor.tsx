@@ -71,7 +71,7 @@ function RuleRowEditor({ rule }: { rule: RuleRow }) {
         </span>
         <span className="list-meta">{rule.openCount ? `${rule.openCount} open alert${rule.openCount === 1 ? "" : "s"}` : "No open alerts"}</span>
       </div>
-      <div className="flex basis-full flex-wrap items-center gap-1.5 pl-[27px] text-muted">
+      <div className="flex basis-full flex-wrap items-center gap-2 pl-[27px] text-muted">
         <span>{m.label} {CMP[rule.comparison]}</span>
         <input className="input num" style={{ width: 64, height: 28 }} value={threshold} onChange={(e) => setThreshold(e.target.value)} inputMode="decimal" aria-label="Threshold" />
         <span>{m.unit}</span>

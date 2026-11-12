@@ -42,7 +42,7 @@ export function AddToCampaigns({ itemId, domain, campaigns, inboxes, warmupOn, r
             </Dialog.Description>
           </div>
           <div className="dialog-body">
-            <ul className="flex flex-col gap-1 text-[13px]">
+            <ul className="flex flex-col gap-1 text-[length:var(--fs-13)]">
               {campaigns.map((c) => <li key={c} className="truncate">{c}</li>)}
             </ul>
             {ready ? (

@@ -1617,3 +1617,43 @@ export async function getInsights() {
   ]);
   return { issues, capacity: cap, clients, trend };
 }
+
+// ---------------------------------------------------------------------------
+// Buying domains
+// ---------------------------------------------------------------------------
+
+export type BuyAccount = { key: string; provider: string; vendor: string; label: string; domains: number };
+export type PurchaseItemRow = {
+  id: string; domain: string; accountKey: string; provider: string; scheduledAt: Date; status: string;
+  quotedUsd: number | null; paidUsd: number | null; message: string | null; startedAt: Date | null; finishedAt: Date | null; domainId: string | null;
+};
+export type PurchaseOrderRow = {
+  id: string; createdBy: string; createdAt: Date; maxPriceUsd: number; days: number; fromHour: number; toHour: number;
+  minGapMinutes: number; timezone: string; pausedAt: Date | null; pausedReason: string | null; cancelledAt: Date | null; note: string | null;
+  items: PurchaseItemRow[];
+};
+
+/** The accounts that can buy, and the last 40 orders with every domain in them. */
+export async function getPurchases(): Promise<{ accounts: BuyAccount[]; orders: PurchaseOrderRow[] }> {
+  const rows = await sql<{ id: string; provider: string; label: string; domains: number }[]>`
+    select a.id, a.provider, a.label, (select count(*)::int from domains d where d.registrar_account_id = a.id and d.archived_at is null) as domains
+    from registrar_accounts a order by a.provider, a.created_at`;
+  const accounts: BuyAccount[] = rows.filter((r) => isProvider(r.provider)).map((r) => ({
+    key: r.id, provider: r.provider, vendor: PROVIDERS[r.provider as keyof typeof PROVIDERS].label.replace(" Domains", ""), label: r.label, domains: r.domains,
+  }));
+  if (process.env.PORKBUN_API_KEY && process.env.PORKBUN_SECRET_KEY) {
+    const [{ n }] = await sql`select count(*)::int as n from domains d join vendors v on v.id = d.registrar_id
+      where v.name = 'Porkbun' and d.registrar_account_id is null and d.archived_at is null`;
+    accounts.push({ key: "env:porkbun", provider: "porkbun", vendor: "Porkbun", label: "Server .env", domains: n });
+  }
+  const orders = await sql<Omit<PurchaseOrderRow, "items">[]>`
+    select id, created_by, created_at, max_price_usd::float8 as max_price_usd, days, from_hour, to_hour, min_gap_minutes, timezone,
+      paused_at, paused_reason, cancelled_at, note
+    from purchase_orders order by created_at desc limit 40`;
+  const items = orders.length ? await sql<PurchaseItemRow[]>`
+    select id, order_id, domain, coalesce(account_id::text, 'env:' || provider) as account_key, provider, scheduled_at, status,
+      quoted_usd::float8 as quoted_usd, paid_usd::float8 as paid_usd, message, started_at, finished_at, domain_id
+    from purchase_items where order_id in ${sql(orders.map((o) => o.id))} order by scheduled_at` : [];
+  const byOrder = Map.groupBy(items as (PurchaseItemRow & { orderId: string })[], (i) => i.orderId);
+  return { accounts, orders: orders.map((o) => ({ ...o, items: byOrder.get(o.id) ?? [] })) };
+}

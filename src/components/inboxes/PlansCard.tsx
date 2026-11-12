@@ -33,7 +33,7 @@ export function PlansCard({ plans, clients, selectedDomainIds, timezone }: { pla
         <button type="button" className="btn btn-sm ml-auto" onClick={() => setEditing("new")}><Plus size={13} /> New plan</button>
       </div>
       {plans.length === 0 ? (
-        <p className="card-body text-[12.5px] text-muted">
+        <p className="card-body text-[length:var(--fs-12)] text-muted">
           No plans yet. A plan keeps a client&apos;s (or chosen domains&apos;) total daily sends where you want it, while every inbox gets a different
           limit each day, or picks a new total each day too.
         </p>
@@ -46,15 +46,15 @@ export function PlansCard({ plans, clients, selectedDomainIds, timezone }: { pla
                   {p.name}
                   {!p.enabled ? <span className="badge">Paused</span> : null}
                 </span>
-                <span className="list-meta flex items-center gap-1.5">
+                <span className="list-meta flex items-center gap-2">
                   {p.clientId ? <ClientCell name={p.clientName} hue={p.clientHue} /> : `${p.domainIds.length} domains`} · {int(p.inboxes)} inboxes · {hourLabel(p.runHour)}
                 </span>
               </div>
-              <span className="text-[12.5px] text-muted">
+              <span className="text-[length:var(--fs-12)] text-muted">
                 {p.mode === "shuffle" ? <><b className="num text-ink">{int(p.totalMin)}</b> a day, reshuffled</> : <><b className="num text-ink">{int(p.totalMin)}–{int(p.totalMax)}</b> a day, new total daily</>}
                 {" · "}{p.inboxMin}–{p.inboxMax} per inbox
               </span>
-              <span className="text-[12px] text-faint" style={{ minWidth: 150 }}>
+              <span className="text-[length:var(--fs-12)] text-faint" style={{ minWidth: 150 }}>
                 {p.lastResult ? <>Last: {int(p.lastResult.total)} over {p.lastResult.inboxes} inboxes{p.lastResult.clamped ? <span className="text-warning-ink"> (capped)</span> : null}{p.lastRunOn ? ` · ${p.lastRunOn}` : ""}</> : "Not run yet"}
               </span>
               <span className="ml-auto flex items-center gap-1">
@@ -169,7 +169,7 @@ function PlanDialog({ plan, onClose, clients, selectedDomainIds }: { plan: PlanR
               {mode === "random_total" ? <label className="field"><span className="field-label">Highest total</span><input className="input num" type="number" min={0} value={totalMax} onChange={(e) => setTotalMax(e.target.value)} /></label> : null}
               <label className="field"><span className="field-label">Lowest per inbox</span><input className="input num" type="number" min={0} max={1000} value={inboxMin} onChange={(e) => setInboxMin(e.target.value)} /></label>
               <label className="field"><span className="field-label">Highest per inbox</span><input className="input num" type="number" min={0} max={1000} value={inboxMax} onChange={(e) => setInboxMax(e.target.value)} /></label>
-              <label className="field"><span className="field-label flex items-center gap-1.5"><CalendarClock size={12} /> Runs at</span>
+              <label className="field"><span className="field-label flex items-center gap-2"><CalendarClock size={12} /> Runs at</span>
                 <Select className="select" value={hour} onChange={(e) => setHour(Number(e.target.value))}>
                   {Array.from({ length: 24 }, (_, h) => <option key={h} value={h}>{hourLabel(h)}</option>)}
                 </Select>

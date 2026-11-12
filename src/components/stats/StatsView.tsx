@@ -99,7 +99,7 @@ function Delta({ now, before, points = false, invert = false }: { now: number | 
   const d = points ? now - before : (100 * (now - before)) / before;
   if (Math.abs(d) < (points ? 0.05 : 1)) return null;
   const good = invert ? d < 0 : d > 0;
-  return <span className={`text-[11.5px] ${good ? "delta-up" : "delta-down"}`}> {d > 0 ? "+" : ""}{d.toFixed(points ? 1 : 0)}{points ? "pt" : "%"}</span>;
+  return <span className={`text-[length:var(--fs-12)] ${good ? "delta-up" : "delta-down"}`}> {d > 0 ? "+" : ""}{d.toFixed(points ? 1 : 0)}{points ? "pt" : "%"}</span>;
 }
 
 const Z = ({ v }: { v: number }) => (v ? <>{int(v)}</> : <span className="zero">0</span>);
@@ -218,7 +218,7 @@ const DomainRow = memo(function DomainRow({ r, i, byClient, showClient, showCall
             {r.allTags.length ? <span className="inline-flex items-center gap-1"><TagList tags={r.allTags} max={3} /></span> : <span className="zero">—</span>}
           </td>
         ) : null}
-        {on("esp") ? <td className="text-muted text-[12px]">{r.esp ?? <span className="zero">—</span>}</td> : null}
+        {on("esp") ? <td className="text-muted text-[length:var(--fs-12)]">{r.esp ?? <span className="zero">—</span>}</td> : null}
         <Cells r={r} len={len} on={on} />
         {on("trend") ? <td className="st-start st-trend-cell"><TrendTags list={r.trends} max={2} /></td> : null}
         {on("advice") ? <td className="st-start st-advice-cell"><AdviceCell call={r.call} /></td> : null}
@@ -573,20 +573,20 @@ export function StatsView({ initial, initialReview, clients }: { initial: StatsD
           <button type="button" role="tab" aria-selected={view === "day"} className={view === "day" ? "is-on" : undefined} onClick={() => setView("day")}>By day <span>{len}</span></button>
           <button type="button" role="tab" aria-selected={view === "clients"} className={view === "clients" ? "is-on" : undefined} onClick={() => setView("clients")}>Clients by day <span>{perClient.clients.length}</span></button>
         </div>
-        <label className="flex items-center gap-1.5">
+        <label className="flex items-center gap-2">
           <CalendarDays size={14} className="text-faint" />
           <Select className="select" style={{ width: 130 }} value={preset} onChange={(e) => pick(e.target.value as PresetKey)} aria-label="Date range">
             {PRESETS.map((p) => <option key={p.key} value={p.key}>{p.label}</option>)}
           </Select>
         </label>
         {preset === "custom" ? (
-          <span className="flex items-center gap-1.5">
+          <span className="flex items-center gap-2">
             <input type="date" className="input" style={{ width: 138 }} value={from} max={data.today} onChange={(e) => setFrom(e.target.value)} aria-label="From" />
             <span className="text-faint">–</span>
             <input type="date" className="input" style={{ width: 138 }} value={to} max={data.today} onChange={(e) => setTo(e.target.value)} aria-label="To" />
             <button type="button" className="btn btn-sm btn-primary" disabled={!from || !to || loading} onClick={() => load(from, to)}>Apply</button>
           </span>
-        ) : <span className="text-[12.5px] text-muted">{rangeLabel}</span>}
+        ) : <span className="text-[length:var(--fs-12)] text-muted">{rangeLabel}</span>}
         {loading ? <Loader size={14} className="animate-spin text-faint" aria-label="Loading" /> : null}
         <Select className="select rv-filter" data-on={clientId ? true : undefined} value={clientId} onChange={(e) => setClientId(e.target.value)} aria-label="Filter by client">
           <option value="">All clients</option>
@@ -632,8 +632,8 @@ export function StatsView({ initial, initialReview, clients }: { initial: StatsD
         </Select>
         {view === "domain" ? (
           <>
-            <label className="flex items-center gap-1.5 text-[12.5px] text-muted" title="Only domains that sent at least one email in this range"><input type="checkbox" className="checkbox" checked={onlySending} onChange={(e) => setOnlySending(e.target.checked)} /> Sending only</label>
-            <label className="flex items-center gap-1.5 text-[12.5px] text-muted"><input type="checkbox" className="checkbox" checked={byClient} onChange={(e) => setByClient(e.target.checked)} /> By client</label>
+            <label className="flex items-center gap-2 text-[length:var(--fs-12)] text-muted" title="Only domains that sent at least one email in this range"><input type="checkbox" className="checkbox" checked={onlySending} onChange={(e) => setOnlySending(e.target.checked)} /> Sending only</label>
+            <label className="flex items-center gap-2 text-[length:var(--fs-12)] text-muted"><input type="checkbox" className="checkbox" checked={byClient} onChange={(e) => setByClient(e.target.checked)} /> By client</label>
             {byClient ? <button type="button" className="btn btn-sm" onClick={toggleAll}>{allOpen ? "Collapse all" : "Expand all"}</button> : null}
           </>
         ) : null}
