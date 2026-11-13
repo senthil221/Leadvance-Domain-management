@@ -125,7 +125,7 @@ export async function getIcemailBoard(): Promise<IcemailBoard> {
         and not exists (select 1 from icemail_domains x where x.domain_name = d.name and x.gone_at is null)
         and not exists (select 1 from icemail_order_items i where i.domain_name = d.name and i.status in ('queued', 'nameservers', 'ordering'))
       order by coalesce(d.purchased_at, d.registered_at) nulls last, d.name
-      limit 500`,
+      limit 5000`,
     sql<Omit<IcemailOrderRow, "items">[]>`
       select o.id, o.account_id, a.label as account_label, o.client_id, c.name as client_name, c.hue as client_hue,
         o.provider, o.price_usd::float8 as price_usd, o.quoted_monthly_usd::float8 as quoted_monthly_usd, o.note,

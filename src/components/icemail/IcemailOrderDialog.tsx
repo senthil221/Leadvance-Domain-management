@@ -123,6 +123,7 @@ export function IcemailOrderDialog({ open, onOpenChange, onPlaced, seed, account
                       <span className="ice-opt-meta">{d.registrar ?? "no registrar"}{d.registrarAccount ? ` · ${d.registrarAccount}` : ""}{d.apiAccess === false ? " · nameservers by hand" : ""}</span>
                     </label>
                   )) : <p className="ice-pick-none">None{q ? " match" : ""}.</p>}
+                  {inventory.length > 200 ? <p className="ice-pick-none">Showing 200 of {inventory.length}: filter to find the rest (".pro", say).</p> : null}
                 </div>
               </div>
 
