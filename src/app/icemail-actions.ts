@@ -5,7 +5,7 @@ import { refresh } from "next/cache";
 import { z } from "zod";
 import { requireActor } from "@/lib/auth";
 import { jobSql } from "@/lib/db";
-import { ICEMAIL_NAMESERVERS, isUsernameFormat, MAX_PER_DOMAIN, monthlyCost, planMailboxes, type UsernameFormat } from "@/lib/icemail-board";
+import { ICEMAIL_NAMESERVERS, isAddressStyle, monthlyCost, planMailboxes, STYLE_ORDER, type AddressStyle } from "@/lib/icemail-board";
 import { queueJob } from "@/lib/job-queue";
 import type { ActionResult } from "./actions";
 
@@ -34,9 +34,9 @@ const orderInput = z.object({
   clientId: z.uuid().nullable(),
   provider: z.enum(["GOOGLE", "MICROSOFT"]),
   domains: z.array(z.object({ name: domainName, source: z.enum(["icemail", "inventory"]) })).min(1, "Pick at least one domain").max(50, "Up to 50 domains an order"),
-  perDomain: z.number().int().min(1).max(MAX_PER_DOMAIN),
   people: z.array(z.object({ first: z.string().trim().min(1).max(40), last: z.string().trim().min(1).max(40) })).min(1, "Add the names for the inboxes").max(50),
-  format: z.string().refine(isUsernameFormat, "Pick how the addresses look"),
+  /** Each name gets one inbox per style on every domain. */
+  styles: z.array(z.string().refine(isAddressStyle, "Unknown address style")).min(1, "Tick at least one address style").max(STYLE_ORDER.length),
   note: z.string().trim().max(200).optional(),
   /** The Icemail domain this order replaces: it is cancelled before it renews. */
   replaces: z.string().min(1).max(100).nullable().optional(),
@@ -80,7 +80,7 @@ export async function createIcemailOrder(input: z.input<typeof orderInput>): Pro
         select d.id, d.name from domains d where d.name = any(${fromInventory}::text[]) and d.archived_at is null and domain_is_free(d)` : [];
       for (const n of fromInventory) if (!free.some((f) => f.name === n)) throw new UserError(`${n} is no longer a free domain; reload the page`);
 
-      const plan = planMailboxes({ domains: names, people: o.people, perDomain: o.perDomain, format: o.format as UsernameFormat });
+      const plan = planMailboxes({ domains: names, people: o.people, styles: o.styles as AddressStyle[] });
       if ("error" in plan) throw new UserError(plan.error);
       const inboxes = plan.plan.reduce((s, p) => s + p.mailboxes.length, 0);
       const monthly = monthlyCost(inboxes, price);

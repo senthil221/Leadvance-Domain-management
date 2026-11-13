@@ -5,19 +5,19 @@ import { ArrowLeft, CircleAlert, Search, X } from "lucide-react";
 import { useMemo, useState, useTransition } from "react";
 import { toast } from "sonner";
 import { createIcemailOrder } from "@/app/icemail-actions";
-import { MAX_PER_DOMAIN, monthlyCost, planMailboxes, readPeople, USERNAME_FORMATS, type UsernameFormat } from "@/lib/icemail-board";
+import { MAX_PER_DOMAIN, monthlyCost, planMailboxes, readPeople, STYLE_ORDER, styleExample, type AddressStyle } from "@/lib/icemail-board";
 import type { FreeInventoryDomain, IcemailAccountInfo, IcemailDomainRow } from "@/lib/icemail-db";
 import { int, shortDate } from "@/lib/format";
 
 // Placing new inboxes: the workspace and client, the free domains to put them
-// on, how many a domain and the names on them. A review step shows every
+// on, the names, and the address styles: each name gets one inbox per style. A review step shows every
 // address and what it costs against the wallet before anything is queued.
 
 const usd = (n: number | null) => (n == null ? "—" : `$${n.toFixed(2)}`);
 const plural = (n: number, one: string, many = `${one}s`) => `${int(n)} ${n === 1 ? one : many}`;
 type Picked = { name: string; source: "icemail" | "inventory" };
 
-export type OrderSeed = { accountId: string; clientId: string | null; replaces: IcemailDomainRow | null; perDomain: number; names: string };
+export type OrderSeed = { accountId: string; clientId: string | null; replaces: IcemailDomainRow | null; styles: AddressStyle[]; names: string };
 
 export function IcemailOrderDialog({ open, onOpenChange, seed, accounts, domains, freeInventory, clients, dryRun }: {
   open: boolean; onOpenChange: (open: boolean) => void; seed: OrderSeed;
@@ -30,9 +30,8 @@ export function IcemailOrderDialog({ open, onOpenChange, seed, accounts, domains
   const [provider, setProvider] = useState<"GOOGLE" | "MICROSOFT">("GOOGLE");
   const [picked, setPicked] = useState<Picked[]>([]);
   const [search, setSearch] = useState("");
-  const [perDomain, setPerDomain] = useState(seed.perDomain);
   const [namesText, setNamesText] = useState(seed.names);
-  const [format, setFormat] = useState<UsernameFormat>("first");
+  const [styles, setStyles] = useState<AddressStyle[]>(seed.styles);
   const [note, setNote] = useState(seed.replaces ? `Replaces ${seed.replaces.name}` : "");
   const [step, setStep] = useState<"form" | "review">("form");
   const [understood, setUnderstood] = useState(false);
@@ -47,7 +46,10 @@ export function IcemailOrderDialog({ open, onOpenChange, seed, accounts, domains
   const toggle = (p: Picked) => setPicked(isOn(p.name) ? picked.filter((x) => x.name !== p.name) : [...picked, p]);
 
   const people = useMemo(() => readPeople(namesText), [namesText]);
-  const plan = useMemo(() => planMailboxes({ domains: picked.map((p) => p.name), people: people.people, perDomain, format }), [picked, people.people, perDomain, format]);
+  const plan = useMemo(() => planMailboxes({ domains: picked.map((p) => p.name), people: people.people, styles }), [picked, people.people, styles]);
+  const perDomain = people.people.length * styles.length;
+  const sample = people.people[0] ?? { first: "John", last: "Carter" };
+  const toggleStyle = (s: AddressStyle) => setStyles(styles.includes(s) ? styles.filter((x) => x !== s) : STYLE_ORDER.filter((x) => x === s || styles.includes(x)));
   const inboxes = "plan" in plan ? plan.plan.reduce((s, p) => s + p.mailboxes.length, 0) : 0;
   const monthly = monthlyCost(inboxes, price);
   const short = monthly != null && account?.walletBalance != null && account.walletBalance < monthly;
@@ -57,7 +59,7 @@ export function IcemailOrderDialog({ open, onOpenChange, seed, accounts, domains
 
   const submit = () => start(async () => {
     const r = await createIcemailOrder({
-      accountId, clientId: clientId || null, provider, domains: picked, perDomain, people: people.people, format,
+      accountId, clientId: clientId || null, provider, domains: picked, people: people.people, styles,
       note: note || undefined, replaces: seed.replaces?.id ?? null, expectedPrice: price,
     });
     if (!r.ok) { toast.error(r.error); return; }
@@ -82,7 +84,7 @@ export function IcemailOrderDialog({ open, onOpenChange, seed, accounts, domains
 
           {step === "form" ? (
             <div className="dialog-body ice-form">
-              <div className="ice-grid">
+              <div className="ice-grid is-3">
                 <label className="field"><span className="field-label">Icemail workspace</span>
                   <select className="select" value={accountId} disabled={!!seed.replaces} onChange={(e) => { setAccountId(e.target.value); setPicked(picked.filter((p) => p.source === "inventory")); }}>
                     {accounts.map((a) => <option key={a.id} value={a.id}>{a.workspaceName ?? a.label}</option>)}
@@ -96,10 +98,6 @@ export function IcemailOrderDialog({ open, onOpenChange, seed, accounts, domains
                   <select className="select" value={provider} onChange={(e) => setProvider(e.target.value as "GOOGLE" | "MICROSOFT")}>
                     <option value="GOOGLE">Google{account?.priceGoogle != null ? ` · ${usd(account.priceGoogle)}/mo` : ""}</option>
                     <option value="MICROSOFT">Microsoft{account?.priceMicrosoft != null ? ` · ${usd(account.priceMicrosoft)}/mo` : ""}</option>
-                  </select></label>
-                <label className="field"><span className="field-label">Per domain</span>
-                  <select className="select" value={perDomain} onChange={(e) => setPerDomain(Number(e.target.value))}>
-                    {Array.from({ length: MAX_PER_DOMAIN }, (_, i) => i + 1).map((n) => <option key={n} value={n}>{plural(n, "inbox", "inboxes")}</option>)}
                   </select></label>
               </div>
 
@@ -129,14 +127,20 @@ export function IcemailOrderDialog({ open, onOpenChange, seed, accounts, domains
 
               <div className="ice-grid is-2">
                 <label className="field"><span className="field-label">Names <span className="field-hint">
-                  {people.people.length ? `${plural(people.people.length, "name")}; the first ${perDomain} go on every domain` : "one person a line: First Last"}
+                  {people.people.length ? `${plural(people.people.length, "name")}, on every domain` : "one person a line: First Last"}
                   {people.bad.length ? `, ${plural(people.bad.length, "line")} without a first and last name` : ""}</span></span>
-                  <textarea className="textarea ice-names" value={namesText} onChange={(e) => setNamesText(e.target.value)} spellCheck={false} placeholder={"John Carter\nMaria Lopez\nSam Patel"} /></label>
+                  <textarea className="textarea ice-names" value={namesText} onChange={(e) => setNamesText(e.target.value)} spellCheck={false} placeholder={"John Carter"} /></label>
                 <div className="ice-col">
-                  <label className="field"><span className="field-label">Addresses look like</span>
-                    <select className="select" value={format} onChange={(e) => setFormat(e.target.value as UsernameFormat)}>
-                      {(Object.keys(USERNAME_FORMATS) as UsernameFormat[]).map((f) => <option key={f} value={f}>{USERNAME_FORMATS[f].label}</option>)}
-                    </select></label>
+                  <div className="field"><span className="field-label">Addresses <span className="field-hint">
+                    {perDomain ? `${plural(perDomain, "inbox", "inboxes")} a domain, same full name` : "one inbox a name per style"}{perDomain > MAX_PER_DOMAIN ? `; up to ${MAX_PER_DOMAIN}` : ""}</span></span>
+                    <div className="ice-styles" role="group" aria-label="Address styles">
+                      {STYLE_ORDER.map((s) => (
+                        <label key={s} className={`ice-opt${styles.includes(s) ? " is-on" : ""}`}>
+                          <input type="checkbox" className="checkbox" checked={styles.includes(s)} onChange={() => toggleStyle(s)} />
+                          <span className="ice-opt-name">{styleExample(s, sample)}@</span>
+                        </label>
+                      ))}
+                    </div></div>
                   <label className="field"><span className="field-label">Note <span className="field-hint">optional</span></span>
                     <input className="input" value={note} maxLength={200} onChange={(e) => setNote(e.target.value)} /></label>
                 </div>

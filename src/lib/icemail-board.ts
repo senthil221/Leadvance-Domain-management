@@ -86,15 +86,25 @@ export function cancelBy(nextBill: Date | string | null, today = new Date()): { 
 export type Person = { first: string; last: string };
 export type NewMailbox = { first_name: string; last_name: string; username: string };
 
-export const USERNAME_FORMATS = {
-  first: { label: "john@", make: (p: Person) => p.first },
-  "first.last": { label: "john.doe@", make: (p: Person) => `${p.first}.${p.last}` },
-  firstlast: { label: "johndoe@", make: (p: Person) => `${p.first}${p.last}` },
-  flast: { label: "jdoe@", make: (p: Person) => `${p.first[0] ?? ""}${p.last}` },
-  "first.l": { label: "john.d@", make: (p: Person) => `${p.first}.${p.last[0] ?? ""}` },
+/**
+ * The ways an address is made from a name. Each ticked style is one inbox on
+ * every domain, all with the same full name: Sendil Nathan gets sendil@,
+ * sendil.nathan@ and sendil.n@.
+ */
+export const ADDRESS_STYLES = {
+  first: { label: "first", make: (p: Person) => p.first },
+  "first.last": { label: "first.last", make: (p: Person) => `${p.first}.${p.last}` },
+  "first.l": { label: "first.l", make: (p: Person) => `${p.first}.${p.last[0] ?? ""}` },
+  firstlast: { label: "firstlast", make: (p: Person) => `${p.first}${p.last}` },
+  flast: { label: "flast", make: (p: Person) => `${p.first[0] ?? ""}${p.last}` },
+  "f.last": { label: "f.last", make: (p: Person) => `${p.first[0] ?? ""}.${p.last}` },
 } as const;
-export type UsernameFormat = keyof typeof USERNAME_FORMATS;
-export const isUsernameFormat = (v: string): v is UsernameFormat => v in USERNAME_FORMATS;
+export type AddressStyle = keyof typeof ADDRESS_STYLES;
+export const STYLE_ORDER = Object.keys(ADDRESS_STYLES) as AddressStyle[];
+export const DEFAULT_STYLES: AddressStyle[] = ["first", "first.last", "first.l"];
+export const isAddressStyle = (v: string): v is AddressStyle => v in ADDRESS_STYLES;
+/** What one style makes of a name, for showing it: "sendil.n". */
+export const styleExample = (style: AddressStyle, p: Person) => ADDRESS_STYLES[style].make({ first: slug(p.first), last: slug(p.last) });
 
 /** Letters only, no accents: what goes before the @. */
 const slug = (s: string) => s.normalize("NFKD").replace(/[̀-ͯ]/g, "").toLowerCase().replace(/[^a-z]/g, "");
@@ -119,30 +129,32 @@ export function readPeople(text: string): { people: Person[]; bad: string[] } {
 }
 
 /**
- * The inboxes for each domain: `perDomain` people from the list, the same
- * people on every domain (so each sender keeps one name across domains), each
- * address in `format`. A person whose address would repeat on a domain gets
- * the next format that doesn't.
+ * The inboxes for each domain: every name once per style, in the order the
+ * styles are listed, and the same on every domain, so a sender keeps one full
+ * name everywhere and only the address changes. An address that would repeat
+ * on a domain (two Johns, say) takes the next unused style, then a number.
  */
-export function planMailboxes({ domains, people, perDomain, format }: { domains: string[]; people: Person[]; perDomain: number; format: UsernameFormat }):
+export function planMailboxes({ domains, people, styles }: { domains: string[]; people: Person[]; styles: AddressStyle[] }):
   { plan: { domain: string; mailboxes: NewMailbox[] }[] } | { error: string } {
   if (!domains.length) return { error: "Pick at least one domain" };
-  if (!Number.isInteger(perDomain) || perDomain < 1 || perDomain > MAX_PER_DOMAIN) return { error: `Between 1 and ${MAX_PER_DOMAIN} inboxes a domain` };
-  if (people.length < perDomain) return { error: `${plural(perDomain, "inbox", "inboxes")} a domain needs ${plural(perDomain, "name")}; the list has ${people.length}` };
-  const order = [format, ...(Object.keys(USERNAME_FORMATS) as UsernameFormat[]).filter((f) => f !== format)];
+  if (!people.length) return { error: "Add a name for the inboxes" };
+  const picked = STYLE_ORDER.filter((s) => styles.includes(s));
+  if (!picked.length) return { error: "Tick at least one address style" };
+  const perDomain = people.length * picked.length;
+  if (perDomain > MAX_PER_DOMAIN) return { error: `That's ${plural(perDomain, "inbox", "inboxes")} a domain (${plural(people.length, "name")} × ${plural(picked.length, "style")}); up to ${MAX_PER_DOMAIN}: use fewer names or styles` };
   const plan = domains.map((domain) => {
     const used = new Set<string>();
-    const mailboxes = people.slice(0, perDomain).map((p) => {
+    const mailboxes: NewMailbox[] = [];
+    for (const p of people) {
       const sp = { first: slug(p.first), last: slug(p.last) };
-      let local = "";
-      for (const f of order) {
-        local = USERNAME_FORMATS[f].make(sp);
-        if (local && !used.has(local)) break;
+      for (const style of picked) {
+        let local = ADDRESS_STYLES[style].make(sp);
+        if (used.has(local)) local = STYLE_ORDER.map((s) => ADDRESS_STYLES[s].make(sp)).find((l) => l && !used.has(l)) ?? local;
+        for (let i = 2; used.has(local); i++) local = `${ADDRESS_STYLES[style].make(sp)}${i}`;
+        used.add(local);
+        mailboxes.push({ first_name: p.first, last_name: p.last, username: `${local}@${domain}` });
       }
-      for (let i = 2; used.has(local); i++) local = `${USERNAME_FORMATS[format].make(sp)}${i}`;
-      used.add(local);
-      return { first_name: p.first, last_name: p.last, username: `${local}@${domain}` };
-    });
+    }
     return { domain, mailboxes };
   });
   return { plan };

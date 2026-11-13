@@ -6,7 +6,7 @@ import { createIcemail, parseIcemailDeletion, parseIcemailOrder, parseIcemailWal
 import { errorText } from "../src/integrations/http";
 import { processIcemailActions } from "../src/jobs/icemail-orders";
 import type { IcemailAccount } from "../src/jobs/icemail-sync";
-import { cancelBy, planMailboxes, readPeople, verdictOf, type DomainFacts } from "../src/lib/icemail-board";
+import { cancelBy, DEFAULT_STYLES, planMailboxes, readPeople, styleExample, verdictOf, type DomainFacts } from "../src/lib/icemail-board";
 import { loadMigrations } from "../scripts/migrations";
 
 const ok = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
@@ -53,23 +53,35 @@ describe("New inboxes", () => {
     expect(r.bad).toEqual(["Sam"]);
   });
 
-  it("puts the same senders on every domain, in the chosen format", () => {
-    const { people } = readPeople("John Carter\nMaría López\nAnn Van der Berg");
-    const r = planMailboxes({ domains: ["a.com", "b.io"], people, perDomain: 2, format: "first.last" });
+  it("gives one name several addresses on every domain, all with the same full name", () => {
+    const { people } = readPeople("Sendil Nathan");
+    const r = planMailboxes({ domains: ["a.com", "b.io"], people, styles: DEFAULT_STYLES });
     if ("error" in r) throw new Error(r.error);
+    const sendil = { first_name: "Sendil", last_name: "Nathan" };
     expect(r.plan).toEqual([
-      { domain: "a.com", mailboxes: [{ first_name: "John", last_name: "Carter", username: "john.carter@a.com" }, { first_name: "María", last_name: "López", username: "maria.lopez@a.com" }] },
-      { domain: "b.io", mailboxes: [{ first_name: "John", last_name: "Carter", username: "john.carter@b.io" }, { first_name: "María", last_name: "López", username: "maria.lopez@b.io" }] },
+      { domain: "a.com", mailboxes: [{ ...sendil, username: "sendil@a.com" }, { ...sendil, username: "sendil.nathan@a.com" }, { ...sendil, username: "sendil.n@a.com" }] },
+      { domain: "b.io", mailboxes: [{ ...sendil, username: "sendil@b.io" }, { ...sendil, username: "sendil.nathan@b.io" }, { ...sendil, username: "sendil.n@b.io" }] },
     ]);
+    // Styles come out in the listed order, whatever order they were ticked in.
+    const two = planMailboxes({ domains: ["a.com"], people, styles: ["f.last", "first"] });
+    if ("error" in two) throw new Error(two.error);
+    expect(two.plan[0].mailboxes.map((m) => m.username)).toEqual(["sendil@a.com", "s.nathan@a.com"]);
+    expect(styleExample("flast", { first: "María", last: "López" })).toBe("mlopez");
   });
 
-  it("never repeats an address on a domain, and says when names are short", () => {
+  it("puts every name in every style, never repeats an address, and keeps to the limit", () => {
     const { people } = readPeople("John Carter\nJohn Smith");
-    const r = planMailboxes({ domains: ["a.com"], people, perDomain: 2, format: "first" });
+    const r = planMailboxes({ domains: ["a.com"], people, styles: ["first", "first.last"] });
     if ("error" in r) throw new Error(r.error);
-    expect(r.plan[0].mailboxes.map((m) => m.username)).toEqual(["john@a.com", "john.smith@a.com"]);
-    expect(planMailboxes({ domains: ["a.com"], people, perDomain: 3, format: "first" })).toEqual({ error: expect.stringContaining("needs 3 names") });
-    expect(planMailboxes({ domains: [], people, perDomain: 1, format: "first" })).toEqual({ error: "Pick at least one domain" });
+    // The second John can't have john@, so he takes the first unused style, then the next.
+    expect(r.plan[0].mailboxes.map((m) => [m.username, m.last_name])).toEqual([
+      ["john@a.com", "Carter"], ["john.carter@a.com", "Carter"], ["john.smith@a.com", "Smith"], ["john.s@a.com", "Smith"],
+    ]);
+    const many = readPeople("A Bee\nC Dee\nE Eff\nG Hay").people;
+    expect(planMailboxes({ domains: ["a.com"], people: many, styles: DEFAULT_STYLES })).toEqual({ error: expect.stringContaining("12 inboxes a domain (4 names × 3 styles)") });
+    expect(planMailboxes({ domains: ["a.com"], people, styles: [] })).toEqual({ error: "Tick at least one address style" });
+    expect(planMailboxes({ domains: ["a.com"], people: [], styles: DEFAULT_STYLES })).toEqual({ error: "Add a name for the inboxes" });
+    expect(planMailboxes({ domains: [], people, styles: DEFAULT_STYLES })).toEqual({ error: "Pick at least one domain" });
   });
 });
 

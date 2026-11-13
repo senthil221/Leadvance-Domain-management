@@ -10,7 +10,7 @@ import { cancelIcemailDomains, cancelIcemailItem, retryIcemailItem, undoIcemailC
 import { DomainLink } from "@/components/domains/DomainLink";
 import { Badge, ClientCell, Empty } from "@/components/ui";
 import { ago, int, shortDate } from "@/lib/format";
-import { VERDICT_META, type IcemailVerdict } from "@/lib/icemail-board";
+import { DEFAULT_STYLES, STYLE_ORDER, VERDICT_META, type IcemailVerdict } from "@/lib/icemail-board";
 import type { IcemailBoard, IcemailCancelRow, IcemailDomainRow, IcemailOrderRow } from "@/lib/icemail-db";
 import type { Tone } from "@/lib/status";
 import { IcemailOrderDialog, type OrderSeed } from "./IcemailOrderDialog";
@@ -27,7 +27,10 @@ const md = (d: Date | string) => {
   return t.toLocaleDateString("en-US", { month: "short", day: "numeric", timeZone: "UTC", ...(t.getUTCFullYear() !== new Date().getUTCFullYear() ? { year: "numeric" } : {}) });
 };
 const plural = (n: number, one: string, many = `${one}s`) => `${int(n)} ${n === 1 ? one : many}`;
-const FILTERS: (IcemailVerdict | "all")[] = ["all", "replace", "cancel", "keep", "new", "cancelling", "free"];
+/** A replacement keeps the old domain's count: as many styles as it had inboxes a name. */
+const replaceStyles = (d: IcemailDomainRow) =>
+  d.people.length ? STYLE_ORDER.slice(0, Math.max(1, Math.min(STYLE_ORDER.length, Math.round(d.mailboxes / d.people.length)))) : DEFAULT_STYLES;
+const FILTERS: (IcemailVerdict | "all")[] =["all", "replace", "cancel", "keep", "new", "cancelling", "free"];
 const RANK: Record<IcemailVerdict, number> = { replace: 0, cancel: 1, new: 3, keep: 2, cancelling: 4, free: 5 };
 
 const ITEM_STATUS: Record<string, { label: string; tone: Tone }> = {
@@ -83,7 +86,7 @@ export function IcemailView({ board, dryRun }: { board: IcemailBoard; dryRun: bo
     accountId: replaces?.accountId ?? accounts[0].id,
     clientId: replaces?.clientId ?? null,
     replaces,
-    perDomain: replaces ? Math.max(1, Math.min(10, replaces.mailboxes)) : 3,
+    styles: replaces ? replaceStyles(replaces) : DEFAULT_STYLES,
     names: replaces ? replaces.people.map((p) => `${p.first} ${p.last}`).join("\n") : "",
   });
   const syncAll = () => startSync(async () => {

@@ -2351,6 +2351,7 @@ body.is-col-resizing { cursor: col-resize; user-select: none; }
 .ice-form .faint, .ice-cancel-list .faint { color: var(--faint); }
 .ice-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: var(--s-12); }
 .ice-grid.is-2 { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+.ice-grid.is-3 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 .ice-col { display: flex; flex-direction: column; gap: var(--s-12); }
 .ice-search { width: 100%; }
 .ice-pick { max-height: 240px; overflow: auto; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); }
@@ -2363,6 +2364,8 @@ body.is-col-resizing { cursor: col-resize; user-select: none; }
 .ice-opt-name { color: var(--ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .ice-opt-meta { margin-left: auto; color: var(--faint); font-size: var(--fs-12); white-space: nowrap; }
 .ice-names { min-height: 132px; font-family: var(--font-mono, ui-monospace, monospace); font-size: var(--fs-12); }
+.ice-styles { border: 1px solid var(--line); border-radius: 8px; background: var(--surface); padding: var(--s-4) 0; }
+.ice-styles .ice-opt-name { font-family: var(--font-mono, ui-monospace, monospace); font-size: var(--fs-12); }
 .ice-review { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--s-8); max-height: 300px; overflow: auto; }
 .ice-review-domain { border: 1px solid var(--line); border-radius: 8px; padding: var(--s-8) var(--s-12); }
 .ice-review-name { display: flex; align-items: center; gap: var(--s-8); font-weight: 600; color: var(--ink); font-size: var(--fs-13); margin-bottom: var(--s-4); }
@@ -2374,5 +2377,5 @@ body.is-col-resizing { cursor: col-resize; user-select: none; }
 .ice-cancel-list li { display: flex; justify-content: space-between; gap: var(--s-12); font-size: var(--fs-13); padding: var(--s-4) 0; border-bottom: 1px solid var(--line); }
 .ice-cancel-list li:last-child { border-bottom: 0; }
 @media (max-width: 860px) {
-  .ice-grid, .ice-grid.is-2, .ice-review { grid-template-columns: minmax(0, 1fr); }
+  .ice-grid, .ice-grid.is-2, .ice-grid.is-3, .ice-review { grid-template-columns: minmax(0, 1fr); }
 }
