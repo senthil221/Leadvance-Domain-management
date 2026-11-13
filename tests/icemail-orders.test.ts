@@ -4,9 +4,10 @@ import postgres from "postgres";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createIcemail, parseIcemailDeletion, parseIcemailOrder, parseIcemailWallet, shapeOf } from "../src/integrations/icemail";
 import { errorText } from "../src/integrations/http";
+import { parseRdapDomain, parseWhois, type RegistryRecord } from "../src/integrations/rdap";
 import { processIcemailActions } from "../src/jobs/icemail-orders";
 import type { IcemailAccount } from "../src/jobs/icemail-sync";
-import { cancelBy, DEFAULT_STYLES, itemStage, planMailboxes, readPeople, styleExample, verdictOf, type DomainFacts, type OrderItemFacts } from "../src/lib/icemail-board";
+import { cancelBy, DEFAULT_STYLES, ICEMAIL_NAMESERVERS, itemStage, planMailboxes, readPeople, styleExample, verdictOf, type DomainFacts, type OrderItemFacts } from "../src/lib/icemail-board";
 import { loadMigrations } from "../scripts/migrations";
 
 const ok = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
@@ -266,6 +267,53 @@ describe("Icemail orders and cancels job", () => {
     expect(await statuses()).toEqual([["fresh.io", "ordered"], ["manual.io", "failed"]]);
     const [m] = await sql`select message from icemail_order_items where domain_name = 'manual.io'`;
     expect(m.message).toBe("Its nameservers couldn't be moved to Icemail: No API access. Retry once they point at the four ClouDNS nameservers");
+  });
+
+  it("orders an inventory domain once its registry shows ClouDNS, not only its registrar", async () => {
+    const items: { domain: string; nsRequest: string }[] = [];
+    for (const name of ["slow.pro", "quiet.pro", "stuck.pro"]) {
+      const [d] = await sql`insert into domains (name) values (${name}) returning id`;
+      const [r] = await sql`insert into nameserver_requests (domain_id, source, target, actor, status, finished_at)
+        values (${d.id}, 'custom', ${ICEMAIL_NAMESERVERS}::text[], 'me', 'done', now()) returning id`;
+      items.push({ domain: name, nsRequest: r.id });
+    }
+    await order(items.map((i) => ({ ...i, status: "nameservers" })));
+    const old: RegistryRecord = { found: true, registrar: "Spaceship, Inc.", expiresAt: null, status: [], nameservers: ["launch1.spaceship.net", "launch2.spaceship.net"] };
+    const answers: Record<string, RegistryRecord> = { "slow.pro": old, "quiet.pro": { found: null, error: "rdap.example didn't answer" }, "stuck.pro": old };
+    const registry = { lookup: vi.fn(async (name: string) => ({ ...answers[name], host: "rdap.example" })) };
+    const calls = newCalls();
+    const run = () => processIcemailActions(sql, [fakeAccount(calls)], { sleep: async () => {}, registry });
+
+    await run();
+    expect(calls.orders).toEqual([]);
+    expect(await statuses()).toEqual([["quiet.pro", "nameservers"], ["slow.pro", "nameservers"], ["stuck.pro", "nameservers"]]);
+    const [slow] = await sql`select message from icemail_order_items where domain_name = 'slow.pro'`;
+    expect(slow.message).toMatch(/ordered once the registry shows Icemail's ClouDNS \(it still shows launch1\.spaceship\.net, launch2\.spaceship\.net\)/);
+    const [quiet] = await sql`select message from icemail_order_items where domain_name = 'quiet.pro'`;
+    expect(quiet.message).toMatch(/the registry couldn't say: rdap\.example didn't answer\)\. Ordered anyway 30 minutes after the change/);
+    // Not asked again within two minutes.
+    await run();
+    expect(registry.lookup).toHaveBeenCalledTimes(3);
+
+    // The registry catches up for slow.pro (any case, trailing dots); quiet.pro still can't say
+    // after half an hour; stuck.pro shows Spaceship two days on.
+    answers["slow.pro"] = { ...old, nameservers: ["PNS74.CLOUDNS.UK.", "pns73.cloudns.net", "pns72.cloudns.com", "pns71.cloudns.net"] };
+    await sql`update icemail_order_items set ns_checked_at = null`;
+    await sql`update nameserver_requests r set finished_at = now() - interval '31 minutes' from domains d where d.id = r.domain_id and d.name = 'quiet.pro'`;
+    await sql`update nameserver_requests r set finished_at = now() - interval '49 hours' from domains d where d.id = r.domain_id and d.name = 'stuck.pro'`;
+    const r = await run();
+    expect(calls.orders.sort()).toEqual(["quiet.pro", "slow.pro"]);
+    expect(r.failed).toBe(1);
+    expect(await statuses()).toEqual([["quiet.pro", "ordered"], ["slow.pro", "ordered"], ["stuck.pro", "failed"]]);
+    const [stuck] = await sql`select message, finished_at from icemail_order_items where domain_name = 'stuck.pro'`;
+    expect(stuck.message).toBe("The registry still shows launch1.spaceship.net, launch2.spaceship.net two days after the registrar took the change to ClouDNS, so it wasn't ordered. Check the domain at its registrar, then retry");
+    expect(stuck.finished_at).not.toBeNull();
+  });
+
+  it("reads a domain's nameservers from the registry's RDAP or WHOIS answer", () => {
+    expect(parseRdapDomain({ nameservers: [{ ldhName: "PNS72.CLOUDNS.COM." }, { ldhName: "pns71.cloudns.net" }] })).toMatchObject({ found: true, nameservers: ["pns71.cloudns.net", "pns72.cloudns.com"] });
+    expect(parseRdapDomain({})).not.toHaveProperty("nameservers");
+    expect(parseWhois("Registrar: Spaceship, Inc.\r\nName Server: PNS73.CLOUDNS.NET\r\nName Server: pns74.cloudns.uk\r\n")).toMatchObject({ found: true, nameservers: ["pns73.cloudns.net", "pns74.cloudns.uk"] });
   });
 
   it("says whether money may have been spent when an order errors", async () => {

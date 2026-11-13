@@ -89,7 +89,8 @@ export const JOBS: Job[] = [
         (select count(*) from icemail_connects where status in ('queued', 'connecting', 'no_password')) as k`;
       if (!Number(n) && !Number(k)) return { waiting: 0 };
       const { accounts } = await loadIcemailAccounts(sql);
-      const orders = Number(n) ? await processIcemailActions(sql, accounts) : { waiting: 0 };
+      // Inventory domains are ordered once their registry shows Icemail's ClouDNS, not only their registrar.
+      const orders = Number(n) ? await processIcemailActions(sql, accounts, { registry: rdap }) : { waiting: 0 };
       const connects = Number(k) ? await processSmartleadConnects(sql, accounts, smartlead) : null;
       return { ...orders, ...(connects ? { smartlead: { queued: ready, ...connects } } : {}) };
     },

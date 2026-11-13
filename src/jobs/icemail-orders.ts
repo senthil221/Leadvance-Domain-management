@@ -1,6 +1,9 @@
 import type postgres from "postgres";
 import { ApiError } from "../integrations/http";
 import type { IcemailNewMailbox } from "../integrations/icemail";
+import { sameNameservers } from "../integrations/porkbun";
+import type { RdapClient } from "../integrations/rdap";
+import { ICEMAIL_NAMESERVERS } from "../lib/icemail-board";
 import { queueJob } from "../lib/job-queue";
 import type { IcemailAccount } from "./icemail-sync";
 
@@ -13,12 +16,63 @@ import type { IcemailAccount } from "./icemail-sync";
 // their next billing date, so they keep sending until then.
 
 type Sql = postgres.Sql;
-type Options = { gapMs?: number; maxOrders?: number; sleep?: (ms: number) => Promise<void> };
+/** registry: when given, an inventory domain is ordered only once its registry shows Icemail's ClouDNS. */
+type Options = { gapMs?: number; maxOrders?: number; sleep?: (ms: number) => Promise<void>; registry?: Pick<RdapClient, "lookup"> | null };
 
 const msgOf = (e: unknown) => (e instanceof Error ? e.message : String(e)).replace(/^icemail (\S+) failed: /, "Icemail refused it: ").slice(0, 1000);
 const day = (d: Date | string | null) => (d ? new Date(d).toISOString().slice(0, 10) : null);
 
-export async function processIcemailActions(sql: Sql, accounts: IcemailAccount[], { gapMs = 5500, maxOrders = 8, sleep = (ms) => new Promise((r) => setTimeout(r, ms)) }: Options = {}) {
+/** How often the registry is asked about one domain, how long it may lag the registrar, and how long to wait when it can't say. */
+const REGISTRY_EVERY = "2 minutes";
+const REGISTRY_GIVE_UP_HOURS = 48;
+const REGISTRY_UNSURE_MINUTES = 30;
+
+/**
+ * A registrar answers with the new nameservers at once, but the registry (what
+ * the rest of the internet and Icemail see) can take minutes to hours. Domains
+ * whose change the registrar took are ordered once their registry shows the four
+ * ClouDNS nameservers. A registry that shows others for two days fails the
+ * domain; one that can't say (no answer, or no nameservers in it) is ordered
+ * anyway half an hour after the change. Returns how many failed.
+ */
+async function waitForRegistry(sql: Sql, registry: Pick<RdapClient, "lookup">) {
+  const due = await sql<{ id: string; domain_name: string; minutes: number }[]>`
+    select i.id, i.domain_name, extract(epoch from now() - coalesce(r.finished_at, r.created_at)) / 60 as minutes
+    from icemail_order_items i join nameserver_requests r on r.id = i.ns_request_id
+    where i.status = 'nameservers' and r.status = 'done'
+      and (i.ns_checked_at is null or i.ns_checked_at < now() - ${REGISTRY_EVERY}::interval)
+    order by i.ns_checked_at nulls first, i.id
+    limit 20`;
+  let failed = 0;
+  for (const d of due) {
+    const minutes = Number(d.minutes);
+    const r = await registry.lookup(d.domain_name).catch((e: unknown) => ({ found: null, error: msgOf(e) }) as const);
+    const ns = r.found === true ? r.nameservers ?? null : null;
+    const set = (status: string, message: string | null) => sql`
+      update icemail_order_items set status = ${status}, message = ${message}, ns_checked_at = now(),
+        finished_at = case when ${status} = 'failed' then now() else finished_at end
+      where id = ${d.id} and status = 'nameservers'`;
+    if (ns && sameNameservers(ns, ICEMAIL_NAMESERVERS)) {
+      await set("queued", null);
+    } else if (ns) {
+      if (minutes > REGISTRY_GIVE_UP_HOURS * 60) {
+        await set("failed", `The registry still shows ${ns.join(", ")} two days after the registrar took the change to ClouDNS, so it wasn't ordered. Check the domain at its registrar, then retry`);
+        failed++;
+      } else {
+        await set("nameservers", `The registrar took the change; it is ordered once the registry shows Icemail's ClouDNS (it still shows ${ns.join(", ")}). Looked up every 2 minutes`);
+      }
+    } else if (minutes > REGISTRY_UNSURE_MINUTES) {
+      // The registry can't say: order anyway, the registrar has had it for half an hour.
+      await set("queued", null);
+    } else {
+      const why = r.found === true ? "its answer lists no nameservers" : r.found === false ? "it has no record of the domain" : r.error;
+      await set("nameservers", `The registrar took the change; waiting for the registry to show it before ordering (the registry couldn't say: ${why}). Ordered anyway ${REGISTRY_UNSURE_MINUTES} minutes after the change`);
+    }
+  }
+  return failed;
+}
+
+export async function processIcemailActions(sql: Sql, accounts: IcemailAccount[], { gapMs = 5500, maxOrders = 8, sleep = (ms) => new Promise((r) => setTimeout(r, ms)), registry = null }: Options = {}) {
   const out = { scheduled: 0, undone: 0, ordered: 0, dryRun: 0, failed: 0, waiting: 0 };
   const byId = new Map(accounts.map((a) => [a.id, a]));
   // Set once an order has gone to Icemail this run: the next one waits the gap.
@@ -86,11 +140,14 @@ export async function processIcemailActions(sql: Sql, accounts: IcemailAccount[]
       message = 'The worker stopped in the middle of this order, so it is unclear whether Icemail took it. Check the domain in Icemail (the next sync shows its inboxes here) before retrying'
     where status = 'ordering' and started_at < now() - interval '20 minutes'`;
 
-  // Domains waiting for their nameservers to move to Icemail.
+  // Domains waiting for their nameservers to move to Icemail. A dry run, or a
+  // run without a registry client, orders as soon as the registrar took it.
   await sql`
     update icemail_order_items i set status = 'queued', message = null
     from nameserver_requests r
-    where i.status = 'nameservers' and r.id = i.ns_request_id and r.status in ('done', 'dry_run')`;
+    where i.status = 'nameservers' and r.id = i.ns_request_id
+      and (r.status = 'dry_run' or (r.status = 'done' and ${!registry}))`;
+  if (registry) out.failed += await waitForRegistry(sql, registry);
   const nsFailed = await sql`
     update icemail_order_items i set status = 'failed', finished_at = now(),
       message = 'Its nameservers couldn''t be moved to Icemail' || coalesce(': ' || rtrim(r.message, '. '), '') ||

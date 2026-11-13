@@ -8,7 +8,8 @@ import { isRealTld, isTenantName } from "../lib/audit";
 // over WHOIS instead, at the server IANA names for it.
 
 export type RegistryRecord =
-  | { found: true; registrar: string | null; expiresAt: string | null; status: string[] }
+  /** nameservers: what the registry delegates the domain to, when its answer lists them. */
+  | { found: true; registrar: string | null; expiresAt: string | null; status: string[]; nameservers?: string[] }
   | { found: false }
   | { found: null; error: string };
 
@@ -35,7 +36,13 @@ export function parseRdapDomain(json: unknown): RegistryRecord {
   const entities = Array.isArray(d.entities) ? d.entities.map(obj) : [];
   const reg = entities.find((e) => Array.isArray(e.roles) && e.roles.includes("registrar"));
   const status = (Array.isArray(d.status) ? d.status : []).filter((s): s is string => typeof s === "string").map((s) => s.trim().toLowerCase());
-  return { found: true, registrar: reg ? entityName(reg) : null, expiresAt, status };
+  const ns = cleanNs((Array.isArray(d.nameservers) ? d.nameservers.map(obj) : []).map((n) => n.ldhName ?? n.unicodeName));
+  return { found: true, registrar: reg ? entityName(reg) : null, expiresAt, status, ...(ns.length ? { nameservers: ns } : {}) };
+}
+
+/** Nameserver names, lowercased, without the trailing dot, sorted and once each. */
+function cleanNs(names: unknown[]) {
+  return [...new Set(names.filter((n): n is string => typeof n === "string" && !!n.trim()).map((n) => n.trim().toLowerCase().replace(/\.$/, "")))].sort();
 }
 
 /** IANA's bootstrap: TLD → the base URL of its RDAP server. */
@@ -62,7 +69,8 @@ export function parseWhois(text: string): RegistryRecord {
   const exp = line(/^\s*(?:Registry Expiry Date|Registrar Registration Expiration Date|Expiry Date|Expiration Date):\s*(\S+)/i);
   const status = text.split(/\r?\n/).map((l) => l.match(/^\s*Domain Status:\s*(\S+)/i)?.[1]).filter((x): x is string => !!x).map(eppWords);
   if (!registrar && !exp) return { found: null, error: "the WHOIS answer had no registrar or expiry" };
-  return { found: true, registrar, expiresAt: exp && !Number.isNaN(Date.parse(exp)) ? new Date(exp).toISOString().slice(0, 10) : null, status };
+  const ns = cleanNs(text.split(/\r?\n/).map((l) => l.match(/^\s*(?:Name Server|nserver):\s*(\S+)/i)?.[1]));
+  return { found: true, registrar, expiresAt: exp && !Number.isNaN(Date.parse(exp)) ? new Date(exp).toISOString().slice(0, 10) : null, status, ...(ns.length ? { nameservers: ns } : {}) };
 }
 
 
