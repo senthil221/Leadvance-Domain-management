@@ -207,6 +207,15 @@ export function createIcemail({ apiKey, baseUrl = "https://app.icemail.ai/api/v1
       if (w.balance == null) await http.note("GET", "/wallet", `No balance found in the reply. Its shape: ${JSON.stringify(shapeOf(raw))}`);
       return w;
     },
+    /**
+     * A Google inbox's app password, or null while Icemail hasn't set one. A
+     * read, so dry run doesn't stop it; the caller passes it straight on and
+     * never stores or logs it (api_calls keeps only the path).
+     */
+    async appPassword(mailboxId: string): Promise<string | null> {
+      const d = obj(await get<unknown>(`/mailbox/${encodeURIComponent(mailboxId)}/app-password`));
+      return str(d.app_password);
+    },
     /** What one inbox costs a month, in US dollars. */
     async prices(): Promise<IcemailPrices> {
       const direct = obj(obj(await get<unknown>("/mailbox/price")).direct);

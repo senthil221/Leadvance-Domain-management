@@ -181,6 +181,7 @@ export const ITEM_STATUS: Record<string, { label: string; tone: Tone }> = {
 export type OrderItemFacts = {
   status: string; message: string | null; nsStatus: string | null; mailboxes: number;
   atIcemail: number; activeAtIcemail: number; otherStatus: string | null; inSmartlead: number;
+  connectQueued?: number; connectNoPassword?: number; connectDone?: number; connectDryRun?: number; connectFailed?: number; connectError?: string | null;
 };
 
 /** Where one domain of an order stands: the worker's status, then setup at Icemail and in Smartlead. */
@@ -189,9 +190,15 @@ export function itemStage(i: OrderItemFacts): { label: string; tone: Tone; text:
   if (i.status === "nameservers" && !i.message) return { ...base, text: `Moving its nameservers to Icemail's ClouDNS${i.nsStatus ? ` (${i.nsStatus})` : ""}` };
   if (i.status !== "ordered") return { ...base, text: i.message };
   const n = i.mailboxes;
+  const k = { queued: i.connectQueued ?? 0, noPassword: i.connectNoPassword ?? 0, done: i.connectDone ?? 0, dry: i.connectDryRun ?? 0, failed: i.connectFailed ?? 0 };
   if (i.inSmartlead >= n) return { label: "Live", tone: "success", text: `All ${plural(n, "inbox", "inboxes")} connected in Smartlead` };
+  if (k.failed) return { label: "Not connected", tone: "danger", text: `${k.failed} of ${n} couldn't be added to Smartlead${i.connectError ? `: ${i.connectError}` : ""}` };
+  if (k.queued) return { label: "Connecting", tone: "info", text: `Adding ${plural(k.queued, "inbox", "inboxes")} to Smartlead` };
+  if (k.noPassword) return { label: "Waiting", tone: "warning", text: `${k.noPassword} of ${n} waiting for Icemail to set the Google app password; tried every 30 minutes` };
+  if (k.done > i.inSmartlead) return { label: "Connecting", tone: "info", text: `${k.done} of ${n} added to Smartlead; they show here after the next Smartlead sync` };
+  if (k.dry && !k.done) return { label: "Dry run", tone: "violet", text: "Dry run: Smartlead wasn't asked to add them" };
   if (i.inSmartlead > 0) return { label: "Connecting", tone: "info", text: `${i.inSmartlead} of ${n} connected in Smartlead` };
-  if (i.activeAtIcemail >= n) return { label: "Ready", tone: "success", text: `All ${n} active at Icemail; not connected in Smartlead yet` };
+  if (i.activeAtIcemail >= n) return { label: "Ready", tone: "success", text: `All ${n} active at Icemail; they go to Smartlead within a minute` };
   if (i.atIcemail > 0) return { label: "Setting up", tone: "info", text: `${i.activeAtIcemail} of ${n} active at Icemail${i.otherStatus ? `, the rest ${i.otherStatus}` : ""}` };
   return { label: "Ordered", tone: "info", text: "Icemail took the order; the inboxes show here after the next sync, usually within the hour" };
 }

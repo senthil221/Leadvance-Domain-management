@@ -251,3 +251,39 @@ export async function unclearIcemailOrder(id: string): Promise<ActionResult> {
     return fail(e);
   }
 }
+
+/**
+ * Adds an ordered domain's inboxes to Smartlead now: retries the ones that
+ * failed or were a dry run, and queues every inbox active at Icemail that
+ * isn't in Smartlead or on its way. The worker reads each app password from
+ * Icemail and adds it; nothing about the password passes through here.
+ */
+export async function connectIcemailItem(itemId: string): Promise<ActionResult<{ queued: number }>> {
+  try {
+    const actor = await requireActor();
+    const id = z.uuid().parse(itemId);
+    const queued = await jobSql.begin(async (tx) => {
+      const again = await tx`
+        update icemail_connects set status = 'queued', message = null, started_at = null, finished_at = null
+        where order_item_id = ${id} and status in ('failed', 'dry_run', 'cancelled') returning id`;
+      const added = await tx`
+        insert into icemail_connects (account_id, order_item_id, icemail_mailbox_id, email, domain_name, created_by)
+        select o.account_id, i.id, m.id, m.email, i.domain_name, ${actor}
+        from icemail_order_items i
+        join icemail_orders o on o.id = i.order_id
+        join icemail_domains x on x.domain_name = i.domain_name and x.account_id = o.account_id and x.gone_at is null
+        join icemail_mailboxes m on m.icemail_domain_id = x.id and m.gone_at is null and coalesce(m.status, '') !~* 'cancel|delet'
+        where i.id = ${id} and i.status = 'ordered' and (m.active is true or upper(m.status) = 'ACTIVE')
+          and not exists (select 1 from inboxes b where lower(b.email) = m.email and b.smartlead_account_id is not null)
+        on conflict do nothing
+        returning id`;
+      return again.length + added.length;
+    });
+    if (!queued) throw new UserError("Nothing to connect: its inboxes are in Smartlead or on their way, or none is active at Icemail yet");
+    kick();
+    refresh();
+    return { ok: true, data: { queued } };
+  } catch (e) {
+    return fail(e);
+  }
+}

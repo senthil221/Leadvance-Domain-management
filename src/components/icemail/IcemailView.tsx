@@ -2,11 +2,11 @@
 
 import Link from "next/link";
 import { Dialog } from "radix-ui";
-import { Archive, ArchiveRestore, CircleAlert, Plus, RefreshCw, RotateCcw, Search, Snowflake, Undo2, X } from "lucide-react";
+import { Archive, ArchiveRestore, CircleAlert, Plug, Plus, RefreshCw, RotateCcw, Search, Snowflake, Undo2, X } from "lucide-react";
 import { useMemo, useState, useTransition } from "react";
 import { toast } from "sonner";
 import { syncIcemailNow } from "@/app/actions";
-import { cancelIcemailDomains, cancelIcemailItem, clearIcemailOrders, retryIcemailItem, unclearIcemailOrder, undoIcemailCancel } from "@/app/icemail-actions";
+import { cancelIcemailDomains, cancelIcemailItem, clearIcemailOrders, connectIcemailItem, retryIcemailItem, unclearIcemailOrder, undoIcemailCancel } from "@/app/icemail-actions";
 import { DomainLink } from "@/components/domains/DomainLink";
 import { Badge, ClientCell, Empty } from "@/components/ui";
 import { ago, int, shortDate } from "@/lib/format";
@@ -375,6 +375,10 @@ function OrdersSection({ orders }: { orders: IcemailOrderRow[] }) {
 function OrderItem({ item }: { item: IcemailOrderItemRow }) {
   const s = itemStage(item);
   const [busy, start] = useTransition();
+  const live = item.connectQueued + item.connectNoPassword + item.connectDone;
+  // Retry what failed, or start by hand once some inboxes are active and nothing is on its way.
+  const canConnect = item.status === "ordered" && item.inSmartlead < item.mailboxes
+    && (item.connectFailed > 0 || item.connectDryRun > 0 || (item.activeAtIcemail > 0 && !live));
   const run = (fn: () => Promise<{ ok: boolean; error?: string }>, ok: string) => start(async () => {
     const r = await fn();
     if (!r.ok) toast.error(r.error ?? "Didn't work"); else toast.success(ok);
@@ -386,7 +390,10 @@ function OrderItem({ item }: { item: IcemailOrderItemRow }) {
       <td className="ice-users" title={item.usernames.join("\n")}>{item.usernames.map((u) => u.split("@")[0]).join(", ")}</td>
       <td className="ice-msg" title={s.text ?? undefined}>{s.text}</td>
       <td className="ice-act">
-        {item.status === "queued" || item.status === "nameservers" ? (
+        {canConnect ? (
+          <button type="button" className="icon-btn" title="Add its inboxes to Smartlead now" aria-label={`Connect ${item.domainName} to Smartlead`} disabled={busy}
+            onClick={() => run(() => connectIcemailItem(item.id), `${item.domainName}: on its way to Smartlead`)}><Plug size={14} strokeWidth={1.75} /></button>
+        ) : item.status === "queued" || item.status === "nameservers" ? (
           <button type="button" className="icon-btn" title="Take it out of the order" aria-label={`Take ${item.domainName} out`} disabled={busy}
             onClick={() => run(() => cancelIcemailItem(item.id), `${item.domainName} taken out`)}><X size={14} strokeWidth={1.75} /></button>
         ) : ["failed", "dry_run", "cancelled"].includes(item.status) ? (

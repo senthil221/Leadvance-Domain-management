@@ -91,7 +91,7 @@ describe("Order tracking", () => {
   it("follows an ordered domain from Icemail to Smartlead", () => {
     expect(itemStage(ordered)).toMatchObject({ label: "Ordered", text: expect.stringContaining("after the next sync") });
     expect(itemStage({ ...ordered, atIcemail: 3, activeAtIcemail: 1, otherStatus: "updating" })).toEqual({ label: "Setting up", tone: "info", text: "1 of 3 active at Icemail, the rest updating" });
-    expect(itemStage({ ...ordered, atIcemail: 3, activeAtIcemail: 3 })).toMatchObject({ label: "Ready", text: "All 3 active at Icemail; not connected in Smartlead yet" });
+    expect(itemStage({ ...ordered, atIcemail: 3, activeAtIcemail: 3 })).toMatchObject({ label: "Ready", text: "All 3 active at Icemail; they go to Smartlead within a minute" });
     expect(itemStage({ ...ordered, atIcemail: 3, activeAtIcemail: 3, inSmartlead: 2 })).toMatchObject({ label: "Connecting", text: "2 of 3 connected in Smartlead" });
     expect(itemStage({ ...ordered, atIcemail: 3, activeAtIcemail: 3, inSmartlead: 3 })).toMatchObject({ label: "Live", tone: "success" });
   });

@@ -128,6 +128,29 @@ export function createSmartlead({ apiKey, sql, dryRun = true, baseUrl = "https:/
     /** Campaign sending settings. Both fields are always sent together so neither falls back to a default. */
     updateSending: (accountId: number, s: { max_email_per_day: number; time_to_wait_in_mins: number }) =>
       request("POST", `/email-accounts/${accountId}`, { body: s }),
+    /**
+     * Adds a Google inbox by its app password over SMTP/IMAP. Sent once: after a
+     * network error or a 5xx Smartlead may already have added it. Null id when
+     * the reply didn't name one; { dryRun } in dry run.
+     */
+    addGmailAccount: async (a: GmailAccount): Promise<{ dryRun: true } | { id: number | null }> => {
+      const r = await request<unknown>("POST", "/email-accounts/save", {
+        once: true,
+        body: {
+          id: null, type: "GMAIL",
+          from_name: a.fromName, from_email: a.email, user_name: a.email, password: a.appPassword,
+          smtp_host: "smtp.gmail.com", smtp_port: 587, imap_host: "imap.gmail.com", imap_port: 993,
+          max_email_per_day: a.maxPerDay, time_to_wait_in_mins: a.waitMins,
+          warmup_enabled: a.warmup.enabled, total_warmup_per_day: a.warmup.perDay, daily_rampup: a.warmup.rampup, reply_rate_percentage: a.warmup.replyRate,
+          ...(a.clientId != null ? { client_id: a.clientId } : {}),
+        },
+      });
+      if (r && typeof r === "object" && (r as { dryRun?: boolean }).dryRun) return { dryRun: true };
+      // A refusal can come back as 200 with ok: false (a login Google turned down, say).
+      const o = (r && typeof r === "object" ? r : {}) as { ok?: unknown; message?: unknown; error?: unknown };
+      if (o.ok === false) throw new SmartleadError(`Smartlead refused it: ${String(o.message ?? o.error ?? "no reason given").slice(0, 300)}`, 200, "/email-accounts/save");
+      return { id: savedAccountId(r) };
+    },
     addAccountsToCampaign: (campaignId: number, accountIds: number[]) =>
       request("POST", `/campaigns/${campaignId}/email-accounts`, { body: { email_account_ids: accountIds } }),
 
@@ -160,6 +183,24 @@ export function createSmartlead({ apiKey, sql, dryRun = true, baseUrl = "https:/
 }
 
 export type Smartlead = ReturnType<typeof createSmartlead>;
+
+/** A Google inbox to add to Smartlead. The app password is only passed through. */
+export type GmailAccount = {
+  email: string; fromName: string; appPassword: string;
+  maxPerDay: number; waitMins: number; clientId: number | null;
+  warmup: { enabled: boolean; perDay: number; rampup: number; replyRate: number };
+};
+
+/** The new account's id in a save reply: { ok, data: { id } }, { emailAccountId }, { id }… */
+export function savedAccountId(r: unknown): number | null {
+  const o = (v: unknown) => (v && typeof v === "object" && !Array.isArray(v) ? (v as Record<string, unknown>) : {});
+  const top = o(r), data = o(top.data);
+  for (const v of [data.id, data.email_account_id, data.emailAccountId, top.emailAccountId, top.email_account_id, top.id]) {
+    const n = Number(v);
+    if (v != null && Number.isInteger(n) && n > 0) return n;
+  }
+  return null;
+}
 
 // Smartlead wraps lists inconsistently: a bare array, or { data: [...] }, or
 // { email_accounts: [...] }. Take the first array we find near the top.
