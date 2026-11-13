@@ -42,7 +42,9 @@ async function NavWithCounts() {
         "/replacements": { value: c.runningBatches, warning: true },
         "/expiring": { value: c.expiringUrgent, warning: true },
         "/inboxes": { value: c.attention, warning: true },
+        "/icemail": { value: c.icemailToAct, warning: true },
       }}
+      show={c.icemailAccounts ? ["/icemail"] : []}
     />
   );
 }

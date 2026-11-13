@@ -6,14 +6,14 @@ type Sql = postgres.Sql;
 
 export type IcemailAccount = { id: string; label: string; client: Icemail };
 
-/** Every workspace added in Settings; one whose key can't be decrypted is left out and reported. */
-export async function loadIcemailAccounts(sql: Sql) {
+/** Every workspace added in Settings; one whose key can't be decrypted is left out and reported. Writes follow INTEGRATIONS_DRY_RUN. */
+export async function loadIcemailAccounts(sql: Sql, { dryRun = process.env.INTEGRATIONS_DRY_RUN !== "false" }: { dryRun?: boolean } = {}) {
   const accounts: IcemailAccount[] = [];
   const broken: { id: string; error: string }[] = [];
   const rows = await sql`select id, label, credentials from icemail_accounts order by created_at`.catch(() => []);
   for (const r of rows) {
     try {
-      accounts.push({ id: r.id as string, label: r.label as string, client: createIcemail({ apiKey: open(r.credentials as string).apiKey, sql }) });
+      accounts.push({ id: r.id as string, label: r.label as string, client: createIcemail({ apiKey: open(r.credentials as string).apiKey, sql, dryRun }) });
     } catch (e) {
       broken.push({ id: r.id as string, error: e instanceof Error ? e.message : String(e) });
     }
@@ -31,10 +31,11 @@ export async function loadIcemailAccounts(sql: Sql) {
 export async function syncIcemailAccount(sql: Sql, account: IcemailAccount) {
   const { client } = account;
   const workspace = await client.workspace();
-  const [domains, mailboxes, wallet] = await Promise.all([
+  const [domains, mailboxes, wallet, prices] = await Promise.all([
     client.listDomains(),
     client.listMailboxes(),
     client.wallet().catch(() => null),
+    client.prices().catch(() => null),
   ]);
 
   const result = await sql.begin(async (tx) => {
@@ -129,6 +130,8 @@ export async function syncIcemailAccount(sql: Sql, account: IcemailAccount) {
   await sql`
     update icemail_accounts set workspace_id = coalesce(${workspace.id}, workspace_id), workspace_name = coalesce(${workspace.name}, workspace_name),
       wallet_balance = coalesce(${wallet?.balance ?? null}, wallet_balance), wallet_currency = coalesce(${wallet?.currency ?? null}, wallet_currency),
+      auto_topup = coalesce(${wallet?.autoTopup ?? null}, auto_topup),
+      price_google = coalesce(${prices?.google ?? null}, price_google), price_microsoft = coalesce(${prices?.microsoft ?? null}, price_microsoft),
       last_synced_at = now(), last_ok = true, last_error = null, domain_count = ${domains.length}, mailbox_count = ${mailboxes.length}
     where id = ${account.id}`;
 

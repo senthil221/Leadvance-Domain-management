@@ -21,7 +21,7 @@ export type HttpOptions = {
 };
 
 export type Request = {
-  method?: "GET" | "POST" | "PUT";
+  method?: "GET" | "POST" | "PUT" | "DELETE";
   /** Logged; must not carry keys. */
   path: string;
   /** Sent instead of path, for APIs that take the key in the query. */
@@ -97,9 +97,13 @@ export function createHttp({ service, baseUrl, sql, dryRun = true, minSpacingMs 
 
 /** The message in a typical JSON error body. */
 export function errorText(json: Record<string, unknown>): string | null {
+  // Field errors, as Icemail sends them: [{ field, message }].
+  const fields = Array.isArray(json.errors)
+    ? json.errors.map((e) => (e && typeof e === "object" && typeof (e as { message?: unknown }).message === "string" ? (e as { message: string }).message.trim() : null)).filter(Boolean)
+    : [];
   for (const k of ["detail", "message", "error", "Error", "title"]) {
     const v = json[k];
-    if (typeof v === "string" && v.trim()) return v.trim();
+    if (typeof v === "string" && v.trim()) return fields.length ? `${v.trim()}: ${fields.slice(0, 3).join("; ")}` : v.trim();
     if (v && typeof v === "object" && typeof (v as { message?: unknown }).message === "string") return (v as { message: string }).message;
   }
   return null;

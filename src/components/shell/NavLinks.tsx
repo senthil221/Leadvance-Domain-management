@@ -6,7 +6,8 @@ import { groupOf, NAV } from "./nav";
 
 export type NavBadges = Partial<Record<string, { value: number; warning?: boolean }>>;
 
-export function NavLinks({ badges = {} }: { badges?: NavBadges }) {
+/** show: the optional entries to list (Icemail only where a workspace is connected). */
+export function NavLinks({ badges = {}, show = [] }: { badges?: NavBadges; show?: string[] }) {
   const pathname = usePathname();
   const current = groupOf(pathname);
   return (
@@ -14,7 +15,7 @@ export function NavLinks({ badges = {} }: { badges?: NavBadges }) {
       {NAV.map((section) => (
         <div key={section.label} className="nav-section">
           <p className="nav-label">{section.label}</p>
-          {section.items.map(({ href, label, icon: Icon, pages }) => {
+          {section.items.filter((i) => !i.optional || show.includes(i.href)).map(({ href, label, icon: Icon, pages }) => {
             // A grouped entry shows the most pressing badge of its pages.
             const badge = [href, ...pages.map((x) => x.href)].map((h) => badges[h]).find((b) => b && b.value > 0 && b.warning) ?? badges[href];
             return (

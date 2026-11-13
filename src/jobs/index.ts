@@ -7,6 +7,7 @@ import { createSmartleadApp, type SmartleadApp } from "../integrations/smartlead
 import { syncBlacklists } from "./blacklist";
 import { fillBounceCauses } from "./bounce-causes";
 import { syncHypertideOrders } from "./hypertide-sync";
+import { processIcemailActions } from "./icemail-orders";
 import { loadIcemailAccounts, syncAllIcemail } from "./icemail-sync";
 import { processInboxChanges, runDuePlans } from "./inbox-settings";
 import { checkNameservers, processNameserverRequests } from "./nameservers";
@@ -73,6 +74,18 @@ export const JOBS: Job[] = [
     run: async ({ sql }) => {
       const { accounts, broken } = await loadIcemailAccounts(sql);
       return syncAllIcemail(sql, accounts, broken);
+    },
+  },
+  {
+    name: "icemail-orders",
+    label: "Icemail orders and cancels",
+    everyMinutes: 1,
+    run: async ({ sql }) => {
+      const [{ n }] = await sql`select (select count(*) from icemail_order_items where status in ('queued', 'nameservers', 'ordering'))
+        + (select count(*) from icemail_cancels where status in ('queued', 'undo_queued')) as n`;
+      if (!Number(n)) return { waiting: 0 };
+      const { accounts } = await loadIcemailAccounts(sql);
+      return processIcemailActions(sql, accounts);
     },
   },
   {

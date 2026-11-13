@@ -48,7 +48,8 @@ export async function listVendors() {
   return sql<VendorRow[]>`select id, name, kind, api_supported from vendors order by kind, name`;
 }
 
-export type NavCounts = { byStatus: Record<DomainStatus, number>; openAlerts: number; runningBatches: number; connectionProblems: number; expiringUrgent: number; attention: number; fixToday: number; toReplace: number };
+export type NavCounts = { byStatus: Record<DomainStatus, number>; openAlerts: number; runningBatches: number; connectionProblems: number; expiringUrgent: number; attention: number; fixToday: number; toReplace: number;
+  /** Icemail workspaces connected, and Icemail orders or cancels that failed in the last 7 days. */ icemailAccounts: number; icemailToAct: number };
 
 export type FixQueueData = { items: FixItem[]; snoozed: (FixItem & { until: string })[]; slSyncedAt: Date | null };
 
@@ -113,8 +114,11 @@ export async function getNavCounts(): Promise<NavCounts> {
   const facts = fixFacts();
   const [statusRows, [extra], attention, fix, replace] = await Promise.all([
     sql<{ status: DomainStatus; n: number }[]>`select status, count(*)::int as n from domains group by status`,
-    sql<{ openAlerts: number; runningBatches: number; connectionProblems: number; expiringUrgent: number }[]>`
+    sql<{ openAlerts: number; runningBatches: number; connectionProblems: number; expiringUrgent: number; icemailAccounts: number; icemailToAct: number }[]>`
       select
+        (select count(*)::int from icemail_accounts) as icemail_accounts,
+        (select count(*)::int from icemail_order_items where status = 'failed' and finished_at > now() - interval '7 days')
+          + (select count(*)::int from icemail_cancels where status = 'failed' and finished_at > now() - interval '7 days') as icemail_to_act,
         (select count(*)::int from domains d where d.status in ('active', 'warming', 'provisioning') and d.expires_at <= current_date + 14 and d.auto_renew is not true
           and not exists (select 1 from replacement_items ri join replacement_batches rb on rb.id = ri.batch_id where ri.old_domain_id = d.id and rb.status <> 'cancelled')) as expiring_urgent,
         (select count(*)::int from alerts where status = 'open') as open_alerts,
