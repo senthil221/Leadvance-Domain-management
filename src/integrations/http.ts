@@ -92,7 +92,10 @@ export function createHttp({ service, baseUrl, sql, dryRun = true, minSpacingMs 
     }
   }
 
-  return { dryRun, request };
+  /** A note in api_calls about a reply that came back fine but couldn't be read. Must not carry keys or values. */
+  const note = (method: string, path: string, message: string) => log(method, path, null, Date.now(), message);
+
+  return { dryRun, request, note };
 }
 
 /** The message in a typical JSON error body. */

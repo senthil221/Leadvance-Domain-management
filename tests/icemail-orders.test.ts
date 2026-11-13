@@ -2,7 +2,7 @@ import { PGlite } from "@electric-sql/pglite";
 import { PGLiteSocketServer } from "@electric-sql/pglite-socket";
 import postgres from "postgres";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { createIcemail, parseIcemailDeletion, parseIcemailOrder } from "../src/integrations/icemail";
+import { createIcemail, parseIcemailDeletion, parseIcemailOrder, parseIcemailWallet, shapeOf } from "../src/integrations/icemail";
 import { errorText } from "../src/integrations/http";
 import { processIcemailActions } from "../src/jobs/icemail-orders";
 import type { IcemailAccount } from "../src/jobs/icemail-sync";
@@ -112,6 +112,30 @@ describe("Icemail write calls", () => {
       .toBe("Validation failed: username must end with @fresh.io");
     expect(parseIcemailOrder({ order_id: "o" }, "x.com")).toEqual({ orderId: "o", domainId: null, mailboxIds: [] });
     expect(parseIcemailDeletion(null)).toEqual([]);
+  });
+});
+
+describe("Icemail wallet", () => {
+  it("reads the documented reply and the likely other shapes", () => {
+    const docs = { balance: 125.5, currency: "USD", auto_topup: { enabled: true, threshold: 10 } };
+    expect(parseIcemailWallet({ success: true, data: docs })).toEqual({ balance: 125.5, currency: "USD", autoTopup: true });
+    expect(parseIcemailWallet({ success: true, data: { wallet: { balance: "40.00", currency: "USD" } } })).toMatchObject({ balance: 40 });
+    expect(parseIcemailWallet({ success: true, data: [{ available_balance: 12 }] })).toMatchObject({ balance: 12 });
+    expect(parseIcemailWallet({ balance: { amount: 7, currency: "USD" }, auto_topup: false })).toEqual({ balance: 7, currency: "USD", autoTopup: false });
+    expect(parseIcemailWallet({ data: { balance_cents: 2550 } })).toMatchObject({ balance: 25.5 });
+    expect(parseIcemailWallet({ success: true, data: { something: 1 } })).toEqual({ balance: null, currency: null, autoTopup: null });
+  });
+
+  it("logs the shape of a reply it can't read, never its values", async () => {
+    const fetchImpl = vi.fn(async () => ok({ success: true, data: { funds: { usd: 99.5 }, owner: "someone@x.com" } })) as unknown as typeof fetch;
+    const logged: unknown[][] = [];
+    const sql = ((_: TemplateStringsArray, ...values: unknown[]) => { logged.push(values); return Promise.resolve([]); }) as unknown as postgres.Sql;
+    const w = await createIcemail({ apiKey: "k", fetchImpl, sql, minSpacingMs: 0 }).wallet();
+    expect(w.balance).toBeNull();
+    const note = logged.map((v) => v[5]).find((e) => typeof e === "string") as string;
+    expect(note).toBe('No balance found in the reply. Its shape: {"success":"boolean","data":{"funds":{"usd":"number"},"owner":"string"}}');
+    expect(JSON.stringify(logged)).not.toMatch(/99\.5|someone@x\.com/);
+    expect(shapeOf([])).toEqual([]);
   });
 });
 

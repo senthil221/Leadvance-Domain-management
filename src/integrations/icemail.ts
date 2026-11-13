@@ -109,6 +109,40 @@ export function parseIcemailMailbox(raw: unknown): IcemailMailbox | null {
 }
 
 /** Icemail's reply to an order: ids only, never the passwords it echoes back. */
+/** A reply's field names and value types, never its values: safe to log. */
+export function shapeOf(v: unknown, depth = 0): unknown {
+  if (depth > 4) return typeof v;
+  if (Array.isArray(v)) return v.length ? [shapeOf(v[0], depth + 1)] : [];
+  if (v && typeof v === "object") return Object.fromEntries(Object.entries(v).slice(0, 30).map(([k, x]) => [k, shapeOf(x, depth + 1)]));
+  return v === null ? "null" : typeof v;
+}
+
+/**
+ * The wallet from a /wallet reply. The docs put it at data.balance, but the
+ * live reply doesn't match them, so it also looks under data.wallet, a list,
+ * the top level, and the usual other names for a balance.
+ */
+export function parseIcemailWallet(raw: unknown): IcemailWallet {
+  const top = obj(raw);
+  const data = Array.isArray(top.data) ? obj(top.data[0]) : obj(top.data);
+  const places = [data, obj(data.wallet), obj(top.wallet), top].filter((p) => Object.keys(p).length);
+  for (const p of places) {
+    const b = p.balance;
+    const nested = obj(b);
+    const cents = num(p.balance_cents) ?? num(p.balance_in_cents);
+    const balance = num(b) ?? num(nested.amount) ?? num(nested.value) ?? num(p.available_balance) ?? num(p.current_balance)
+      ?? num(p.wallet_balance) ?? num(p.credits) ?? num(p.credit) ?? num(p.amount) ?? (cents == null ? null : cents / 100);
+    if (balance == null) continue;
+    const auto = p.auto_topup ?? p.autoTopup ?? p.auto_top_up;
+    return {
+      balance,
+      currency: str(p.currency) ?? str(nested.currency),
+      autoTopup: bool(auto) ?? bool(obj(auto).enabled) ?? bool(p.auto_topup_enabled),
+    };
+  }
+  return { balance: null, currency: null, autoTopup: null };
+}
+
 export function parseIcemailOrder(raw: unknown, domainName: string): IcemailOrderResult {
   const list = Array.isArray(raw) ? raw : [raw];
   const entry = obj(list.find((x) => validDomain(obj(x).domain_name) === domainName) ?? list[0]);
@@ -166,8 +200,11 @@ export function createIcemail({ apiKey, baseUrl = "https://app.icemail.ai/api/v1
     },
     dryRun,
     async wallet(): Promise<IcemailWallet> {
-      const w = obj(await get<unknown>("/wallet"));
-      return { balance: num(w.balance), currency: str(w.currency), autoTopup: bool(obj(w.auto_topup).enabled) };
+      const raw = await http.request<unknown>({ path: "/wallet", headers }, failed);
+      const w = parseIcemailWallet(raw);
+      // No balance where we look: keep the reply's shape (names and types only) in the API log.
+      if (w.balance == null) await http.note("GET", "/wallet", `No balance found in the reply. Its shape: ${JSON.stringify(shapeOf(raw))}`);
+      return w;
     },
     /** What one inbox costs a month, in US dollars. */
     async prices(): Promise<IcemailPrices> {
