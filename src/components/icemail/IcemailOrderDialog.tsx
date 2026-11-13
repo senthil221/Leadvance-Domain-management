@@ -19,8 +19,8 @@ type Picked = { name: string; source: "icemail" | "inventory" };
 
 export type OrderSeed = { accountId: string; clientId: string | null; replaces: IcemailDomainRow | null; styles: AddressStyle[]; names: string };
 
-export function IcemailOrderDialog({ open, onOpenChange, seed, accounts, domains, freeInventory, clients, dryRun }: {
-  open: boolean; onOpenChange: (open: boolean) => void; seed: OrderSeed;
+export function IcemailOrderDialog({ open, onOpenChange, onPlaced, seed, accounts, domains, freeInventory, clients, dryRun }: {
+  open: boolean; onOpenChange: (open: boolean) => void; onPlaced?: () => void; seed: OrderSeed;
   accounts: IcemailAccountInfo[]; domains: IcemailDomainRow[]; freeInventory: FreeInventoryDomain[];
   clients: { id: string; name: string }[]; dryRun: boolean;
 }) {
@@ -66,6 +66,7 @@ export function IcemailOrderDialog({ open, onOpenChange, seed, accounts, domains
     const ns = r.data.nameservers ? ` ${plural(r.data.nameservers, "domain")} first ${r.data.nameservers === 1 ? "moves its" : "move their"} nameservers to Icemail.` : "";
     toast.success(`${plural(r.data.inboxes, "inbox", "inboxes")} on ${plural(r.data.domains, "domain")} queued.${ns}${seed.replaces ? ` ${seed.replaces.name} is cancelled to end on its billing date.` : ""}${r.data.dryRun ? " Dry run: Icemail won't be asked." : ""}`);
     onOpenChange(false);
+    onPlaced?.();
   });
 
   return (

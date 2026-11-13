@@ -37,11 +37,13 @@ export type FreeInventoryDomain = { id: string; name: string; registrar: string 
 export type IcemailOrderItemRow = {
   id: string; domainName: string; domainId: string | null; status: string; message: string | null;
   mailboxes: number; usernames: string[]; nsStatus: string | null; finishedAt: Date | null;
+  /** Setup so far, from the last Icemail sync: inboxes Icemail has on the domain, how many are active, any other status, and how many are connected in Smartlead. */
+  atIcemail: number; activeAtIcemail: number; otherStatus: string | null; inSmartlead: number;
 };
 export type IcemailOrderRow = {
   id: string; accountId: string; accountLabel: string; clientId: string | null; clientName: string | null; clientHue: number | null;
   provider: string; priceUsd: number | null; quotedMonthlyUsd: number | null; note: string | null;
-  createdBy: string; createdAt: Date; cancelledAt: Date | null; items: IcemailOrderItemRow[];
+  createdBy: string; createdAt: Date; cancelledAt: Date | null; clearedAt: Date | null; clearedBy: string | null; items: IcemailOrderItemRow[];
 };
 export type IcemailCancelRow = IcemailCancelInfo & { domainName: string; domainId: string | null; accountLabel: string; mailboxes: number | null; finishedAt: Date | null };
 
@@ -125,23 +127,35 @@ export async function getIcemailBoard(): Promise<IcemailBoard> {
     sql<Omit<IcemailOrderRow, "items">[]>`
       select o.id, o.account_id, a.label as account_label, o.client_id, c.name as client_name, c.hue as client_hue,
         o.provider, o.price_usd::float8 as price_usd, o.quoted_monthly_usd::float8 as quoted_monthly_usd, o.note,
-        o.created_by, o.created_at, o.cancelled_at
+        o.created_by, o.created_at, o.cancelled_at, o.cleared_at, o.cleared_by
       from icemail_orders o
       join icemail_accounts a on a.id = o.account_id
       left join clients c on c.id = o.client_id
-      where o.created_at > now() - interval '60 days'
-        or exists (select 1 from icemail_order_items i where i.order_id = o.id and i.status in ('queued', 'nameservers', 'ordering'))
+      -- Kept until cleared; cleared ones for 60 days, to bring back.
+      where o.cleared_at is null or o.created_at > now() - interval '60 days'
       order by o.created_at desc
-      limit 50`,
+      limit 200`,
     sql<(IcemailOrderItemRow & { orderId: string })[]>`
       select i.id, i.order_id, i.domain_name, i.domain_id, i.status, i.message, i.finished_at,
         jsonb_array_length(i.mailboxes)::int as mailboxes,
         array(select jsonb_array_elements(i.mailboxes) ->> 'username') as usernames,
-        r.status as ns_status
+        r.status as ns_status,
+        coalesce(mb.at_icemail, 0) as at_icemail, coalesce(mb.active_at_icemail, 0) as active_at_icemail, mb.other_status,
+        coalesce(sl.in_smartlead, 0) as in_smartlead
       from icemail_order_items i
+      join icemail_orders o on o.id = i.order_id
       left join nameserver_requests r on r.id = i.ns_request_id
-      where i.order_id in (select id from icemail_orders where created_at > now() - interval '60 days')
-        or i.status in ('queued', 'nameservers', 'ordering')
+      left join lateral (
+        select count(*)::int as at_icemail,
+          (count(*) filter (where m.active is true or upper(m.status) = 'ACTIVE'))::int as active_at_icemail,
+          string_agg(distinct lower(m.status), ', ') filter (where not (m.active is true or upper(m.status) = 'ACTIVE')) as other_status
+        from icemail_domains x join icemail_mailboxes m on m.icemail_domain_id = x.id
+        where i.status = 'ordered' and x.domain_name = i.domain_name and x.gone_at is null and m.gone_at is null) mb on true
+      left join lateral (
+        select (count(*) filter (where b.status = 'connected'))::int as in_smartlead
+        from domains d join inboxes b on b.domain_id = d.id
+        where i.status = 'ordered' and d.name = i.domain_name) sl on true
+      where o.cleared_at is null or o.created_at > now() - interval '60 days'
       order by i.domain_name`,
     sql<IcemailCancelRow[]>`
       select k.id, k.status, k.reason, k.deletes_on, k.message, k.created_at, k.created_by, k.domain_name, k.domain_id,

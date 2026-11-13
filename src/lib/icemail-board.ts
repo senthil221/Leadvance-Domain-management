@@ -1,4 +1,5 @@
 import type { ReplaceCall } from "./replace-list";
+import type { Tone } from "./status";
 
 // The Icemail page's rules, shared by server and client: what to do with each
 // Icemail domain, when to cancel it by, and the inboxes a new order creates.
@@ -162,3 +163,35 @@ export function planMailboxes({ domains, people, styles }: { domains: string[]; 
 
 /** What an order costs a month: inboxes times the price of one. Null without a price. */
 export const monthlyCost = (inboxes: number, price: number | null) => (price == null ? null : Math.round(inboxes * price * 100) / 100);
+
+// ---------------------------------------------------------------------------
+// Orders
+// ---------------------------------------------------------------------------
+
+export const ITEM_STATUS: Record<string, { label: string; tone: Tone }> = {
+  queued: { label: "Waiting", tone: "faint" },
+  nameservers: { label: "Nameservers", tone: "info" },
+  ordering: { label: "Ordering…", tone: "info" },
+  ordered: { label: "Ordered", tone: "success" },
+  dry_run: { label: "Dry run", tone: "violet" },
+  failed: { label: "Failed", tone: "danger" },
+  cancelled: { label: "Taken out", tone: "faint" },
+};
+
+export type OrderItemFacts = {
+  status: string; message: string | null; nsStatus: string | null; mailboxes: number;
+  atIcemail: number; activeAtIcemail: number; otherStatus: string | null; inSmartlead: number;
+};
+
+/** Where one domain of an order stands: the worker's status, then setup at Icemail and in Smartlead. */
+export function itemStage(i: OrderItemFacts): { label: string; tone: Tone; text: string | null } {
+  const base = ITEM_STATUS[i.status] ?? { label: i.status, tone: "faint" as Tone };
+  if (i.status === "nameservers" && !i.message) return { ...base, text: `Moving its nameservers to Icemail's ClouDNS${i.nsStatus ? ` (${i.nsStatus})` : ""}` };
+  if (i.status !== "ordered") return { ...base, text: i.message };
+  const n = i.mailboxes;
+  if (i.inSmartlead >= n) return { label: "Live", tone: "success", text: `All ${plural(n, "inbox", "inboxes")} connected in Smartlead` };
+  if (i.inSmartlead > 0) return { label: "Connecting", tone: "info", text: `${i.inSmartlead} of ${n} connected in Smartlead` };
+  if (i.activeAtIcemail >= n) return { label: "Ready", tone: "success", text: `All ${n} active at Icemail; not connected in Smartlead yet` };
+  if (i.atIcemail > 0) return { label: "Setting up", tone: "info", text: `${i.activeAtIcemail} of ${n} active at Icemail${i.otherStatus ? `, the rest ${i.otherStatus}` : ""}` };
+  return { label: "Ordered", tone: "info", text: "Icemail took the order; the inboxes show here after the next sync, usually within the hour" };
+}

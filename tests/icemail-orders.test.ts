@@ -6,7 +6,7 @@ import { createIcemail, parseIcemailDeletion, parseIcemailOrder, parseIcemailWal
 import { errorText } from "../src/integrations/http";
 import { processIcemailActions } from "../src/jobs/icemail-orders";
 import type { IcemailAccount } from "../src/jobs/icemail-sync";
-import { cancelBy, DEFAULT_STYLES, planMailboxes, readPeople, styleExample, verdictOf, type DomainFacts } from "../src/lib/icemail-board";
+import { cancelBy, DEFAULT_STYLES, itemStage, planMailboxes, readPeople, styleExample, verdictOf, type DomainFacts, type OrderItemFacts } from "../src/lib/icemail-board";
 import { loadMigrations } from "../scripts/migrations";
 
 const ok = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
@@ -82,6 +82,23 @@ describe("New inboxes", () => {
     expect(planMailboxes({ domains: ["a.com"], people, styles: [] })).toEqual({ error: "Tick at least one address style" });
     expect(planMailboxes({ domains: ["a.com"], people: [], styles: DEFAULT_STYLES })).toEqual({ error: "Add a name for the inboxes" });
     expect(planMailboxes({ domains: [], people, styles: DEFAULT_STYLES })).toEqual({ error: "Pick at least one domain" });
+  });
+});
+
+describe("Order tracking", () => {
+  const ordered: OrderItemFacts = { status: "ordered", message: "Ordered", nsStatus: null, mailboxes: 3, atIcemail: 0, activeAtIcemail: 0, otherStatus: null, inSmartlead: 0 };
+
+  it("follows an ordered domain from Icemail to Smartlead", () => {
+    expect(itemStage(ordered)).toMatchObject({ label: "Ordered", text: expect.stringContaining("after the next sync") });
+    expect(itemStage({ ...ordered, atIcemail: 3, activeAtIcemail: 1, otherStatus: "updating" })).toEqual({ label: "Setting up", tone: "info", text: "1 of 3 active at Icemail, the rest updating" });
+    expect(itemStage({ ...ordered, atIcemail: 3, activeAtIcemail: 3 })).toMatchObject({ label: "Ready", text: "All 3 active at Icemail; not connected in Smartlead yet" });
+    expect(itemStage({ ...ordered, atIcemail: 3, activeAtIcemail: 3, inSmartlead: 2 })).toMatchObject({ label: "Connecting", text: "2 of 3 connected in Smartlead" });
+    expect(itemStage({ ...ordered, atIcemail: 3, activeAtIcemail: 3, inSmartlead: 3 })).toMatchObject({ label: "Live", tone: "success" });
+  });
+
+  it("shows the worker status and its message before the order goes", () => {
+    expect(itemStage({ ...ordered, status: "nameservers", message: null, nsStatus: "pending" })).toMatchObject({ label: "Nameservers", text: "Moving its nameservers to Icemail's ClouDNS (pending)" });
+    expect(itemStage({ ...ordered, status: "failed", message: "Nothing was ordered" })).toEqual({ label: "Failed", tone: "danger", text: "Nothing was ordered" });
   });
 });
 
@@ -292,6 +309,13 @@ describe("Icemail orders and cancels job", () => {
     const [c] = await sql`select status, message from icemail_cancels`;
     expect(c.status).toBe("failed");
     expect(c.message).toMatch(/no longer connected/);
+  });
+
+  it("keeps who cleared an order and when", async () => {
+    const id = await order([{ domain: "a.com" }]);
+    await sql`update icemail_orders set cleared_at = now(), cleared_by = 'me' where id = ${id}`;
+    const [o] = await sql`select cleared_by, cleared_at is not null as cleared from icemail_orders where id = ${id}`;
+    expect(o).toEqual({ cleared_by: "me", cleared: true });
   });
 
   it("allows one open order and one live cancel per domain", async () => {

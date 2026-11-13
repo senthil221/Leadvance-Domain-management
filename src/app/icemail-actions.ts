@@ -218,3 +218,36 @@ export async function cancelIcemailItem(itemId: string): Promise<ActionResult> {
     return fail(e);
   }
 }
+
+/**
+ * Clears orders from the Orders tab once nothing is left for the worker to do
+ * on them. Nothing is deleted and Icemail isn't asked; Bring back undoes it.
+ */
+export async function clearIcemailOrders(ids: string[]): Promise<ActionResult<{ cleared: number }>> {
+  try {
+    const actor = await requireActor();
+    const list = z.array(z.uuid()).min(1, "Pick an order to clear").max(200).parse(ids);
+    const rows = await jobSql`
+      update icemail_orders o set cleared_at = now(), cleared_by = ${actor}
+      where o.id = any(${list}::uuid[]) and o.cleared_at is null
+        and not exists (select 1 from icemail_order_items i where i.order_id = o.id and i.status in ('queued', 'nameservers', 'ordering'))
+      returning o.id`;
+    if (!rows.length) throw new UserError("Only an order with nothing still waiting can be cleared");
+    refresh();
+    return { ok: true, data: { cleared: rows.length } };
+  } catch (e) {
+    return fail(e);
+  }
+}
+
+/** Puts a cleared order back in the Orders tab. */
+export async function unclearIcemailOrder(id: string): Promise<ActionResult> {
+  try {
+    await requireActor();
+    await jobSql`update icemail_orders set cleared_at = null, cleared_by = null where id = ${z.uuid().parse(id)}`;
+    refresh();
+    return { ok: true, data: undefined };
+  } catch (e) {
+    return fail(e);
+  }
+}

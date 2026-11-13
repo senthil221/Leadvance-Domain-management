@@ -117,7 +117,8 @@ export async function getNavCounts(): Promise<NavCounts> {
     sql<{ openAlerts: number; runningBatches: number; connectionProblems: number; expiringUrgent: number; icemailAccounts: number; icemailToAct: number }[]>`
       select
         (select count(*)::int from icemail_accounts) as icemail_accounts,
-        (select count(*)::int from icemail_order_items where status = 'failed' and finished_at > now() - interval '7 days')
+        (select count(*)::int from icemail_order_items i join icemail_orders o on o.id = i.order_id
+          where i.status = 'failed' and i.finished_at > now() - interval '7 days' and o.cleared_at is null)
           + (select count(*)::int from icemail_cancels where status = 'failed' and finished_at > now() - interval '7 days') as icemail_to_act,
         (select count(*)::int from domains d where d.status in ('active', 'warming', 'provisioning') and d.expires_at <= current_date + 14 and d.auto_renew is not true
           and not exists (select 1 from replacement_items ri join replacement_batches rb on rb.id = ri.batch_id where ri.old_domain_id = d.id and rb.status <> 'cancelled')) as expiring_urgent,

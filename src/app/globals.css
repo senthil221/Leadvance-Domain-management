@@ -2341,6 +2341,17 @@ body.is-col-resizing { cursor: col-resize; user-select: none; }
 .ice-h2 span { margin-left: var(--s-8); font-weight: 400; color: var(--faint); font-size: var(--fs-12); }
 .ice-orders { display: flex; flex-direction: column; gap: var(--s-12); }
 .ice-order-head { flex-wrap: wrap; }
+.ice-order-head .spacer { flex: 1; }
+.ice-orders .card.is-cleared { opacity: .6; }
+.ice-tabs { display: flex; align-items: center; gap: var(--s-8); margin-bottom: var(--s-12); flex-wrap: wrap; }
+.ice-tabs .spacer { flex: 1; }
+.section-tabs button { height: 24px; display: inline-flex; align-items: center; gap: var(--s-4); padding: 0 var(--s-12); border-radius: 6px; color: var(--muted); font-size: var(--fs-12); white-space: nowrap; }
+.section-tabs button:hover { color: var(--ink); }
+.section-tabs button[aria-selected="true"] { background: var(--surface); color: var(--ink); font-weight: 500; box-shadow: 0 1px 2px color-mix(in srgb, var(--shade) 6%, transparent), 0 0 0 1px var(--line); }
+.section-tabs button span { color: var(--faint); font-weight: 400; font-variant-numeric: tabular-nums; }
+.ice-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--warning-ink); display: inline-block; }
+.ice-toggle { display: inline-flex; align-items: center; gap: var(--s-4); font-size: var(--fs-12); color: var(--muted); cursor: pointer; }
+.ice-toggle span { color: var(--faint); }
 .ice-note { max-width: 40ch; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .data-table.ice-items { table-layout: fixed; }
 .data-table.ice-items td { overflow: hidden; text-overflow: ellipsis; }

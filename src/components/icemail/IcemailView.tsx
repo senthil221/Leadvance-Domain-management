@@ -2,16 +2,16 @@
 
 import Link from "next/link";
 import { Dialog } from "radix-ui";
-import { CircleAlert, Plus, RefreshCw, RotateCcw, Search, Snowflake, Undo2, X } from "lucide-react";
+import { Archive, ArchiveRestore, CircleAlert, Plus, RefreshCw, RotateCcw, Search, Snowflake, Undo2, X } from "lucide-react";
 import { useMemo, useState, useTransition } from "react";
 import { toast } from "sonner";
 import { syncIcemailNow } from "@/app/actions";
-import { cancelIcemailDomains, cancelIcemailItem, retryIcemailItem, undoIcemailCancel } from "@/app/icemail-actions";
+import { cancelIcemailDomains, cancelIcemailItem, clearIcemailOrders, retryIcemailItem, unclearIcemailOrder, undoIcemailCancel } from "@/app/icemail-actions";
 import { DomainLink } from "@/components/domains/DomainLink";
 import { Badge, ClientCell, Empty } from "@/components/ui";
 import { ago, int, shortDate } from "@/lib/format";
-import { DEFAULT_STYLES, STYLE_ORDER, VERDICT_META, type IcemailVerdict } from "@/lib/icemail-board";
-import type { IcemailBoard, IcemailCancelRow, IcemailDomainRow, IcemailOrderRow } from "@/lib/icemail-db";
+import { DEFAULT_STYLES, itemStage, STYLE_ORDER, VERDICT_META, type IcemailVerdict } from "@/lib/icemail-board";
+import type { IcemailBoard, IcemailCancelRow, IcemailDomainRow, IcemailOrderItemRow, IcemailOrderRow } from "@/lib/icemail-db";
 import type { Tone } from "@/lib/status";
 import { IcemailOrderDialog, type OrderSeed } from "./IcemailOrderDialog";
 
@@ -33,15 +33,6 @@ const replaceStyles = (d: IcemailDomainRow) =>
 const FILTERS: (IcemailVerdict | "all")[] =["all", "replace", "cancel", "keep", "new", "cancelling", "free"];
 const RANK: Record<IcemailVerdict, number> = { replace: 0, cancel: 1, new: 3, keep: 2, cancelling: 4, free: 5 };
 
-const ITEM_STATUS: Record<string, { label: string; tone: Tone }> = {
-  queued: { label: "Waiting", tone: "faint" },
-  nameservers: { label: "Nameservers", tone: "info" },
-  ordering: { label: "Ordering…", tone: "info" },
-  ordered: { label: "Ordered", tone: "success" },
-  dry_run: { label: "Dry run", tone: "violet" },
-  failed: { label: "Failed", tone: "danger" },
-  cancelled: { label: "Taken out", tone: "faint" },
-};
 const CANCEL_STATUS: Record<string, { label: string; tone: Tone }> = {
   queued: { label: "Sending…", tone: "info" },
   scheduled: { label: "Scheduled", tone: "warning" },
@@ -51,8 +42,23 @@ const CANCEL_STATUS: Record<string, { label: string; tone: Tone }> = {
   failed: { label: "Failed", tone: "danger" },
 };
 
-export function IcemailView({ board, dryRun }: { board: IcemailBoard; dryRun: boolean }) {
+export type IcemailTab = "domains" | "orders" | "cancels";
+const LIVE_ITEM = ["queued", "nameservers", "ordering"];
+/** Nothing left for the worker to do on it, so it can be cleared. */
+const finished = (o: IcemailOrderRow) => !o.items.some((i) => LIVE_ITEM.includes(i.status));
+
+export function IcemailView({ board, dryRun, initialTab = "domains" }: { board: IcemailBoard; dryRun: boolean; initialTab?: IcemailTab }) {
   const { accounts, domains, freeInventory, orders, cancels, clients } = board;
+  const [tab, setTabState] = useState<IcemailTab>(initialTab);
+  // The open tab goes in the address, so a reload or a shared link opens it.
+  const setTab = (t: IcemailTab) => {
+    setTabState(t);
+    const url = new URL(window.location.href);
+    if (t === "domains") url.searchParams.delete("tab"); else url.searchParams.set("tab", t);
+    window.history.replaceState(null, "", url);
+  };
+  const openOrders = orders.filter((o) => !o.clearedAt);
+  const inFlight = openOrders.filter((o) => !finished(o)).length;
   const [filter, setFilter] = useState<IcemailVerdict | "all">("all");
   const [search, setSearch] = useState("");
   const [selected, setSelected] = useState<string[]>([]);
@@ -127,6 +133,19 @@ export function IcemailView({ board, dryRun }: { board: IcemailBoard; dryRun: bo
           <span className="stat-foot">{int(counts.free)} on Icemail · {int(freeInventory.length)} in the inventory</span></div>
       </section>
 
+      <div className="ice-tabs">
+        <span className="section-tabs" role="tablist" aria-label="Icemail">
+          <button type="button" role="tab" aria-selected={tab === "domains"} onClick={() => setTab("domains")}>Domains <span>{int(domains.length)}</span></button>
+          <button type="button" role="tab" aria-selected={tab === "orders"} onClick={() => setTab("orders")}
+            title={inFlight ? `${plural(inFlight, "order")} still going to Icemail` : undefined}>
+            Orders <span>{int(openOrders.length)}</span>{inFlight ? <i className="ice-dot" aria-label="in progress" /> : null}</button>
+          <button type="button" role="tab" aria-selected={tab === "cancels"} onClick={() => setTab("cancels")}>Cancels <span>{int(cancels.length)}</span></button>
+        </span>
+        <span className="spacer" />
+        <button type="button" className="btn btn-sm btn-primary" onClick={() => openOrder()}><Plus size={14} strokeWidth={1.75} aria-hidden="true" />Place new inboxes</button>
+      </div>
+
+      {tab === "domains" ? (<>
       <div className="table-bar ice-bar">
         <span className="view-tabs" role="tablist" aria-label="Verdict">
           {FILTERS.map((f) => (
@@ -145,7 +164,6 @@ export function IcemailView({ board, dryRun }: { board: IcemailBoard; dryRun: bo
         {selected.length ? (
           <button type="button" className="btn btn-sm" onClick={() => setCancelling(selectedRows.filter(cancellable))}>Cancel {plural(selectedRows.filter(cancellable).length, "domain")}</button>
         ) : null}
-        <button type="button" className="btn btn-sm btn-primary" onClick={() => openOrder()}><Plus size={14} strokeWidth={1.75} aria-hidden="true" />Place new inboxes</button>
       </div>
 
       {shown.length ? (
@@ -182,11 +200,10 @@ export function IcemailView({ board, dryRun }: { board: IcemailBoard; dryRun: bo
         </Empty>
       )}
 
-      <OrdersSection orders={orders} />
-      <CancelsSection cancels={cancels} />
+      </>) : tab === "orders" ? <OrdersSection orders={orders} /> : <CancelsSection cancels={cancels} />}
 
       {seed ? (
-        <IcemailOrderDialog key={seed.key} open onOpenChange={(o) => { if (!o) setSeed(null); }} seed={seed}
+        <IcemailOrderDialog key={seed.key} open onOpenChange={(o) => { if (!o) setSeed(null); }} onPlaced={() => setTab("orders")} seed={seed}
           accounts={accounts} domains={domains} freeInventory={freeInventory} clients={clients} dryRun={dryRun} />
       ) : null}
       {cancelling ? <CancelDialog rows={cancelling} dryRun={dryRun} onClose={(done) => { setCancelling(null); if (done) setSelected([]); }} /> : null}
@@ -289,46 +306,85 @@ function CancelDialog({ rows, dryRun, onClose }: { rows: IcemailDomainRow[]; dry
 }
 
 function OrdersSection({ orders }: { orders: IcemailOrderRow[] }) {
-  if (!orders.length) return null;
+  const [showCleared, setShowCleared] = useState(false);
+  const [busy, start] = useTransition();
+  const open = orders.filter((o) => !o.clearedAt);
+  const cleared = orders.filter((o) => o.clearedAt);
+  const done = open.filter(finished);
+  const going = open.length - done.length;
+  const shown = showCleared ? orders : open;
+  const clear = (ids: string[]) => start(async () => {
+    const r = await clearIcemailOrders(ids);
+    if (!r.ok) toast.error(r.error); else toast.success(`${plural(r.data.cleared, "order")} cleared`);
+  });
+  const bringBack = (id: string) => start(async () => {
+    const r = await unclearIcemailOrder(id);
+    if (!r.ok) toast.error(r.error); else toast.success("Back in the list");
+  });
+
   return (
     <section className="ice-section" aria-label="Orders">
-      <h2 className="ice-h2">Orders <span>last 60 days</span></h2>
-      <div className="ice-orders">
-        {orders.map((o) => {
-          const inboxes = o.items.reduce((s, i) => s + i.mailboxes, 0);
-          return (
-            <section key={o.id} className="card">
-              <div className="card-head ice-order-head">
-                <span className="card-title">{plural(inboxes, "inbox", "inboxes")} on {plural(o.items.length, "domain")}</span>
-                <ClientCell name={o.clientName} hue={o.clientHue} />
-                <span className="card-sub">{o.accountLabel} · {o.provider === "GOOGLE" ? "Google" : "Microsoft"}{o.quotedMonthlyUsd != null ? ` · ${usd(o.quotedMonthlyUsd)}/mo` : ""} · {o.createdBy.split("@")[0]}, {ago(o.createdAt)}</span>
-                {o.note ? <span className="card-sub ice-note" title={o.note}>{o.note}</span> : null}
-              </div>
-              <table className="data-table ice-items">
-                <tbody>{o.items.map((i) => <OrderItem key={i.id} item={i} />)}</tbody>
-              </table>
-            </section>
-          );
-        })}
+      <div className="table-bar ice-bar">
+        <span className="card-sub">{open.length ? `${plural(open.length, "order")}${going ? `, ${going} still going to Icemail` : ""}` : "No open orders"}</span>
+        <span className="spacer" />
+        {cleared.length ? (
+          <label className="ice-toggle"><input type="checkbox" className="checkbox" checked={showCleared} onChange={(e) => setShowCleared(e.target.checked)} />Show cleared <span>{int(cleared.length)}</span></label>
+        ) : null}
+        {done.length ? (
+          <button type="button" className="btn btn-sm" disabled={busy} onClick={() => clear(done.map((o) => o.id))}
+            title="Hide every order with nothing left to send. Nothing is deleted, and Icemail isn't asked">
+            <Archive size={14} strokeWidth={1.75} aria-hidden="true" />Clear finished <span className="faint">{int(done.length)}</span></button>
+        ) : null}
       </div>
+      {shown.length ? (
+        <div className="ice-orders">
+          {shown.map((o) => {
+            const inboxes = o.items.reduce((s, i) => s + i.mailboxes, 0);
+            return (
+              <section key={o.id} className={`card${o.clearedAt ? " is-cleared" : ""}`}>
+                <div className="card-head ice-order-head">
+                  <span className="card-title">{plural(inboxes, "inbox", "inboxes")} on {plural(o.items.length, "domain")}</span>
+                  <ClientCell name={o.clientName} hue={o.clientHue} />
+                  <span className="card-sub">{o.accountLabel} · {o.provider === "GOOGLE" ? "Google" : "Microsoft"}{o.quotedMonthlyUsd != null ? ` · ${usd(o.quotedMonthlyUsd)}/mo` : ""} · {o.createdBy.split("@")[0]}, {ago(o.createdAt)}</span>
+                  {o.note ? <span className="card-sub ice-note" title={o.note}>{o.note}</span> : null}
+                  <span className="spacer" />
+                  {o.clearedAt ? (
+                    <button type="button" className="btn btn-sm" disabled={busy} onClick={() => bringBack(o.id)} title={`Cleared by ${(o.clearedBy ?? "").split("@")[0]}, ${ago(o.clearedAt)}`}>
+                      <ArchiveRestore size={14} strokeWidth={1.75} aria-hidden="true" />Bring back</button>
+                  ) : finished(o) ? (
+                    <button type="button" className="btn btn-sm" disabled={busy} onClick={() => clear([o.id])} title="Hide it from this list. Nothing is deleted, and Icemail isn't asked">
+                      <Archive size={14} strokeWidth={1.75} aria-hidden="true" />Clear</button>
+                  ) : <Badge tone="info">In progress</Badge>}
+                </div>
+                <table className="data-table ice-items">
+                  <tbody>{o.items.map((i) => <OrderItem key={i.id} item={i} />)}</tbody>
+                </table>
+              </section>
+            );
+          })}
+        </div>
+      ) : (
+        <Empty icon={Snowflake} title={orders.length ? "Every order is cleared" : "No orders yet"}>
+          {orders.length ? "Tick Show cleared to see them again." : "Orders placed with Place new inboxes show here, from the queue until their inboxes are connected in Smartlead."}
+        </Empty>
+      )}
     </section>
   );
 }
 
-function OrderItem({ item }: { item: IcemailOrderRow["items"][number] }) {
-  const s = ITEM_STATUS[item.status] ?? { label: item.status, tone: "faint" as Tone };
+function OrderItem({ item }: { item: IcemailOrderItemRow }) {
+  const s = itemStage(item);
   const [busy, start] = useTransition();
   const run = (fn: () => Promise<{ ok: boolean; error?: string }>, ok: string) => start(async () => {
     const r = await fn();
     if (!r.ok) toast.error(r.error ?? "Didn't work"); else toast.success(ok);
   });
-  const message = item.status === "nameservers" && !item.message ? `Moving its nameservers to Icemail's ClouDNS${item.nsStatus ? ` (${item.nsStatus})` : ""}` : item.message;
   return (
     <tr>
       <td className="ice-domain">{item.domainId ? <DomainLink id={item.domainId}>{item.domainName}</DomainLink> : item.domainName}</td>
       <td><Badge tone={s.tone}>{s.label}</Badge></td>
       <td className="ice-users" title={item.usernames.join("\n")}>{item.usernames.map((u) => u.split("@")[0]).join(", ")}</td>
-      <td className="ice-msg" title={message ?? undefined}>{message}</td>
+      <td className="ice-msg" title={s.text ?? undefined}>{s.text}</td>
       <td className="ice-act">
         {item.status === "queued" || item.status === "nameservers" ? (
           <button type="button" className="icon-btn" title="Take it out of the order" aria-label={`Take ${item.domainName} out`} disabled={busy}
@@ -343,10 +399,11 @@ function OrderItem({ item }: { item: IcemailOrderRow["items"][number] }) {
 }
 
 function CancelsSection({ cancels }: { cancels: IcemailCancelRow[] }) {
-  if (!cancels.length) return null;
+  if (!cancels.length) {
+    return <Empty icon={Snowflake} title="No cancels in the last 60 days">Cancel or Replace on a domain asks Icemail to delete its inboxes on their next billing date; each shows here.</Empty>;
+  }
   return (
     <section className="ice-section" aria-label="Cancels">
-      <h2 className="ice-h2">Cancels <span>last 60 days</span></h2>
       <div className="table-wrap">
         <table className="data-table ice-items">
           <thead><tr><th>Domain</th><th>Status</th><th>Inboxes</th><th>Deleted on</th><th>Why</th><th>Asked</th></tr></thead>
