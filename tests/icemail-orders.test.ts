@@ -119,6 +119,9 @@ describe("Icemail wallet", () => {
   it("reads the documented reply and the likely other shapes", () => {
     const docs = { balance: 125.5, currency: "USD", auto_topup: { enabled: true, threshold: 10 } };
     expect(parseIcemailWallet({ success: true, data: docs })).toEqual({ balance: 125.5, currency: "USD", autoTopup: true });
+    // What Icemail actually sends.
+    expect(parseIcemailWallet({ success: true, data: { available: 84.25, auto_topup: false, threshold: 0, topup_amount: 0 }, message: "ok" }))
+      .toEqual({ balance: 84.25, currency: null, autoTopup: false });
     expect(parseIcemailWallet({ success: true, data: { wallet: { balance: "40.00", currency: "USD" } } })).toMatchObject({ balance: 40 });
     expect(parseIcemailWallet({ success: true, data: [{ available_balance: 12 }] })).toMatchObject({ balance: 12 });
     expect(parseIcemailWallet({ balance: { amount: 7, currency: "USD" }, auto_topup: false })).toEqual({ balance: 7, currency: "USD", autoTopup: false });

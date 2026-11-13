@@ -130,7 +130,8 @@ export function parseIcemailWallet(raw: unknown): IcemailWallet {
     const b = p.balance;
     const nested = obj(b);
     const cents = num(p.balance_cents) ?? num(p.balance_in_cents);
-    const balance = num(b) ?? num(nested.amount) ?? num(nested.value) ?? num(p.available_balance) ?? num(p.current_balance)
+    // The live reply (Nov 2026): { data: { available, auto_topup: boolean, threshold, topup_amount } }.
+    const balance = num(b) ?? num(p.available) ?? num(nested.amount) ?? num(nested.value) ?? num(p.available_balance) ?? num(p.current_balance)
       ?? num(p.wallet_balance) ?? num(p.credits) ?? num(p.credit) ?? num(p.amount) ?? (cents == null ? null : cents / 100);
     if (balance == null) continue;
     const auto = p.auto_topup ?? p.autoTopup ?? p.auto_top_up;
