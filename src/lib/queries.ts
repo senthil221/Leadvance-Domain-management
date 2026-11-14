@@ -119,7 +119,11 @@ export async function getNavCounts(): Promise<NavCounts> {
         (select count(*)::int from icemail_accounts) as icemail_accounts,
         (select count(*)::int from icemail_order_items i join icemail_orders o on o.id = i.order_id
           where i.status = 'failed' and i.finished_at > now() - interval '7 days' and o.cleared_at is null)
-          + (select count(*)::int from icemail_cancels where status = 'failed' and finished_at > now() - interval '7 days') as icemail_to_act,
+          + (select count(*)::int from icemail_cancels where status = 'failed' and finished_at > now() - interval '7 days')
+          -- Exports to Smartlead that failed, unless a later one was started.
+          + (select count(*)::int from icemail_exports e join icemail_order_items i on i.id = e.order_item_id join icemail_orders o on o.id = i.order_id
+            where e.status = 'failed' and e.finished_at > now() - interval '7 days' and o.cleared_at is null
+              and not exists (select 1 from icemail_exports e2 where e2.order_item_id = e.order_item_id and e2.created_at > e.created_at)) as icemail_to_act,
         (select count(*)::int from domains d where d.status in ('active', 'warming', 'provisioning') and d.expires_at <= current_date + 14 and d.auto_renew is not true
           and not exists (select 1 from replacement_items ri join replacement_batches rb on rb.id = ri.batch_id where ri.old_domain_id = d.id and rb.status <> 'cancelled')) as expiring_urgent,
         (select count(*)::int from alerts where status = 'open') as open_alerts,

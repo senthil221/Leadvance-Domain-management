@@ -39,8 +39,8 @@ export type IcemailOrderItemRow = {
   mailboxes: number; usernames: string[]; nsStatus: string | null; finishedAt: Date | null;
   /** Setup so far, from the last Icemail sync: inboxes Icemail has on the domain, how many are active, any other status, and how many are connected in Smartlead. */
   atIcemail: number; activeAtIcemail: number; otherStatus: string | null; inSmartlead: number;
-  /** Its inboxes on their way to Smartlead (icemail_connects): waiting or being added, waiting for an app password, added, dry run, failed, and the last failure. */
-  connectQueued: number; connectNoPassword: number; connectDone: number; connectDryRun: number; connectFailed: number; connectError: string | null;
+  /** Its latest export to Smartlead through Icemail: status (queued, sending, exporting, done, dry_run, failed), what it said, and its counts. */
+  exportStatus: string | null; exportMessage: string | null; exportTotal: number | null; exportProcessed: number | null; exportSucceeded: number | null;
 };
 export type IcemailOrderRow = {
   id: string; accountId: string; accountLabel: string; clientId: string | null; clientName: string | null; clientHue: number | null;
@@ -144,8 +144,7 @@ export async function getIcemailBoard(): Promise<IcemailBoard> {
         r.status as ns_status,
         coalesce(mb.at_icemail, 0) as at_icemail, coalesce(mb.active_at_icemail, 0) as active_at_icemail, mb.other_status,
         coalesce(sl.in_smartlead, 0) as in_smartlead,
-        coalesce(kc.queued, 0) as connect_queued, coalesce(kc.no_password, 0) as connect_no_password, coalesce(kc.done, 0) as connect_done,
-        coalesce(kc.dry_run, 0) as connect_dry_run, coalesce(kc.failed, 0) as connect_failed, kc.error as connect_error
+        ex.status as export_status, ex.message as export_message, ex.total as export_total, ex.processed as export_processed, ex.succeeded as export_succeeded
       from icemail_order_items i
       join icemail_orders o on o.id = i.order_id
       left join nameserver_requests r on r.id = i.ns_request_id
@@ -160,13 +159,9 @@ export async function getIcemailBoard(): Promise<IcemailBoard> {
         from domains d join inboxes b on b.domain_id = d.id
         where i.status = 'ordered' and d.name = i.domain_name) sl on true
       left join lateral (
-        select (count(*) filter (where k.status in ('queued', 'connecting')))::int as queued,
-          (count(*) filter (where k.status = 'no_password'))::int as no_password,
-          (count(*) filter (where k.status = 'connected'))::int as done,
-          (count(*) filter (where k.status = 'dry_run'))::int as dry_run,
-          (count(*) filter (where k.status = 'failed'))::int as failed,
-          (array_agg(k.message order by k.finished_at desc nulls last) filter (where k.status = 'failed'))[1] as error
-        from icemail_connects k where k.order_item_id = i.id) kc on true
+        select e.status, e.message, e.total, e.processed, e.succeeded
+        from icemail_exports e where e.order_item_id = i.id and e.status <> 'cancelled'
+        order by e.created_at desc limit 1) ex on true
       where o.cleared_at is null or o.created_at > now() - interval '60 days'
       order by i.domain_name`,
     sql<IcemailCancelRow[]>`

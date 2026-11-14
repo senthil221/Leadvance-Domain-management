@@ -5,7 +5,7 @@
 #   ssh -t root@<vps> bash /docker/domain-engine/deploy/set-secret.sh SMARTLEAD_API_KEY
 set -euo pipefail
 
-ALLOWED="SHEET_SYNC_TOKEN SMARTLEAD_API_KEY SMARTLEAD_JWT PORKBUN_API_KEY PORKBUN_SECRET_KEY HYPERTIDE_API_KEY HYPERTIDE_API_URL HYPERTIDE_SMARTLEAD_USERNAME HYPERTIDE_SMARTLEAD_PASSWORD HYPERTIDE_SMARTLEAD_OAUTH_LINK INTEGRATIONS_DRY_RUN"
+ALLOWED="SHEET_SYNC_TOKEN SMARTLEAD_API_KEY SMARTLEAD_JWT PORKBUN_API_KEY PORKBUN_SECRET_KEY HYPERTIDE_API_KEY HYPERTIDE_API_URL HYPERTIDE_SMARTLEAD_USERNAME HYPERTIDE_SMARTLEAD_PASSWORD HYPERTIDE_SMARTLEAD_OAUTH_LINK ICEMAIL_SMARTLEAD_USERNAME ICEMAIL_SMARTLEAD_PASSWORD INTEGRATIONS_DRY_RUN"
 NAME="${1:-}"
 if [[ " $ALLOWED " != *" $NAME "* ]]; then
   echo "Usage: set-secret.sh <$(echo $ALLOWED | tr ' ' '|')>"
@@ -28,7 +28,7 @@ case "$NAME" in
   INTEGRATIONS_DRY_RUN) [[ "$VALUE" == true || "$VALUE" == false ]] || { echo "Use true or false. Nothing was changed."; exit 1; } ;;
   HYPERTIDE_API_URL)    [[ "$VALUE" == https://* ]] || { echo "The Hypertide API URL starts with https://. Nothing was changed."; exit 1; } ;;
   HYPERTIDE_SMARTLEAD_OAUTH_LINK) [[ "$VALUE" == https://login.microsoftonline.com* ]] || { echo "The Smartlead Microsoft OAuth link starts with https://login.microsoftonline.com. Nothing was changed."; exit 1; } ;;
-  HYPERTIDE_SMARTLEAD_USERNAME) [[ "$VALUE" == *@*.* ]] || { echo "Use the email address you log in to Smartlead with. Nothing was changed."; exit 1; } ;;
+  HYPERTIDE_SMARTLEAD_USERNAME|ICEMAIL_SMARTLEAD_USERNAME) [[ "$VALUE" == *@*.* ]] || { echo "Use the email address you log in to Smartlead with. Nothing was changed."; exit 1; } ;;
   *)                    [[ "$VALUE" == pk1_* || "$VALUE" == sk1_* ]] && { echo "That looks like a Porkbun key, not $NAME. Nothing was changed."; exit 1; } ;;
 esac
 
@@ -45,6 +45,7 @@ case "$NAME" in
   SMARTLEAD_*) JOBS="smartlead-%" ;;
   PORKBUN_*)   JOBS="registrar-%" ;;
   HYPERTIDE_*) JOBS="hypertide-%" ;;
+  ICEMAIL_*)   JOBS="icemail-%" ;;
   *)           JOBS="" ;;
 esac
 if [ -n "$JOBS" ]; then

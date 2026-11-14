@@ -253,36 +253,42 @@ export async function unclearIcemailOrder(id: string): Promise<ActionResult> {
 }
 
 /**
- * Adds an ordered domain's inboxes to Smartlead now: retries the ones that
- * failed or were a dry run, and queues every inbox active at Icemail that
- * isn't in Smartlead or on its way. The worker reads each app password from
- * Icemail and adds it; nothing about the password passes through here.
+ * Exports an ordered domain's inboxes to Smartlead through Icemail now. A
+ * failed export that Icemail started is tried again (Icemail's republish);
+ * otherwise a new export of the inboxes active at Icemail and not in Smartlead
+ * is queued. The worker sends it with the server's Smartlead login.
  */
-export async function connectIcemailItem(itemId: string): Promise<ActionResult<{ queued: number }>> {
+export async function exportIcemailItem(itemId: string): Promise<ActionResult> {
   try {
     const actor = await requireActor();
     const id = z.uuid().parse(itemId);
     const queued = await jobSql.begin(async (tx) => {
-      const again = await tx`
-        update icemail_connects set status = 'queued', message = null, started_at = null, finished_at = null
-        where order_item_id = ${id} and status in ('failed', 'dry_run', 'cancelled') returning id`;
+      const [live] = await tx`select 1 from icemail_exports where order_item_id = ${id} and status in ('queued', 'sending', 'exporting')`;
+      if (live) throw new UserError("An export of this domain is already on its way");
+      const [last] = await tx<{ id: string; status: string; icemail_export_id: string | null }[]>`
+        select id, status, icemail_export_id from icemail_exports where order_item_id = ${id} order by created_at desc limit 1`;
+      // Icemail started it and some inboxes didn't make it: ask it to try those again.
+      if (last && last.status === "failed" && last.icemail_export_id) {
+        await tx`update icemail_exports set status = 'queued', message = null, started_at = null, finished_at = null where id = ${last.id}`;
+        return 1;
+      }
       const added = await tx`
-        insert into icemail_connects (account_id, order_item_id, icemail_mailbox_id, email, domain_name, created_by)
-        select o.account_id, i.id, m.id, m.email, i.domain_name, ${actor}
+        insert into icemail_exports (account_id, order_item_id, domain_name, mailbox_ids, created_by)
+        select o.account_id, i.id, i.domain_name, array_agg(m.id order by m.id), ${actor}
         from icemail_order_items i
         join icemail_orders o on o.id = i.order_id
         join icemail_domains x on x.domain_name = i.domain_name and x.account_id = o.account_id and x.gone_at is null
         join icemail_mailboxes m on m.icemail_domain_id = x.id and m.gone_at is null and coalesce(m.status, '') !~* 'cancel|delet'
         where i.id = ${id} and i.status = 'ordered' and (m.active is true or upper(m.status) = 'ACTIVE')
           and not exists (select 1 from inboxes b where lower(b.email) = m.email and b.smartlead_account_id is not null)
-        on conflict do nothing
+        group by o.account_id, i.id, i.domain_name
         returning id`;
-      return again.length + added.length;
+      return added.length;
     });
-    if (!queued) throw new UserError("Nothing to connect: its inboxes are in Smartlead or on their way, or none is active at Icemail yet");
+    if (!queued) throw new UserError("Nothing to export: its inboxes are in Smartlead already, or none is active at Icemail yet");
     kick();
     refresh();
-    return { ok: true, data: { queued } };
+    return { ok: true, data: undefined };
   } catch (e) {
     return fail(e);
   }

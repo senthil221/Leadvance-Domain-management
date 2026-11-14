@@ -7,7 +7,7 @@ import { createSmartleadApp, type SmartleadApp } from "../integrations/smartlead
 import { syncBlacklists } from "./blacklist";
 import { fillBounceCauses } from "./bounce-causes";
 import { syncHypertideOrders } from "./hypertide-sync";
-import { processSmartleadConnects, queueReadyConnects } from "./icemail-connects";
+import { processIcemailExports, queueReadyExports, smartleadLoginFromEnv } from "./icemail-exports";
 import { processIcemailActions } from "./icemail-orders";
 import { loadIcemailAccounts, syncAllIcemail } from "./icemail-sync";
 import { processInboxChanges, runDuePlans } from "./inbox-settings";
@@ -81,18 +81,18 @@ export const JOBS: Job[] = [
     name: "icemail-orders",
     label: "Icemail orders and cancels",
     everyMinutes: 1,
-    run: async ({ sql, smartlead }) => {
-      // Ordered domains whose inboxes are all active at Icemail go to Smartlead.
-      const ready = await queueReadyConnects(sql);
+    run: async ({ sql }) => {
+      // Ordered domains whose inboxes are all active at Icemail are exported to Smartlead by Icemail.
+      const ready = await queueReadyExports(sql);
       const [{ n, k }] = await sql`select (select count(*) from icemail_order_items where status in ('queued', 'nameservers', 'ordering'))
         + (select count(*) from icemail_cancels where status in ('queued', 'undo_queued')) as n,
-        (select count(*) from icemail_connects where status in ('queued', 'connecting', 'no_password')) as k`;
+        (select count(*) from icemail_exports where status in ('queued', 'sending', 'exporting')) as k`;
       if (!Number(n) && !Number(k)) return { waiting: 0 };
       const { accounts } = await loadIcemailAccounts(sql);
       // Inventory domains are ordered once their registry shows Icemail's ClouDNS, not only their registrar.
       const orders = Number(n) ? await processIcemailActions(sql, accounts, { registry: rdap }) : { waiting: 0 };
-      const connects = Number(k) ? await processSmartleadConnects(sql, accounts, smartlead) : null;
-      return { ...orders, ...(connects ? { smartlead: { queued: ready, ...connects } } : {}) };
+      const exports = Number(k) ? await processIcemailExports(sql, accounts, smartleadLoginFromEnv()) : null;
+      return { ...orders, ...(exports ? { exports: { queued: ready, ...exports } } : {}) };
     },
   },
   {

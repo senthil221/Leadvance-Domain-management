@@ -29,6 +29,8 @@ export type Request = {
   headers?: Record<string, string>;
   body?: unknown;
   write?: boolean;
+  /** Sent once, never retried: for a write that starts a job, where a second try could start it twice. */
+  once?: boolean;
   /** Called with the response headers of a successful reply (an async operation id, say). */
   onHeaders?: (headers: Headers) => void;
 };
@@ -72,7 +74,7 @@ export function createHttp({ service, baseUrl, sql, dryRun = true, minSpacingMs 
         await log(method, req.path, null, started, msg);
         throw new ApiError(`${service} unreachable: ${msg}`, null);
       }
-      if ((res.status === 429 || res.status >= 500) && attempt < 4) {
+      if ((res.status === 429 || res.status >= 500) && attempt < 4 && !req.once) {
         const retryAfter = Number(res.headers.get("retry-after"));
         await wait(Number.isFinite(retryAfter) && retryAfter > 0 ? Math.min(retryAfter, 60) * 1000 : 1500 * 2 ** attempt);
         continue;

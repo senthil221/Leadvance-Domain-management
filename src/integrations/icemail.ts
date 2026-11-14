@@ -144,6 +144,14 @@ export function parseIcemailWallet(raw: unknown): IcemailWallet {
   return { balance: null, currency: null, autoTopup: null };
 }
 
+/** An export job: Icemail's status in lower case, and how many of its inboxes are done. */
+export type IcemailExport = { status: string | null; total: number | null; processed: number | null; succeeded: number | null; failed: number | null };
+
+export function parseIcemailExport(raw: unknown): IcemailExport {
+  const d = obj(raw);
+  return { status: str(d.status)?.toLowerCase() ?? null, total: num(d.total), processed: num(d.processed), succeeded: num(d.success), failed: num(d.failed) };
+}
+
 export function parseIcemailOrder(raw: unknown, domainName: string): IcemailOrderResult {
   const list = Array.isArray(raw) ? raw : [raw];
   const entry = obj(list.find((x) => validDomain(obj(x).domain_name) === domainName) ?? list[0]);
@@ -174,8 +182,8 @@ export function createIcemail({ apiKey, baseUrl = "https://app.icemail.ai/api/v1
   const failed = (json: Record<string, unknown>) => (json.success === false ? str(json.message) ?? "Icemail said the request failed" : null);
   const get = <T>(path: string) => http.request<{ data?: T }>({ path, headers }, failed).then((r) => r?.data ?? null);
   /** A write: null without calling Icemail in dry run. */
-  const write = (method: "POST" | "PUT" | "DELETE", path: string, body: unknown) =>
-    http.request<{ data?: unknown }>({ method, path, headers, body, write: true }, failed);
+  const write = (method: "POST" | "PUT" | "DELETE", path: string, body: unknown, once = false) =>
+    http.request<{ data?: unknown }>({ method, path, headers, body, write: true, once }, failed);
 
   async function listAll<T>(path: string, key: string, parse: (raw: unknown) => T | null) {
     const out: T[] = [];
@@ -208,13 +216,25 @@ export function createIcemail({ apiKey, baseUrl = "https://app.icemail.ai/api/v1
       return w;
     },
     /**
-     * A Google inbox's app password, or null while Icemail hasn't set one. A
-     * read, so dry run doesn't stop it; the caller passes it straight on and
-     * never stores or logs it (api_calls keeps only the path).
+     * Starts Icemail's export of these inboxes to Smartlead, the same as Export
+     * → Smartlead in its dashboard. Icemail wants the Smartlead login with each
+     * export: it goes only in this request's body (api_calls keeps the path) and
+     * is never stored. Sent once: Icemail allows one export an inbox a day, and
+     * a second try could start a second export. Null in dry run.
      */
-    async appPassword(mailboxId: string): Promise<string | null> {
-      const d = obj(await get<unknown>(`/mailbox/${encodeURIComponent(mailboxId)}/app-password`));
-      return str(d.app_password);
+    async exportToSmartlead(mailboxIds: string[], login: { username: string; password: string }, name: string): Promise<{ exportId: string | null; total: number | null } | null> {
+      const r = await write("POST", "/export", { mailbox_ids: mailboxIds, sequencer: "smartlead", name, username: login.username, password: login.password }, true);
+      if (!r) return null;
+      const d = obj(r.data);
+      return { exportId: str(d.export_id) ?? str(d.id), total: num(d.total) };
+    },
+    /** Where an export stands: pending, processing, completed or failed, and its counts. */
+    async exportStatus(exportId: string): Promise<IcemailExport> {
+      return parseIcemailExport(await get<unknown>(`/export/${encodeURIComponent(exportId)}`));
+    },
+    /** Asks Icemail to try a failed or stuck export again (once every 2 hours). False in dry run. */
+    async republishExport(exportId: string): Promise<boolean> {
+      return Boolean(await write("POST", `/export/republish/${encodeURIComponent(exportId)}`, undefined, true));
     },
     /** What one inbox costs a month, in US dollars. */
     async prices(): Promise<IcemailPrices> {

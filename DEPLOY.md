@@ -158,3 +158,18 @@ The API host defaults to `https://backend.hypertide.io/api/v1` (override with `H
    Replacements page. The *Hypertide orders* job then verifies nameservers and follows the order to Done.
 4. While `INTEGRATIONS_DRY_RUN=true`, orders and payments are sent with Hypertide's `x-dry-run` header:
    Hypertide validates them, nothing is created or charged.
+
+## Icemail
+
+New inboxes ordered from the Icemail page go to Smartlead through Icemail's own export (the
+Export → Smartlead button in its dashboard), once every inbox of the domain is active. Icemail asks
+for the Smartlead login with each export; it is read from the server's `.env`, sent only to Icemail and
+never stored. Without `ICEMAIL_SMARTLEAD_*` the Hypertide login above is used.
+
+1. Save the login (server 2 shown; run each, paste when asked):
+   `ssh -t -i ~/.ssh/id_ed25519 root@72.60.201.43 bash /docker/domain-engine/deploy/set-secret.sh ICEMAIL_SMARTLEAD_USERNAME`
+   `… set-secret.sh ICEMAIL_SMARTLEAD_PASSWORD`
+2. Icemail → Orders shows each domain's export: Exporting, then Connecting until the next Smartlead sync,
+   then Live. A failed export shows why, with a button to try again (Icemail allows one export an
+   inbox a day, and a retry of the same export every 2 hours).
+3. While `INTEGRATIONS_DRY_RUN=true`, no export is sent.
