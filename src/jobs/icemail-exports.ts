@@ -30,8 +30,12 @@ const msgOf = (e: unknown) => (e instanceof Error ? e.message : String(e)).repla
 /**
  * Queues one export for each domain ordered from Domain Engine in the last two
  * weeks whose inboxes are all active at Icemail, with the ones not in Smartlead
- * yet. Never a domain that already had an export, or app-password connects
- * from before (those are exported by hand from the Orders tab).
+ * yet. Never a domain that already had an export (one put back because its
+ * inboxes weren't ready doesn't count), or app-password connects from before
+ * (those are exported by hand from the Orders tab).
+ *
+ * Active means Icemail's status says ACTIVE: its `active` flag is already true
+ * while an inbox is still IN_PROGRESS, and Icemail won't export those.
  */
 export async function queueReadyExports(sql: Sql, actor = "worker") {
   const rows = await sql`
@@ -39,12 +43,12 @@ export async function queueReadyExports(sql: Sql, actor = "worker") {
       select i.id as item_id, o.account_id, i.domain_name, jsonb_array_length(i.mailboxes) as wanted
       from icemail_order_items i join icemail_orders o on o.id = i.order_id
       where i.status = 'ordered' and i.finished_at > now() - interval '14 days'
-        and not exists (select 1 from icemail_exports e where e.order_item_id = i.id)
+        and not exists (select 1 from icemail_exports e where e.order_item_id = i.id and e.status <> 'cancelled')
         and not exists (select 1 from icemail_connects k where k.order_item_id = i.id)
     ),
     boxes as (
       select r.item_id, r.account_id, r.domain_name, r.wanted, m.id as mailbox_id,
-        (m.active is true or upper(m.status) = 'ACTIVE') as active,
+        upper(coalesce(m.status, case when m.active then 'ACTIVE' end)) = 'ACTIVE' as active,
         exists (select 1 from inboxes b where lower(b.email) = m.email and b.smartlead_account_id is not null) as in_smartlead
       from ready r
       join icemail_domains x on x.domain_name = r.domain_name and x.account_id = r.account_id and x.gone_at is null
@@ -61,10 +65,14 @@ export async function queueReadyExports(sql: Sql, actor = "worker") {
 }
 
 export async function processIcemailExports(sql: Sql, accounts: IcemailAccount[], login: SmartleadLogin | null, { max = 10 } = {}) {
-  const out = { sent: 0, dryRun: 0, done: 0, failed: 0, running: 0, waitingForLogin: 0 };
+  const out = { sent: 0, dryRun: 0, done: 0, failed: 0, running: 0, waitingForLogin: 0, notReady: 0 };
   const byId = new Map(accounts.map((a) => [a.id, a]));
   const fail = (id: string, message: string) => sql`
     update icemail_exports set status = 'failed', message = ${message}, finished_at = now() where id = ${id}`;
+  // Put back: queueReadyExports queues the domain again once the sync shows every inbox ACTIVE.
+  const notReady = (id: string, which: string) => sql`
+    update icemail_exports set status = 'cancelled', finished_at = now(),
+      message = ${`Not every inbox was ACTIVE at Icemail yet (${which.slice(0, 400)}); exported once they are`} where id = ${id}`;
 
   // A run that died while asking Icemail: it may or may not have started the export.
   out.failed += (await sql`
@@ -89,9 +97,18 @@ export async function processIcemailExports(sql: Sql, accounts: IcemailAccount[]
       continue;
     }
     // Inboxes that reached Smartlead some other way (by hand, say) are left out.
-    const [left] = await sql<{ ids: string[] }[]>`
-      select coalesce(array_agg(m.id order by m.id), '{}') as ids from icemail_mailboxes m
+    const [left] = await sql<{ ids: string[]; not_ready: string[] }[]>`
+      select coalesce(array_agg(m.id order by m.id), '{}') as ids,
+        coalesce(array_agg(m.email || ' (' || coalesce(m.status, 'no status') || ')' order by m.email)
+          filter (where upper(coalesce(m.status, case when m.active then 'ACTIVE' end)) is distinct from 'ACTIVE'), '{}') as not_ready
+      from icemail_mailboxes m
       where m.id = any(${e.mailbox_ids}::text[]) and not exists (select 1 from inboxes b where lower(b.email) = m.email and b.smartlead_account_id is not null)`;
+    // A new export waits until Icemail says every inbox is ACTIVE: it is queued again then.
+    if (!e.icemail_export_id && left.not_ready.length) {
+      await notReady(e.id, left.not_ready.join(", "));
+      out.notReady++;
+      continue;
+    }
     if (!left.ids.length) {
       await sql`update icemail_exports set status = 'done', message = 'Already in Smartlead', finished_at = now() where id = ${e.id}`;
       out.done++;
@@ -129,6 +146,12 @@ export async function processIcemailExports(sql: Sql, accounts: IcemailAccount[]
     } catch (err) {
       const status = err instanceof ApiError ? err.status : null;
       const why = msgOf(err);
+      // Icemail says some aren't ready though our last sync said they were: wait for the next sync.
+      if (status != null && status < 500 && /not active/i.test(why)) {
+        await notReady(e.id, why.replace(/^.*?non-active mailboxes:\s*/i, ""));
+        out.notReady++;
+        continue;
+      }
       const message = status === 429
         ? `Icemail refused it: ${why}. It allows one export an inbox a day; nothing was exported, so retry tomorrow, or check Export History in Icemail if they were exported by hand`
         : status != null && status < 500

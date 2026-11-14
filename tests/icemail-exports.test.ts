@@ -98,6 +98,35 @@ describe("Icemail inboxes exported to Smartlead", () => {
     expect((await row()).mailbox_ids).toEqual(["mb1", "mb2"]);
   });
 
+  it("counts an inbox ready only when its status is ACTIVE, and puts back an export Icemail says is too early", async () => {
+    const { ApiError } = await import("../src/integrations/http");
+    // Icemail's flag says active while the inbox is still being set up.
+    await sql`update icemail_mailboxes set status = 'IN_PROGRESS', active = true`;
+    expect(await queueReadyExports(sql)).toBe(0);
+
+    // Queued from an older sync: put back without asking Icemail.
+    await sql`insert into icemail_exports (account_id, order_item_id, domain_name, mailbox_ids, created_by)
+      values (${accountId}, ${itemId}, 'fresh.pro', ${["mb0", "mb1", "mb2"]}, 'me')`;
+    const f = fake();
+    expect((await processIcemailExports(sql, [icemail(f)], LOGIN)).notReady).toBe(1);
+    expect(f.exports).toHaveLength(0);
+    expect(await row()).toMatchObject({ status: "cancelled", message: expect.stringMatching(/^Not every inbox was ACTIVE at Icemail yet \(steve\.k@fresh\.pro \(IN_PROGRESS\)/) });
+
+    // Active by our sync, but Icemail still refuses: put back too.
+    await sql`update icemail_mailboxes set status = 'ACTIVE'`;
+    expect(await queueReadyExports(sql)).toBe(1);
+    const tooEarly = new ApiError("icemail /export failed: Cannot export mailboxes that are not ACTIVE. Non-active mailboxes: steve@fresh.pro (IN_PROGRESS)", 400);
+    expect((await processIcemailExports(sql, [icemail(fake(), { fail: tooEarly })], LOGIN)).notReady).toBe(1);
+    expect((await sql`select status, message from icemail_exports order by created_at desc limit 1`)[0])
+      .toMatchObject({ status: "cancelled", message: "Not every inbox was ACTIVE at Icemail yet (steve@fresh.pro (IN_PROGRESS)); exported once they are" });
+
+    // The next run queues it again, and it goes.
+    expect(await queueReadyExports(sql)).toBe(1);
+    const ok2 = fake();
+    expect((await processIcemailExports(sql, [icemail(ok2)], LOGIN)).sent).toBe(1);
+    expect(ok2.exports).toHaveLength(1);
+  });
+
   it("leaves alone a domain from the app-password connects", async () => {
     await sql`insert into icemail_connects (account_id, order_item_id, icemail_mailbox_id, email, domain_name, status, created_by)
       values (${accountId}, ${itemId}, 'mb0', 'steve@fresh.pro', 'fresh.pro', 'cancelled', 'me')`;

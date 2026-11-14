@@ -150,8 +150,8 @@ export async function getIcemailBoard(): Promise<IcemailBoard> {
       left join nameserver_requests r on r.id = i.ns_request_id
       left join lateral (
         select count(*)::int as at_icemail,
-          (count(*) filter (where m.active is true or upper(m.status) = 'ACTIVE'))::int as active_at_icemail,
-          string_agg(distinct lower(m.status), ', ') filter (where not (m.active is true or upper(m.status) = 'ACTIVE')) as other_status
+          (count(*) filter (where upper(coalesce(m.status, case when m.active then 'ACTIVE' end)) = 'ACTIVE'))::int as active_at_icemail,
+          string_agg(distinct lower(m.status), ', ') filter (where upper(coalesce(m.status, case when m.active then 'ACTIVE' end)) is distinct from 'ACTIVE') as other_status
         from icemail_domains x join icemail_mailboxes m on m.icemail_domain_id = x.id
         where i.status = 'ordered' and x.domain_name = i.domain_name and x.gone_at is null and m.gone_at is null) mb on true
       left join lateral (

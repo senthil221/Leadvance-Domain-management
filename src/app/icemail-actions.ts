@@ -279,7 +279,7 @@ export async function exportIcemailItem(itemId: string): Promise<ActionResult> {
         join icemail_orders o on o.id = i.order_id
         join icemail_domains x on x.domain_name = i.domain_name and x.account_id = o.account_id and x.gone_at is null
         join icemail_mailboxes m on m.icemail_domain_id = x.id and m.gone_at is null and coalesce(m.status, '') !~* 'cancel|delet'
-        where i.id = ${id} and i.status = 'ordered' and (m.active is true or upper(m.status) = 'ACTIVE')
+        where i.id = ${id} and i.status = 'ordered' and upper(coalesce(m.status, case when m.active then 'ACTIVE' end)) = 'ACTIVE'
           and not exists (select 1 from inboxes b where lower(b.email) = m.email and b.smartlead_account_id is not null)
         group by o.account_id, i.id, i.domain_name
         returning id`;
