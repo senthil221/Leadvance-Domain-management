@@ -62,6 +62,22 @@ describe("bounces: the code decides, then the words", () => {
     expect(bounceReason("550 5.7.1 Recipient does not accept mail from this sender per local policy")).toBe("policy");
   });
 
+  it("blames our DNS when the receiver says our mail has no SPF, DKIM or DMARC, even on a bare 5.7.1", () => {
+    expect(bounceReason("550 5.7.1 Message rejected: Message lacks SPF/DKIM/DMARC Auth Records")).toBe("dns");
+    expect(bounceReason("Remote server returned '550 5.7.1 Message rejected: Message lacks SPF/DKIM/DMARC Auth Records'")).toBe("dns");
+    expect(bounceReason("550 5.7.1 Email rejected per DMARC policy for example.com")).toBe("dns");
+    expect(bounceReason("550 5.7.1 Message blocked due to DMARC policy")).toBe("dns");
+    expect(bounceReason("550 5.7.1 DMARC policy check failed")).toBe("dns");
+  });
+
+  it("calls a content filter's score spam, whatever its rule names say", () => {
+    const sa = (rules: string) => `550 5.7.350 Remote server returned message detected as spam -> 554 5.7.1 Content filter reject: SpamAssassin score 24.109 (${rules})`;
+    expect(bounceReason(sa("DKIM_SIGNED,DKIM_VALID,URIBL_BLOCKED"))).toBe("spam");
+    expect(bounceReason(sa("DKIM_SIGNED,DKIM_VALID,DKIM_VALID_AU,DMARC_PASS,RCVD_IN_DNSWL_NONE"))).toBe("spam");
+    // A real listing still reads as one.
+    expect(bounceReason("554 5.7.1 Service unavailable; Client host [1.2.3.4] blocked using zen.spamhaus.org")).toBe("blocklist");
+  });
+
   it("a try-again code is temporary, unless it blames our reputation", () => {
     expect(bounceReason("450 4.3.2 Service currently unavailable")).toBe("temporary");
     expect(bounceReason("451 4.7.1 Greylisted, please try again later, policy check")).toBe("temporary");

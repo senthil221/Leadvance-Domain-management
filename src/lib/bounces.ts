@@ -45,7 +45,12 @@ const CODES: [RegExp, BounceReason][] = [
 // isn't a bad address, and a sender domain nobody can find is our DNS whatever the code.
 const PHRASES: [RegExp, BounceReason][] = [
   [/sender address rejected:? domain not found|domain of sender address[\s<>\[\]]*(does not exist|does not resolve)|sender domain not found|has no a, aaaa,? or mx|unresolvable\b.{0,80}\bfrom domain/i, "dns"],
+  // The receiver says our mail carries no SPF, DKIM or DMARC, or failed its DMARC: our DNS, whatever the code (Outlook sends these as a bare 5.7.1).
+  [/lacks\s+(spf|dkim|dmarc)|\bspf\s*\/\s*dkim\s*\/\s*dmarc\b|(rejected|refused|blocked)\s+(per|due to|by|because of)\s+(the\s+)?dmarc|dmarc\s+(policy|check)\s+fail/i, "dns"],
   [/sender address\s*(\[[^\]]*\]\s*)?blocked|blocked using/i, "blocklist"],
+  // A content filter scored the message as spam. It lists the rules that fired, and names like URIBL_BLOCKED
+  // (the filter couldn't ask a list, not that anything is on one) must not read as a block listing.
+  [/spamassassin|content filter reject/i, "spam"],
   [/\bsender rejected\b|reject due to policy restrictions/i, "policy"],
   [/no mail-enabled subscriptions|mailbox is disabled|no mailbox by that name|has been suspended|no longer at\b|unable to receive email|account closed|domain\s+no longer available/i, "missing"],
   // Their mail goes round in circles, or a forward is broken: the recipient's own setup, nothing to do with the sender.
